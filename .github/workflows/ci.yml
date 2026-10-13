@@ -29,3 +29,45 @@ jobs:
           go-version-file: go.mod
           cache: false
       - run: test -z "$(gofmt -l cmd internal)"
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            arch: amd64
+            ext: .exe
+          - os: linux
+            arch: amd64
+            ext: ""
+          - os: linux
+            arch: arm64
+            ext: ""
+          - os: darwin
+            arch: arm64
+            ext: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cross-build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w' -o dist/ktest-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }} ./cmd/ktest
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ktest-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 7
+          if-no-files-found: error

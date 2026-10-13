@@ -17,3 +17,5 @@ Official release pages were checked before selection. This repository does not b
 - `ktest compare -connect 127.0.0.1:PORT` can compare a direct route against a separately reviewed and running TCP forwarder. This project neither injects packets nor elevates privileges.
 - Github Actions `@v7` major tags will track compatible patch updates; they are not immutable SHA pins.
 - Success in a local harness does not establish that any Iranian operator can reach an overseas target today.
+
+- 2026-10-13: GitHub Actions `actions/upload-artifact@v7` selected; v7.0.2 released 2026-10-07. Binaries uploaded as ephemeral Actions artifacts (not a GitHub release): https://github.com/actions/upload-artifact/releases

@@ -69,3 +69,12 @@ Scope: diagnostic research into direct access to selected filtered services with
 | 2xx without matching challenge | Treat as unverified/maybe intercepted or cached response | Avoid success false positives |
 | One alternate returns repeated valid nonce | Candidate only, then collect paired negative controls and network diversity | Separate temporal fluctuation from causal mechanism |
 | Small bootstrap channel available but direct QUIC path works after setup | *Research* QUICstep connection-migration method, only with compatible sites | Potential to reduce traffic in limited channel; no blanket Iran claim |
+
+
+## P3: independent DNS / TCP / TLS observations (2026-10-13)
+
+- `ktest path` performs low-volume, independent DNS resolution, TCP connection and certificate-verified TLS handshake checks. It sends **no HTTP request** and makes no claim about a working website, tunnel or censorship bypass.
+- Uses `-network tcp4` or `-network tcp6` to isolate IP-family reachability. A pinned `-connect host:port` is measured independently of DNS: DNS may fail while pinned TCP/TLS succeeds. TLS errors remain separate from TCP errors.
+- Always verify certificate identity; never set `InsecureSkipVerify`. No packet injection, scanning engine, firewall changes or device-wide proxy installation.
+- GitHub Actions now builds user-invoked diagnostic executables for Windows amd64, Linux amd64/arm64 and macOS arm64, with SHA-256 manifests. These are temporary workflow artifacts, not public releases or VPN clients.
+- **Decision gate:** only after repeatable findings from opt-in, real-ISP controlled-target trials consider a specialized TCP/TLS strategy. QUIC-specific work requires separate UDP path evidence and a QUIC-migration-compatible origin.

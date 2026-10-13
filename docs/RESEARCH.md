@@ -48,3 +48,17 @@ D. Later, compare a third-party packet-desync tool to the baseline under exactly
 1. **Verified-origin differential:** instrument paired route/SNI/Host tests with fresh nonces so that ISP block pages, captive portals, CDN misrouting and ordinary HTTP redirects do not appear as wins. Implemented in this repository.
 2. **Failure-aware exploration:** stop experimenting with TLS when no TCP route exists. Use structured failure signals to determine the next *controlled* experiment instead of selecting tricks at random. Implemented as a conservative summary, with no automatic traffic manipulation.
 3. **Partial-channel handshake bootstrap:** if an independently working VPN/mobile link can carry a QUIC handshake, research whether QUICstep can migrate data to a direct path. Requires compatible origin and usable post-migration path; research only, no code implemented.
+
+
+## Additional research cross-check — 2026-10-13
+
+- **IRBlock** documents independent DNS injection, HTTP block-page injection, HTTPS TCP reset injection and QUIC/UDP-drop observations. It measures by provoking bidirectional filtering from outside Iran; the maintainers explicitly warn that the results are a *lower bound* on restrictions users inside Iran may face. https://irblock.org/
+- **Insights into an Iranian Internet Shutdown** (Paderborn University; FOCI 2026) reports nonidentical timing for DNS-over-TCP, TLS, QUIC and UDP interference around the June 2025 Iran shutdown, supporting phase-separated experiments. It is historical data, not proof of network conditions today. https://www.petsymposium.org/foci/2026/foci-2026-0016.php
+- **QUICstep** (PoPETs 2026) publishes a functional, reproducible QUIC connection-migration prototype that hides its handshake through a secure channel before migrating to a separate path. Limitations: secure bootstrap path, compatible QUIC peer and working direct data path. The paper is not evidence that IP allowlisting is bypassable. https://www.petsymposium.org/popets/2026/popets-2026-0014.php and https://github.com/inspire-group/QUICstep-PETS
+- **Zapret2 v1.0.5.2** remains the latest tagged release confirmed on 2026-10-13; check newest commits separately when integrating. https://github.com/bol-van/zapret2/releases
+
+### Rejected shortcuts
+
+- HTTP `200` cannot validate the origin by itself; a captive portal or block page could be returned. Use the controlled nonce challenge for application-layer origin evidence.
+- A TCP SYN/SYN-ACK exchange does not validate TLS or HTTP. Conversely, TLS failure may be certificate rejection or server misconfiguration, not necessarily a DPI action.
+- Silent UDP does not by itself demonstrate UDP blocking; UDP has no mandatory delivery acknowledgement. We did not add a misleading generic `UDP works` button.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/experiment"
+	"github.com/Nishef1/ktest/internal/pathdiag"
 	"github.com/Nishef1/ktest/internal/probe"
 	"github.com/Nishef1/ktest/internal/proofserver"
 )
@@ -20,6 +21,9 @@ import (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	if len(args) > 0 && args[0] == "path" {
+		return runPath(args[1:])
+	}
 	if len(args) > 0 && args[0] == "echo" {
 		return runEcho(args[1:])
 	}
@@ -114,6 +118,42 @@ func runEcho(args []string) int {
 	fmt.Fprintln(os.Stderr, "controlled proof endpoint on", *listen)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, strings.TrimSpace(err.Error()))
+		return 1
+	}
+	return 0
+}
+
+// runPath diagnoses DNS, TCP and certificate-verified TLS without sending HTTP.
+func runPath(args []string) int {
+	flags := flag.NewFlagSet("path", flag.ContinueOnError)
+	var cfg pathdiag.Config
+	var repeat int
+	flags.StringVar(&cfg.URL, "url", "", "http(s) URL to diagnose")
+	flags.StringVar(&cfg.SNI, "sni", "", "optional TLS identity for controlled tests")
+	flags.StringVar(&cfg.ConnectAddr, "connect", "", "optional address to dial instead of URL destination")
+	flags.StringVar(&cfg.Network, "network", "tcp", "tcp, tcp4 or tcp6")
+	flags.DurationVar(&cfg.Timeout, "timeout", 8*time.Second, "per-attempt total timeout, max 30s")
+	flags.IntVar(&repeat, "repeat", 1, "number of sequential low-volume attempts, 1..5")
+	if flags.Parse(args) != nil || cfg.URL == "" || repeat < 1 || repeat > 5 || flags.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: ktest path -url https://example.org [-network tcp4|tcp6] [-connect ip:port] [-sni name] [-repeat 1..5]")
+		return 2
+	}
+	failed := false
+	enc := json.NewEncoder(os.Stdout)
+	for i := 0; i < repeat; i++ {
+		result, err := pathdiag.Run(context.Background(), cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		if enc.Encode(result) != nil {
+			return 1
+		}
+		if result.TCPStatus != "ok" || (result.TLSStatus != "verified" && result.TLSStatus != "not_applicable") {
+			failed = true
+		}
+	}
+	if failed {
 		return 1
 	}
 	return 0

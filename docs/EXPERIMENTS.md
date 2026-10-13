@@ -24,7 +24,7 @@ Optional controlled routing (TLS certificate verification remains on):
 go run ./cmd/ktest probe -url https://your-controlled-domain.example/ -connect 203.0.113.10:443 -sni your-controlled-domain.example -host your-controlled-domain.example
 ```
 
-The documentation-only address above is from RFC 5737; replace it with your own test endpoint. Results are one JSON object per line. Exit status 0 means HTTP status 2xx/3xx, status 1 means the response or connection did not satisfy the criterion, status 2 means invalid arguments.
+The documentation-only address above is from RFC 5737; replace it with your own test endpoint. Results are one JSON object per line. Exit status 0 means HTTP status 2xx (and matching proof when enabled), status 1 means the response or connection did not satisfy the criterion, status 2 means invalid arguments.
 
 ## Measurement template for future controlled testing
 
@@ -77,3 +77,28 @@ A standard 2xx page without matching proof produces `proof_missing` or `proof_mi
 | 2026-10-13 | LOCAL-005 | Go local httptest | Self-hosted proof echo, malformed challenge rejection | Passed |
 | 2026-10-13 | LOCAL-006 | Unit runner | Candidate versus inconclusive, missing route, unverified baseline | Passed |
 | 2026-10-13 | IRAN-004 | Real operator | Same experiments across fixed/mobile networks | Not conducted |
+
+
+## Stage P3: independent transport-layer path diagnosis
+
+Cross-platform binaries are attached to the GitHub Actions `verify` workflow run as short-lived artifacts after a successful build. Each includes SHA-256 checksums. No installation or permanent machine configuration is required.
+
+```sh
+ktest path -url https://YOUR-AUTHORIZED-DOMAIN/__ktest/proof -network tcp4
+ktest path -url https://YOUR-AUTHORIZED-DOMAIN/__ktest/proof -network tcp6
+```
+
+To distinguish failure of normal DNS from failure to reach one **authorized pinned route**:
+
+```sh
+ktest path -url https://YOUR-AUTHORIZED-DOMAIN/__ktest/proof -connect YOUR-AUTHORIZED-IP:443
+```
+
+The JSON separates `dns_status`, `tcp_status`, `tls_status` and respective error/timing fields. Certificate validation is required; **path** sends no HTTP request or challenge, so `tls_verified_no_http_test` is not evidence that a web application is accessible. Use `ktest probe -proof` for that separate test.
+
+| Date (UTC) | ID | Environment | Experiment | Result |
+| --- | --- | --- | --- | --- |
+| 2026-10-13 | LOCAL-007 | Go loopback HTTP/TLS servers | Independent DNS, TCP and verified TLS; no HTTP request | Passed locally |
+| 2026-10-13 | LOCAL-008 | Go loopback TLS | DNS fails but pinned TCP/TLS still succeeds | Passed locally |
+| 2026-10-13 | LOCAL-009 | Go loopback TLS | Self-signed certificate is rejected; TCP success is preserved separately | Passed locally |
+| 2026-10-13 | IRAN-005 | Iranian mobile/fixed ISP | IPv4/IPv6 path comparison on controlled targets | Not conducted |
