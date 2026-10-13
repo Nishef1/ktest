@@ -78,3 +78,12 @@ Scope: diagnostic research into direct access to selected filtered services with
 - Always verify certificate identity; never set `InsecureSkipVerify`. No packet injection, scanning engine, firewall changes or device-wide proxy installation.
 - GitHub Actions now builds user-invoked diagnostic executables for Windows amd64, Linux amd64/arm64 and macOS arm64, with SHA-256 manifests. These are temporary workflow artifacts, not public releases or VPN clients.
 - **Decision gate:** only after repeatable findings from opt-in, real-ISP controlled-target trials consider a specialized TCP/TLS strategy. QUIC-specific work requires separate UDP path evidence and a QUIC-migration-compatible origin.
+
+
+## P4: working-method integration (2026-10-13)
+
+The user requested prioritizing already deployed, user-reported anti-DPI tools over an expanding diagnostic test framework. Implemented \`ktest access\`: an explicit domain-scoped HTTP CONNECT proxy and optional lifecycle management for the official, hash-verified SNI-Spoofing-Go v0.7.2 binary. See \`docs/ACCESS.md\`.
+
+Status: **implemented, local pass only**. The upstream engine must still be assessed on an actual filtered network. The MITM-DomainFronting v23 route is deferred due to unresolved failure reports and CA trust implications. We will not claim universal access, a changed public IP, or full-system VPN support.
+
+Next meaningful improvements require a *specific confirmed-working combination* and one real destination that serves it: save only non-sensitive successful combinations, keep automatic profile switching opt-in, and do not broaden to unrelated DPI experiments without evidence.

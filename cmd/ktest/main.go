@@ -9,9 +9,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/access"
 	"github.com/Nishef1/ktest/internal/experiment"
 	"github.com/Nishef1/ktest/internal/pathdiag"
 	"github.com/Nishef1/ktest/internal/probe"
@@ -21,6 +25,9 @@ import (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	if len(args) > 0 && args[0] == "access" {
+		return runAccess(args[1:])
+	}
 	if len(args) > 0 && args[0] == "path" {
 		return runPath(args[1:])
 	}
@@ -154,6 +161,69 @@ func runPath(args []string) int {
 		}
 	}
 	if failed {
+		return 1
+	}
+	return 0
+}
+
+// runAccess exposes a domain-scoped CONNECT proxy backed by the genuine
+// SNI-Spoofing-Go local engine. No TLS MITM, root CA installation, or system
+// proxy modification occurs.
+func runAccess(args []string) int {
+	fs := flag.NewFlagSet("access", flag.ContinueOnError)
+	domain := fs.String("domain", "", "comma-separated exact HTTPS domains allowed through bridge")
+	listen := fs.String("listen", "127.0.0.1:1089", "loopback HTTP CONNECT proxy")
+	bridge := fs.String("bridge", "127.0.0.1:40443", "loopback SNI engine listener")
+	engine := fs.String("engine", "", "optional local path to official SNI-Spoofing-Go CLI")
+	engineSHA := fs.String("engine-sha256", "", "explicit SHA-256 digest for a reviewed newer upstream CLI")
+	target := fs.String("connect", "", "upstream host:443 handled by SNI engine")
+	fakeSNI := fs.String("fake-sni", "", "decoy TLS hostname used by SNI engine")
+	fp := fs.String("utls", "firefox", "upstream fake TLS fingerprint")
+	injector := fs.String("injector", "", "active or passive; passive default on macOS")
+	fragment := fs.Bool("enable-fragment", false, "opt-in real ClientHello fragmentation")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || *domain == "" {
+		fmt.Fprintln(os.Stderr, "usage: ktest access -domain your-domain.example [-engine ./sni-spoofing-...] [-connect ip:443 -fake-sni decoy.example] [-listen 127.0.0.1:1089]")
+		return 2
+	}
+	proxy, err := access.NewProxy(strings.Split(*domain, ","), *bridge)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if *engine != "" {
+		if *target == "" || *fakeSNI == "" {
+			fmt.Fprintln(os.Stderr, "-engine requires -connect and -fake-sni")
+			return 2
+		}
+		mode := *injector
+		if mode == "" {
+			mode = "active"
+			if runtime.GOOS == "darwin" {
+				mode = "passive"
+			}
+		}
+		cfg := access.EngineConfig{Binary: *engine, SHA256: *engineSHA, Bridge: *bridge, Target: *target, FakeSNI: *fakeSNI, Fingerprint: *fp, Injector: mode, Fragment: *fragment}
+		child, err := access.StartEngine(ctx, cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "SNI engine:", err)
+			return 2
+		}
+		go func() {
+			if err := <-child; err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "SNI engine exited:", err)
+			}
+			cancel()
+		}()
+	} else if *target != "" || *fakeSNI != "" || *engineSHA != "" {
+		fmt.Fprintln(os.Stderr, "-connect / -fake-sni / -engine-sha256 require -engine")
+		return 2
+	}
+	fmt.Fprintln(os.Stderr, "HTTPS-only local proxy: http://"+*listen, "domains:", *domain)
+	fmt.Fprintln(os.Stderr, "No global proxy, DNS, or certificate settings were changed.")
+	if err := access.Listen(ctx, *listen, proxy); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	return 0
