@@ -40,6 +40,8 @@ type Result struct {
 	Success       bool   `json:"success"`
 	Status        int    `json:"http_status,omitempty"`
 	Proto         string `json:"http_protocol,omitempty"`
+	TLSVersion    string `json:"tls_version,omitempty"`
+	ALPN          string `json:"alpn,omitempty"`
 	RemoteAddr    string `json:"remote_addr,omitempty"`
 	BodyBytes     int64  `json:"body_bytes"`
 	ElapsedMS     int64  `json:"elapsed_ms"`
@@ -55,6 +57,7 @@ type measurements struct {
 	dnsStart, connectStart, tlsStart time.Time
 	dnsMS, connectMS, tlsMS          int64
 	remoteAddr                       string
+	tlsVersion, tlsALPN              string
 }
 
 func (m *measurements) record(phase string) {
@@ -97,7 +100,7 @@ func (m *measurements) trace() *httptrace.ClientTrace {
 			defer m.mu.Unlock()
 			m.phase, m.tlsStart = "tls", time.Now()
 		},
-		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			if !m.tlsStart.IsZero() {
@@ -105,6 +108,7 @@ func (m *measurements) trace() *httptrace.ClientTrace {
 			}
 			if err == nil {
 				m.phase = "http"
+				m.tlsVersion, m.tlsALPN = tls.VersionName(cs.Version), cs.NegotiatedProtocol
 			}
 		},
 		GotConn: func(info httptrace.GotConnInfo) {
@@ -197,11 +201,12 @@ func Run(parent context.Context, cfg Config) (Result, error) {
 		res.BodyBytes = bodyBytes
 		_ = response.Body.Close()
 		if readErr != nil {
-			requestErr, res.Phase = readErr, "body"
+			requestErr, res.Phase, res.Success = readErr, "body", false
 		}
 	}
 	m.mu.Lock()
 	res.DNSMS, res.ConnectMS, res.TLSMS, res.RemoteAddr = m.dnsMS, m.connectMS, m.tlsMS, m.remoteAddr
+	res.TLSVersion, res.ALPN = m.tlsVersion, m.tlsALPN
 	if requestErr != nil {
 		res.Phase = m.phase
 		if res.Reachable {

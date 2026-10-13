@@ -73,3 +73,21 @@ func TestInvalidInput(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPRejectedIsNotSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusMisdirectedRequest) }))
+	defer server.Close()
+	result, err := Run(context.Background(), Config{URL: server.URL})
+	if err != nil || !result.Reachable || result.Success || result.Status != 421 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestValidTLSVersionReported(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer server.Close()
+	result, err := Run(context.Background(), Config{URL: server.URL, RootCAs: trusted(t, server)})
+	if err != nil || !result.Success || result.TLSVersion == "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}

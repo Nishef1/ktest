@@ -10,6 +10,8 @@ Definitions: **Passed** means local unit tests verified intended code behavior, 
 | 2026-10-13 | FIELD-002 | Iranian ISP | TLS SNI/HTTP Host combinations | Unverified | Only authorized destinations |
 | 2026-10-13 | FIELD-003 | Iranian ISP | External packet desync tool vs direct baseline | Unverified | Needs design/security review |
 
+| 2026-10-13 | LOCAL-003 | Go 1.23.2 local runner, before toolchain upgrade | A/B comparison generator, alternating trial order, summary and TLS pinning tests | Passed | No Iranian ISP measurements; no circumvention claim |
+
 ## Minimal invocation
 
 ```sh
@@ -31,3 +33,19 @@ The documentation-only address above is from RFC 5737; replace it with your own 
 - DNS result, connection success, verified TLS certificate, HTTP status (notably 403/421), RTT/elapsed, body bytes read, visible redirects (disabled in tool).
 - Report any unexpected root CA trust changes, instability, resets, leaked DNS/IPv6 paths separately.
 - Outcomes: `verified`, `rejected`, `inconclusive`; NEVER infer worldwide or month-long reliability from one success.
+
+## Paired comparison — controlled endpoints only
+
+Direct versus a pre-existing **local TCP forwarding tool**, started separately and with proper permissions:
+
+```sh
+go run ./cmd/ktest compare -authorized -url https://your-controlled-domain.example/ -connect 127.0.0.1:40443 -rounds 3
+```
+
+Controlled Host/SNI routing (certificate validation failures are recorded, **not bypassed**):
+
+```sh
+go run ./cmd/ktest compare -authorized -url https://your-controlled-domain.example/ -connect 203.0.113.10:443 -host front.example -sni front.example -rounds 3
+```
+
+The test includes an unmodified baseline and only those variants requested through flags. A verified 2xx/3xx response is not proof of domain-fronting, equivalence of page content, foreign IP egress or DPI evasion. 403 and 421 are classified as HTTP failures. Medians with three observations are descriptive, not statistically conclusive. Do not upload private field reports to this public repository.
