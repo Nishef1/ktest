@@ -192,6 +192,7 @@ func runAccess(args []string) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	var engineFailure <-chan error
 	if *engine != "" {
 		if *target == "" || *fakeSNI == "" {
 			fmt.Fprintln(os.Stderr, "-engine requires -connect and -fake-sni")
@@ -210,11 +211,17 @@ func runAccess(args []string) int {
 			fmt.Fprintln(os.Stderr, "SNI engine:", err)
 			return 2
 		}
+		failed := make(chan error, 1)
+		engineFailure = failed
 		go func() {
-			if err := <-child; err != nil && ctx.Err() == nil {
+			if err := <-child; ctx.Err() == nil {
+				if err == nil {
+					err = errors.New("SNI engine exited unexpectedly")
+				}
 				fmt.Fprintln(os.Stderr, "SNI engine exited:", err)
+				failed <- err
+				cancel()
 			}
-			cancel()
 		}()
 	} else if *target != "" || *fakeSNI != "" || *engineSHA != "" {
 		fmt.Fprintln(os.Stderr, "-connect / -fake-sni / -engine-sha256 require -engine")
@@ -225,6 +232,13 @@ func runAccess(args []string) int {
 	if err := access.Listen(ctx, *listen, proxy); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if engineFailure != nil {
+		select {
+		case <-engineFailure:
+			return 1
+		default:
+		}
 	}
 	return 0
 }
