@@ -2,8 +2,11 @@ package probe
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +30,7 @@ type Config struct {
 	Timeout      time.Duration
 	MaxBodyBytes int64
 	RootCAs      *x509.CertPool // Test-only/custom trust roots; system roots if nil.
+	Proof        bool           // Require a fresh challenge echoed by the controlled origin.
 }
 
 type Result struct {
@@ -38,6 +42,7 @@ type Result struct {
 	Phase         string `json:"phase"`
 	Reachable     bool   `json:"reachable"`
 	Success       bool   `json:"success"`
+	ProofStatus   string `json:"proof_status,omitempty"`
 	Status        int    `json:"http_status,omitempty"`
 	Proto         string `json:"http_protocol,omitempty"`
 	TLSVersion    string `json:"tls_version,omitempty"`
@@ -146,6 +151,9 @@ func Run(parent context.Context, cfg Config) (Result, error) {
 	if err != nil || u == nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
 		return Result{}, errors.New("url must be an http(s) URL with a host and no user info")
 	}
+	if cfg.Proof && u.Scheme != "https" && !isLoopback(u.Hostname()) {
+		return Result{}, errors.New("proof requires HTTPS except for loopback tests")
+	}
 	if cfg.ConnectAddr != "" {
 		if _, _, err := net.SplitHostPort(cfg.ConnectAddr); err != nil {
 			return Result{}, fmt.Errorf("connect address must be host:port: %w", err)
@@ -190,12 +198,35 @@ func Run(parent context.Context, cfg Config) (Result, error) {
 		req.Host = cfg.Host
 	}
 	req.Header.Set("Range", "bytes=0-4095")
-	req.Header.Set("User-Agent", "ktest-probe/0.1")
+	req.Header.Set("User-Agent", "ktest-probe/0.2")
+	challenge := ""
+	if cfg.Proof {
+		bytes := make([]byte, 16)
+		if _, err := rand.Read(bytes); err != nil {
+			return Result{}, fmt.Errorf("generate origin challenge: %w", err)
+		}
+		challenge = hex.EncodeToString(bytes)
+		req.Header.Set("X-Ktest-Challenge", challenge)
+		req.Header.Set("Cache-Control", "no-store")
+		req.Header.Set("Pragma", "no-cache")
+	}
 	response, requestErr := client.Do(req)
 	if requestErr == nil {
 		res.Reachable = true
 		res.Status, res.Proto = response.StatusCode, response.Proto
-		res.Success = response.StatusCode >= 200 && response.StatusCode < 400
+		res.Success = response.StatusCode >= 200 && response.StatusCode < 300
+		if cfg.Proof {
+			returned := response.Header.Get("X-Ktest-Proof")
+			switch {
+			case returned == "":
+				res.ProofStatus = "missing"
+			case len(returned) == len(challenge) && subtle.ConstantTimeCompare([]byte(returned), []byte(challenge)) == 1:
+				res.ProofStatus = "verified"
+			default:
+				res.ProofStatus = "mismatch"
+			}
+			res.Success = res.Success && res.ProofStatus == "verified"
+		}
 		res.Phase = "complete"
 		bodyBytes, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, cfg.MaxBodyBytes))
 		res.BodyBytes = bodyBytes
@@ -217,4 +248,12 @@ func Run(parent context.Context, cfg Config) (Result, error) {
 	m.mu.Unlock()
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	return res, nil
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

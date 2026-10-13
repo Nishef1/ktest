@@ -84,3 +84,37 @@ func TestValidation(t *testing.T) {
 		t.Fatal("empty comparisons")
 	}
 }
+
+func TestAssessmentDoesNotClaimUnverifiedBypass(t *testing.T) {
+	baseline := Summary{Variant: "baseline", Attempts: 3, SuccessfulHTTP: 0, Outcomes: map[string]int{"tcp_error": 3}}
+	alternative := Summary{Variant: "pinned", Attempts: 3, SuccessfulHTTP: 3, VerifiedOrigin: 0, Outcomes: map[string]int{"http_success": 3}}
+	if got := assess([]Summary{baseline, alternative}, false, 3); got.Status != "unverified" {
+		t.Fatalf("unverified HTTP responses should never be a bypass claim: %+v", got)
+	}
+	alternative.VerifiedOrigin = 3
+	if got := assess([]Summary{baseline, alternative}, true, 3); got.Status != "candidate" {
+		t.Fatalf("expected candidate with proof, got %+v", got)
+	}
+	baseline.VerifiedOrigin = 3
+	if got := assess([]Summary{baseline, alternative}, true, 3); got.Status != "baseline_available" {
+		t.Fatalf("expected baseline available, got %+v", got)
+	}
+	baseline.VerifiedOrigin = 0
+	alternative.VerifiedOrigin = 0
+	alternative.Outcomes = map[string]int{"tcp_error": 3}
+	if got := assess([]Summary{baseline, alternative}, true, 3); got.Status != "path_unreachable" {
+		t.Fatalf("expected path diagnosis, got %+v", got)
+	}
+}
+
+func TestProofPropagatesToEveryVariant(t *testing.T) {
+	variants, err := Variants(probe.Config{URL: "https://example.org", ConnectAddr: "127.0.0.1:443", Host: "front.example", ServerName: "front.example", Proof: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range variants {
+		if !v.Config.Proof {
+			t.Fatalf("%s omitted proof mode", v.Name)
+		}
+	}
+}

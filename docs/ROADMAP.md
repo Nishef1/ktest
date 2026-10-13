@@ -50,3 +50,22 @@ Scope: diagnostic research into direct access to selected filtered services with
 - Optional `-connect 127.0.0.1:PORT` lets the comparison connect to a separately running local TCP forwarder. This repository neither downloads nor launches privileged packet-desync programs; comparisons are not themselves injected fake ClientHellos.
 - JSON output can contain IP addresses, URLs and network error strings. Keep raw field reports off public GitHub.
 - Go and CI dependencies were updated after checking upstream release notes. See `docs/UPSTREAM.md`.
+
+## P2: evidence-first adaptive diagnosis (2026-10-13)
+
+- New opt-in `-proof` mode verifies a fresh, random 128-bit challenge echoed by a controlled HTTPS origin. A success-looking 200 without proof, and every 3xx redirect, is **not** accepted as origin reachability. The nonce is not included in JSON results.
+- `ktest echo` binds only to loopback. For remote experiments, put it behind the HTTPS reverse proxy of infrastructure you control; do not expose its raw HTTP port.
+- `ktest compare -authorized -proof` produces per-variant proof counts plus one cautious machine-readable assessment: `baseline_available`, `candidate`, `inconclusive`, `path_unreachable`, or `unverified`.
+- A `candidate` means an alternate path verified *the controlled origin* in all tested rounds while the baseline did not. It is **not** proof of a generally functioning bypass and is not promoted without multiple networks, time windows, and independent verification.
+- Intentionally avoid downloading/executing elevated third-party packet injection tools or altering routes in this phase. A failed trial should update the hypothesis, not cause blind retry storms.
+
+### Hypothesis queue / failure-driven ordering
+
+| Observation | Next experiment | Why |
+| --- | --- | --- |
+| All variants fail before TCP establishment | IPv4 vs IPv6, alternate permitted access network, direct route checks | TLS/parser changes cannot restore a missing IP path |
+| TCP works but TLS fails | Compare valid TLS identities, verified certificate, timing and path on controlled endpoints | TLS/SNI inspection or server policy is plausible, not proven |
+| TLS works but HTTP 301/302/403/421 | Analyze redirect/authorization/provider routing separately | Never call these proof of internet access |
+| 2xx without matching challenge | Treat as unverified/maybe intercepted or cached response | Avoid success false positives |
+| One alternate returns repeated valid nonce | Candidate only, then collect paired negative controls and network diversity | Separate temporal fluctuation from causal mechanism |
+| Small bootstrap channel available but direct QUIC path works after setup | *Research* QUICstep connection-migration method, only with compatible sites | Potential to reduce traffic in limited channel; no blanket Iran claim |

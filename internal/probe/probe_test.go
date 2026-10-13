@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"crypto/x509"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,7 +55,7 @@ func TestHTTPRedirectIsNotFollowed(t *testing.T) {
 	}))
 	defer server.Close()
 	result, err := Run(context.Background(), Config{URL: server.URL})
-	if err != nil || !result.Reachable || result.Status != 302 {
+	if err != nil || !result.Reachable || result.Success || result.Status != 302 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
@@ -89,5 +90,53 @@ func TestValidTLSVersionReported(t *testing.T) {
 	result, err := Run(context.Background(), Config{URL: server.URL, RootCAs: trusted(t, server)})
 	if err != nil || !result.Success || result.TLSVersion == "" {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestProofFreshnessAndRedirect(t *testing.T) {
+	seen := map[string]bool{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		challenge := r.Header.Get("X-Ktest-Challenge")
+		if len(challenge) != 32 || seen[challenge] {
+			t.Errorf("missing or repeated challenge: %q", challenge)
+		}
+		seen[challenge] = true
+		if r.Header.Get("Cache-Control") != "no-store" {
+			t.Error("cache control missing")
+		}
+		w.Header().Set("X-Ktest-Proof", challenge)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	for i := 0; i < 2; i++ {
+		r, err := Run(context.Background(), Config{URL: server.URL, RootCAs: trusted(t, server), Proof: true})
+		if err != nil || !r.Success || r.ProofStatus != "verified" {
+			t.Fatalf("res=%+v err=%v", r, err)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatal("challenge was reused")
+	}
+}
+
+func TestProofRejectsFalsePositive(t *testing.T) {
+	for _, response := range []string{"", "replayed-old-proof"} {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if response != "" {
+				w.Header().Set("X-Ktest-Proof", response)
+			}
+			_, _ = io.WriteString(w, "OK")
+		}))
+		r, err := Run(context.Background(), Config{URL: server.URL, RootCAs: trusted(t, server), Proof: true})
+		server.Close()
+		if err != nil || !r.Reachable || r.Success || r.ProofStatus == "verified" {
+			t.Fatalf("res=%+v err=%v", r, err)
+		}
+	}
+}
+
+func TestProofRequiresTLSForRemote(t *testing.T) {
+	if _, err := Run(context.Background(), Config{URL: "http://example.org", Proof: true}); err == nil {
+		t.Fatal("remote plaintext proof should be rejected")
 	}
 }

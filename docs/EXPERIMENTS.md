@@ -49,3 +49,31 @@ go run ./cmd/ktest compare -authorized -url https://your-controlled-domain.examp
 ```
 
 The test includes an unmodified baseline and only those variants requested through flags. A verified 2xx/3xx response is not proof of domain-fronting, equivalence of page content, foreign IP egress or DPI evasion. 403 and 421 are classified as HTTP failures. Medians with three observations are descriptive, not statistically conclusive. Do not upload private field reports to this public repository.
+
+## Stage P2: verifiable controlled-origin tests
+
+The new proof mode requires the test server to echo the random challenge in its response header. It is not a VPN, CDN exploit, or universal proof that arbitrary services are reachable.
+
+For a **loopback-only** trial:
+
+```sh
+ktest echo -listen 127.0.0.1:18080
+ktest probe -url http://127.0.0.1:18080/__ktest/proof -proof
+```
+
+For a remote environment you **control**, bind `ktest echo` on loopback behind your own HTTPS reverse proxy; TLS certificate validation stays enabled. Run:
+
+```sh
+ktest compare -authorized -url https://YOUR-AUTHORIZED-DOMAIN/__ktest/proof -connect YOUR-AUTHORIZED-IP:443 -proof -rounds 3
+```
+
+If Host/SNI comparison is needed, pass `-host` and/or `-sni` for a domain you are explicitly authorized to test. This test sends at most 50 requests in ten five-variant rounds and emits summaries, not an automatic bypass claim. The challenge is a new 128-bit value for each request, never output or persisted.
+
+A standard 2xx page without matching proof produces `proof_missing` or `proof_mismatch`. HTTP 301/302 are now `http_redirect` failures for reachability proof. `verified_origin` is reported separately from HTTP status. Even an apparently good candidate needs fresh real-ISP measurements; no such measurements were performed here.
+
+| Date (UTC) | ID | Environment | Experiment | Result |
+| --- | --- | --- | --- | --- |
+| 2026-10-13 | LOCAL-004 | Go local httptest | Fresh nonce with trusted TLS, replay/missing proof, remote HTTP refusal | Passed |
+| 2026-10-13 | LOCAL-005 | Go local httptest | Self-hosted proof echo, malformed challenge rejection | Passed |
+| 2026-10-13 | LOCAL-006 | Unit runner | Candidate versus inconclusive, missing route, unverified baseline | Passed |
+| 2026-10-13 | IRAN-004 | Real operator | Same experiments across fixed/mobile networks | Not conducted |

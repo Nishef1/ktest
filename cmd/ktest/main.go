@@ -3,18 +3,26 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/experiment"
 	"github.com/Nishef1/ktest/internal/probe"
+	"github.com/Nishef1/ktest/internal/proofserver"
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	if len(args) > 0 && args[0] == "echo" {
+		return runEcho(args[1:])
+	}
 	if len(args) == 0 || (args[0] != "probe" && args[0] != "compare") {
 		fmt.Fprintln(os.Stderr, "usage: ktest probe|compare -url https://example.org [options]")
 		return 2
@@ -30,6 +38,7 @@ func run(args []string) int {
 	flags.StringVar(&cfg.ConnectAddr, "connect", "", "optional host:port for TCP dial")
 	flags.StringVar(&cfg.Network, "network", "tcp", "tcp, tcp4 or tcp6")
 	flags.DurationVar(&cfg.Timeout, "timeout", 8*time.Second, "per-trial timeout")
+	flags.BoolVar(&cfg.Proof, "proof", false, "require a fresh challenge echoed by an HTTPS origin you control")
 	if command == "probe" {
 		flags.IntVar(&attempts, "repeat", 1, "bounded repetitions, 1..10")
 	} else {
@@ -78,6 +87,33 @@ func run(args []string) int {
 		}
 	}
 	if failed {
+		return 1
+	}
+	return 0
+}
+
+// runEcho runs only on loopback; use an HTTPS reverse proxy under your control
+// for any remote experiment. Raw HTTP is never exposed automatically.
+func runEcho(args []string) int {
+	flags := flag.NewFlagSet("echo", flag.ContinueOnError)
+	listen := flags.String("listen", "127.0.0.1:18080", "loopback listener address")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return 2
+	}
+	host, _, err := net.SplitHostPort(*listen)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		fmt.Fprintln(os.Stderr, "proof endpoint must bind to loopback; place a controlled HTTPS reverse proxy in front")
+		return 2
+	}
+	server := &http.Server{Addr: *listen, Handler: proofserver.Handler(), ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 6 * time.Second, WriteTimeout: 6 * time.Second}
+	fmt.Fprintln(os.Stderr, "controlled proof endpoint on", *listen)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintln(os.Stderr, strings.TrimSpace(err.Error()))
 		return 1
 	}
 	return 0

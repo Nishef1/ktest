@@ -35,3 +35,16 @@ D. Later, compare a third-party packet-desync tool to the baseline under exactly
 - We must not upload packet captures containing credentials, per-user network addresses, private bridge details, or tokens to this public repo.
 - Do not weaken TLS verification just to make a routing test appear to work.
 - Tests should have strict timeouts, response limits, and low request counts.
+
+## Research update: QUICstep and nuanced failure classification (2026-10-13)
+
+- **QUICstep (PETS 2026; July 20, updated September 12):** a real proof-of-concept that uses a temporary censorship-resilient path for the QUIC handshake, then migrates a validated connection to another network path. Only feasible when the final direct UDP path works, the server supports QUIC connection migration, and a bootstrap path exists. The paper reports performance benefits under its specific experimental conditions; there is **no demonstration** that this grants access under Iran's 2026 source-IP allowlist. References: https://gfw.report/publications/pets26a/en/ and https://github.com/inspire-group/QUICstep
+- **Insights into an Iranian Internet Shutdown (FOCI 2026):** DNS, HTTP, TLS and QUIC policies varied across the June 2025 disruption; measuring the protocol failure phase is more valuable than assuming one DPI rule for all traffic. https://www.petsymposium.org/foci/2026/foci-2026-0016.php
+- **Iran allowlist early findings (RANDLab, June 18 2026):** important source-vantage limitations. Even a fully valid TLS variation does not cross an IP layer that drops packets. https://randlab.engineering.ucsc.edu/blogs/iran-allowlist/
+- **Zapret2 latest checked 2026-10-13:** stable GitHub release v1.0.5.2, not necessarily latest commit in its development branch. **SNI-Spoofing-Go:** latest tagged v0.7.2. No third-party binaries copied into this repository. https://github.com/bol-van/zapret2/releases and https://github.com/aleskxyz/SNI-Spoofing-Go/releases
+
+### Novel synthesis (hypotheses, **not** observed bypasses)
+
+1. **Verified-origin differential:** instrument paired route/SNI/Host tests with fresh nonces so that ISP block pages, captive portals, CDN misrouting and ordinary HTTP redirects do not appear as wins. Implemented in this repository.
+2. **Failure-aware exploration:** stop experimenting with TLS when no TCP route exists. Use structured failure signals to determine the next *controlled* experiment instead of selecting tricks at random. Implemented as a conservative summary, with no automatic traffic manipulation.
+3. **Partial-channel handshake bootstrap:** if an independently working VPN/mobile link can carry a QUIC handshake, research whether QUICstep can migrate data to a direct path. Requires compatible origin and usable post-migration path; research only, no code implemented.

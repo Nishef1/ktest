@@ -31,14 +31,22 @@ type Summary struct {
 	Variant         string         `json:"variant"`
 	Attempts        int            `json:"attempts"`
 	SuccessfulHTTP  int            `json:"successful_http"`
+	VerifiedOrigin  int            `json:"verified_origin"`
 	ReceivedHTTP    int            `json:"received_http"`
 	MedianElapsedMS int64          `json:"median_elapsed_ms"`
 	Outcomes        map[string]int `json:"outcomes"`
 }
 
 type Report struct {
-	Samples []Sample  `json:"samples"`
-	Summary []Summary `json:"summary"`
+	Samples    []Sample   `json:"samples"`
+	Summary    []Summary  `json:"summary"`
+	Assessment Assessment `json:"assessment"`
+}
+
+type Assessment struct {
+	Status    string `json:"status"`
+	Reason    string `json:"reason"`
+	NextCheck string `json:"next_check"`
 }
 
 type Runner func(context.Context, probe.Config) (probe.Result, error)
@@ -50,7 +58,7 @@ func Variants(base probe.Config) ([]Variant, error) {
 	if base.ConnectAddr == "" && base.ServerName == "" && base.Host == "" {
 		return nil, errors.New("compare needs at least one of -connect, -sni, -host")
 	}
-	variants := []Variant{{Name: "baseline", Config: probe.Config{URL: base.URL, Network: base.Network, Timeout: base.Timeout, MaxBodyBytes: base.MaxBodyBytes, RootCAs: base.RootCAs}}}
+	variants := []Variant{{Name: "baseline", Config: probe.Config{URL: base.URL, Network: base.Network, Timeout: base.Timeout, MaxBodyBytes: base.MaxBodyBytes, RootCAs: base.RootCAs, Proof: base.Proof}}}
 	// Add a pinned connection if supplied; all other variants build on this
 	// same dial address, to make any SNI/Host comparison fair.
 	anchor := variants[0].Config
@@ -121,6 +129,9 @@ func Run(ctx context.Context, plan Plan, runner Runner) (Report, error) {
 			if sample.Result.Success {
 				summary.SuccessfulHTTP++
 			}
+			if sample.Result.ProofStatus == "verified" && sample.Result.Success {
+				summary.VerifiedOrigin++
+			}
 			summary.Outcomes[classify(sample.Result)]++
 			durations = append(durations, sample.Result.ElapsedMS)
 		}
@@ -133,10 +144,17 @@ func Run(ctx context.Context, plan Plan, runner Runner) (Report, error) {
 		}
 		report.Summary = append(report.Summary, summary)
 	}
+	report.Assessment = assess(report.Summary, plan.Base.Proof, plan.Rounds)
 	return report, nil
 }
 
 func classify(r probe.Result) string {
+	if r.ProofStatus == "missing" {
+		return "proof_missing"
+	}
+	if r.ProofStatus == "mismatch" {
+		return "proof_mismatch"
+	}
 	if r.Success {
 		return "http_success"
 	}
@@ -144,7 +162,16 @@ func classify(r probe.Result) string {
 		if r.Error != "" {
 			return "body_error"
 		}
-		return "http_status_failure"
+		switch r.Status {
+		case 301, 302, 303, 307, 308:
+			return "http_redirect"
+		case 403:
+			return "http_forbidden"
+		case 421:
+			return "http_misdirected"
+		default:
+			return "http_status_failure"
+		}
 	}
 	if r.Error == "" {
 		return "inconclusive"
@@ -165,3 +192,35 @@ func classify(r probe.Result) string {
 
 // Timings are observations from individual connections; the median is not
 // a statistical confidence interval or an estimate of nationwide reachability.
+
+// assess produces cautious next-step guidance, never a censorship-bypass claim.
+func assess(summaries []Summary, proof bool, rounds int) Assessment {
+	if !proof {
+		return Assessment{"unverified", "HTTP status alone cannot establish that the requested origin responded", "Use -proof against an HTTPS echo endpoint under your control"}
+	}
+	if len(summaries) == 0 {
+		return Assessment{"inconclusive", "No trials", "Check the experiment configuration"}
+	}
+	baseline := summaries[0]
+	if baseline.VerifiedOrigin == rounds {
+		return Assessment{"baseline_available", "The baseline already reaches the controlled origin in every round", "Investigate application-level failures before trying other transport methods"}
+	}
+	if rounds < 3 {
+		return Assessment{"inconclusive", "Fewer than three trials cannot support a comparative candidate", "Run at least three matched rounds and repeat across times"}
+	}
+	for _, s := range summaries[1:] {
+		if s.VerifiedOrigin == rounds && baseline.VerifiedOrigin == 0 {
+			return Assessment{"candidate", "An alternate route verified the controlled origin while the baseline did not; causality and field stability remain unproven", "Repeat on multiple networks with negative controls; verify no DNS/IP policy changes"}
+		}
+	}
+	allTCP := true
+	for _, s := range summaries {
+		if s.Outcomes["tcp_error"] != s.Attempts {
+			allTCP = false
+		}
+	}
+	if allTCP {
+		return Assessment{"path_unreachable", "Every trial failed before TLS", "Compare TCP4/TCP6 and an independently reachable route; avoid guessing SNI fixes"}
+	}
+	return Assessment{"inconclusive", "No repeatable controlled-origin advantage across variants", "Classify each phase and test one hypothesis at a time"}
+}
