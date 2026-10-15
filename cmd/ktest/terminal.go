@@ -17,12 +17,19 @@ import (
 
 	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/revive"
+	"github.com/Nishef1/ktest/internal/systemtun"
 )
 
 type cliSession struct {
 	choice string
 	name   string
 	port   int
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+type tunSession struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -31,6 +38,7 @@ type terminal struct {
 	out     io.Writer
 	mu      sync.Mutex
 	active  *cliSession
+	tun     *tunSession
 	status  string
 	results []quickcheck.Result
 }
@@ -56,6 +64,9 @@ func (t *terminal) setStatus(s *cliSession, status string) {
 }
 
 func (t *terminal) stop() bool {
+	if !t.stopTunIfActive() {
+		return false
+	}
 	t.mu.Lock()
 	s := t.active
 	t.mu.Unlock()
@@ -151,7 +162,7 @@ func (t *terminal) start(choice, base string) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &cliSession{
-		choice: choice, name: label, port: port, cancel: cancel, done: make(chan struct{}),
+		choice: choice, name: label, port: port, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 	}
 	t.mu.Lock()
 	t.active, t.status, t.results = s, "starting local core", nil
@@ -259,7 +270,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		t.print("\nktest | Status: %s\n", status)
 		t.print("1) Direct Fragment B      2) Direct Fragment A\n")
 		t.print("3) ByeDPI adaptive        4) TLS record slicing\n")
-		t.print("5) CDN IP candidates      6) TUN information\n")
+		t.print("5) CDN IP candidates      6) Toggle system-wide TUN (Windows/Admin)\n")
 		t.print("7) Stop active mode       8) Retest YouTube and Google\n")
 		t.print("0) Exit (stops core)\n")
 		t.print("Select > ")
@@ -275,8 +286,42 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			t.print("CDN candidates are diagnostics only, not working VPN endpoints.\n")
 			runQuickScan([]string{"-provider", "akamai"})
 		case "6":
-			t.print("System-wide Windows TUN requires an elevated adapter and loop-safe routes. Not enabled in this build.\n")
-			t.print("Local proxy access does not automatically proxy Windows or Windscribe UDP.\n")
+			t.mu.Lock()
+			exists := t.tun != nil
+			t.mu.Unlock()
+			if exists {
+				t.stopTunIfActive()
+				continue
+			}
+			active := t.current()
+			if active == nil {
+				t.print("Start and verify a local mode (1-4) first.\n")
+				continue
+			}
+			t.mu.Lock()
+			verified := false
+			for _, result := range t.results {
+				if result.Success {
+					verified = true
+				}
+			}
+			t.mu.Unlock()
+			if !verified {
+				t.print("No verified HTTPS result through proxy. Refusing to change system routes.\n")
+				continue
+			}
+			t.print("BETA: TCP-wide TUN, administrator required; UDP except DNS is blocked.\n")
+			t.print("May disrupt Windows/other VPNs. Routes should restore when stopped.\n")
+			t.print("Type YES to modify system-wide routes > ")
+			if !reader.Scan() {
+				t.stopIfActive()
+				return 0
+			}
+			if strings.TrimSpace(reader.Text()) != "YES" {
+				t.print("Cancelled.\n")
+				continue
+			}
+			t.startTun(base, active.port)
 		case "7", "s", "S":
 			t.stop()
 		case "8", "t", "T":
@@ -284,7 +329,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			if s == nil {
 				t.print("No active connection; select mode 1-4 first.\n")
 			} else {
-				go t.check(context.Background(), s)
+				go t.check(s.ctx, s)
 			}
 		case "0", "q", "Q":
 			t.stopIfActive()
@@ -298,5 +343,81 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 func (t *terminal) stopIfActive() {
 	if t.current() != nil {
 		t.stop()
+	} else {
+		t.stopTunIfActive()
 	}
+}
+
+func (t *terminal) stopTunIfActive() bool {
+	t.mu.Lock()
+	ts := t.tun
+	t.mu.Unlock()
+	if ts == nil {
+		return true
+	}
+	t.print("Stopping Windows TUN and restoring routes...\n")
+	ts.cancel()
+	select {
+	case <-ts.done:
+		t.mu.Lock()
+		if t.tun == ts {
+			t.tun = nil
+		}
+		t.mu.Unlock()
+		t.print("TUN process stopped. Windows should restore its routes.\n")
+		return true
+	case <-time.After(12 * time.Second):
+		t.print("Could not verify TUN shutdown. Do not switch proxy cores until routes recover.\n")
+		return false
+	}
+}
+
+func (t *terminal) startTun(base string, socksPort int) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ts := &tunSession{cancel: cancel, done: make(chan struct{})}
+	t.mu.Lock()
+	t.tun = ts
+	t.mu.Unlock()
+	coreDir := filepath.Join(base, "cores")
+	go func() {
+		err := systemtun.Start(ctx, coreDir, socksPort, t.out)
+		close(ts.done)
+		t.mu.Lock()
+		if t.tun == ts {
+			t.tun = nil
+		}
+		t.mu.Unlock()
+		if ctx.Err() == nil {
+			t.print("TUN exited: %v\n", err)
+		}
+	}()
+	// Verify actual system-routed HTTPS and automatically revert on total
+	// failure, rather than leaving the user's Windows network stranded.
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ts.done:
+			return
+		case <-time.After(3 * time.Second):
+		}
+		testCtx, stop := context.WithTimeout(ctx, 17*time.Second)
+		defer stop()
+		results := quickcheck.RunDirect(testCtx, 7*time.Second)
+		if ctx.Err() != nil {
+			return
+		}
+		pass := 0
+		for _, r := range results {
+			if r.Success {
+				pass++
+			}
+		}
+		if pass == 0 {
+			t.print("TUN direct-route verification failed on both sites; stopping TUN automatically.\n")
+			ts.cancel()
+		} else {
+			t.print("TUN system-route verification: %d/%d sites passed. UDP remains restricted.\n", pass, len(results))
+		}
+	}()
 }

@@ -20,6 +20,17 @@ type Result struct {
 }
 
 func Run(ctx context.Context, socksPort int, timeout time.Duration) []Result {
+	proxy, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", socksPort))
+	return run(ctx, http.ProxyURL(proxy), timeout)
+}
+
+// RunDirect verifies HTTPS without a proxy and is used only after TUN has
+// installed its system routes.
+func RunDirect(ctx context.Context, timeout time.Duration) []Result {
+	return run(ctx, nil, timeout)
+}
+
+func run(ctx context.Context, proxyFn func(*http.Request) (*url.URL, error), timeout time.Duration) []Result {
 	targets := []struct {
 		Name string
 		URL  string
@@ -31,9 +42,8 @@ func Run(ctx context.Context, socksPort int, timeout time.Duration) []Result {
 	if timeout <= 0 {
 		timeout = 8 * time.Second
 	}
-	proxy, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", socksPort))
 	transport := &http.Transport{
-		Proxy:             http.ProxyURL(proxy),
+		Proxy:             proxyFn,
 		TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
 		DisableKeepAlives: true,
 		ForceAttemptHTTP2: true,
