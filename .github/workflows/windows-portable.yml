@@ -81,7 +81,7 @@ jobs:
             throw "Terminal menu did not start and exit cleanly"
           }
           $version = & ./portable/ktest/cores/xray.exe version
-          if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\\.10\\.10")) {
+          if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.10\.10")) {
             throw "Bundled Xray did not start or returned unexpected version"
           }
           Compress-Archive -Path portable/ktest -DestinationPath ktest-windows-portable.zip -CompressionLevel Optimal
