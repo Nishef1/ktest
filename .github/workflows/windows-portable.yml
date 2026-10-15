@@ -20,10 +20,8 @@ jobs:
       - name: Verify source and build
         shell: pwsh
         run: |
-          go test ./...
-          if ($LASTEXITCODE -ne 0) { throw "Go tests failed" }
-          go vet ./...
-          if ($LASTEXITCODE -ne 0) { throw "Go vet failed" }
+          # Full Go tests/vet run in the separate 'verify' workflow. Build and
+          # native Windows smoke tests are sufficient for this packaging job.
           New-Item -ItemType Directory -Force -Path portable/ktest/cores, portable/ktest/profiles, portable/ktest/THIRD_PARTY, build/xray, build/byedpi | Out-Null
           go build -trimpath -o portable/ktest/ktest.exe ./cmd/ktest
           if ($LASTEXITCODE -ne 0) { throw "Build failed" }
