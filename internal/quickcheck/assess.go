@@ -5,13 +5,13 @@ package quickcheck
 // a claim about the ISP, public egress IP, or censorship equipment.
 type Assessment struct {
 	Target string
-	Kind   string // unavailable, proxy_regression, baseline_unknown, already_open, vpn_confounded, candidate
+	Kind   string // unavailable, proxy_regression, baseline_unknown, already_open, candidate
 	Detail string
 }
 
-// Compare keeps same-target direct and SOCKS results separate, so a connected
-// third-party VPN can never be counted as evidence for the selected technique.
-func Compare(proxied, direct []Result, vpnSuspected bool) []Assessment {
+// Compare keeps same-target direct and SOCKS results separate, to separate
+// observed proxy reachability from direct reachability. User controls VPN state.
+func Compare(proxied, direct []Result) []Assessment {
 	byTarget := make(map[string]Result, len(direct))
 	for _, d := range direct {
 		byTarget[d.Target] = d
@@ -26,9 +26,6 @@ func Compare(proxied, direct []Result, vpnSuspected bool) []Assessment {
 			a.Detail = "direct access succeeds, but the selected ktest proxy fails: check its DNS and routing"
 		case !p.Success:
 			// The proxy could not access this particular target.
-		case vpnSuspected:
-			a.Kind = "vpn_confounded"
-			a.Detail = "another VPN may be carrying traffic; cannot attribute reachability to ktest"
 		case !checked:
 			a.Kind = "baseline_unknown"
 			a.Detail = "direct control did not finish; no attribution possible"

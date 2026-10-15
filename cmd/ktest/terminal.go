@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Nishef1/ktest/internal/networkstate"
+	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/revive"
 	"github.com/Nishef1/ktest/internal/systemtun"
@@ -157,6 +157,9 @@ func (t *terminal) start(choice, base string) {
 	if t.current() != nil && !t.stop() {
 		return
 	}
+	t.print("Checking Google Public DNS before starting the selected method...\n")
+	dns := dnscheck.CheckGoogleDNS(context.Background())
+	t.print("%s\n", dns.Format())
 	launch, port, label, err := terminalMode(choice, base, t.out)
 	if err != nil {
 		t.print("Cannot start: %v\n", err)
@@ -221,23 +224,14 @@ func (t *terminal) check(ctx context.Context, s *cliSession) {
 	// VPN clients both before and after, including split tunnel users.
 	checkCtx, cancel := context.WithTimeout(ctx, 24*time.Second)
 	defer cancel()
-	before := networkstate.Inspect(checkCtx)
 	directCh := make(chan []quickcheck.Result, 1)
 	go func() { directCh <- quickcheck.RunDirect(checkCtx, 8*time.Second) }()
 	proxied := quickcheck.Run(checkCtx, s.port, 8*time.Second)
 	direct := <-directCh
-	after := networkstate.Inspect(checkCtx)
 	if ctx.Err() != nil || t.current() != s {
 		return
 	}
-	vpn := before.Suspected || after.Suspected
-	if vpn {
-		reasons := append(before.Reasons, after.Reasons...)
-		t.print("WARNING: An active VPN interface may carry traffic (%s). No bypass can be attributed.\n", strings.Join(reasons, "; "))
-	} else if before.ClientOpen || after.ClientOpen {
-		t.print("INFO: Windscribe app is open, but no VPN interface was identified. This does not prove connected or disconnected; split tunneling remains possible.\n")
-	}
-	compared := quickcheck.Compare(proxied, direct, vpn)
+	compared := quickcheck.Compare(proxied, direct)
 	candidates := 0
 	for _, a := range compared {
 		switch a.Kind {
@@ -246,8 +240,6 @@ func (t *terminal) check(ctx context.Context, s *cliSession) {
 			t.print("CANDIDATE %-8s Proxy OK, direct failed. Requires VPN-off confirmation.\n", a.Target)
 		case "already_open":
 			t.print("BASELINE  %-8s Works without ktest too. No bypass attributed.\n", a.Target)
-		case "vpn_confounded":
-			t.print("UNVERIFIED %-8s Another VPN may carry these packets.\n", a.Target)
 		case "proxy_regression":
 			t.print("PROXY BROKEN %-8s Direct works but proxy fails (DNS/route issue).\n", a.Target)
 		case "baseline_unknown":
@@ -260,13 +252,13 @@ func (t *terminal) check(ctx context.Context, s *cliSession) {
 	if t.active == s {
 		t.results = proxied
 		t.assessments = compared
-		t.status = fmt.Sprintf("%d candidate target(s); VPN suspected=%t", candidates, vpn)
+		t.status = fmt.Sprintf("%d proxy-only reachable target(s)", candidates)
 	}
 	t.mu.Unlock()
 	if candidates == 0 {
 		t.print("No new ISP-path access verified. A local SOCKS listener or HTTP 204 alone is not proof.\n")
 	} else {
-		t.print("Candidate only: compare with every other VPN OFF; this is not proof of a universal bypass.\n")
+		t.print("Observed proxy-only reachability; ensure other VPNs are off for a meaningful comparison.\n")
 	}
 }
 
@@ -312,7 +304,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			t.start(option, base)
 		case "5":
 			t.print("CDN candidates are diagnostics only, not working VPN endpoints.\n")
-			runQuickScan([]string{"-provider", "akamai"})
+			runQuickScan([]string{"-provider", "cloudflare"})
 		case "6":
 			t.mu.Lock()
 			exists := t.tun != nil
@@ -336,10 +328,6 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			t.mu.Unlock()
 			if !verified {
 				t.print("YouTube has not been proven newly reachable through ktest. Refusing to change system routes.\n")
-				continue
-			}
-			if networkstate.Inspect(context.Background()).Suspected {
-				t.print("Windscribe or another VPN may still be active. Refusing to modify system routing. Disconnect and exit the VPN app, then retest.\n")
 				continue
 			}
 			t.print("Rechecking YouTube directly before TUN startup...\n")

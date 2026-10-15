@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/Nishef1/ktest/internal/dnscheck"
 )
 
 const MaxProfileSize = 1 << 20
@@ -20,6 +22,10 @@ const MaxProfileSize = 1 << 20
 // JSON configuration objects) or a single JSON object. It does not fetch
 // profiles from the network: the offline path is deliberate.
 func SelectProfile(data []byte, variant string) ([]byte, error) {
+	return SelectProfileWithDNS(data, variant, "")
+}
+
+func SelectProfileWithDNS(data []byte, variant, verifiedTransport string) ([]byte, error) {
 	variant = strings.ToUpper(strings.TrimSpace(variant))
 	if variant != "A" && variant != "B" {
 		return nil, errors.New("variant must be A or B")
@@ -72,7 +78,7 @@ func SelectProfile(data []byte, variant string) ([]byte, error) {
 		// DoH is blocked. Preserve upstream transport/routing rules, but
 		// prioritize local DNS for reachable Google services and add an
 		// independent encrypted DNS fallback for other destinations.
-		if err := improveDNSBootstrap(obj); err != nil {
+		if err := improveDNSBootstrap(obj, verifiedTransport); err != nil {
 			return nil, err
 		}
 		return json.MarshalIndent(obj, "", "  ")
@@ -122,7 +128,17 @@ func Run(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
-	profile, err := SelectProfile(content, c.Variant)
+	google := dnscheck.CheckGoogleDNS(ctx)
+	if c.Output != nil {
+		fmt.Fprintln(c.Output, "DNS preflight:", google.Format())
+	}
+	transport := ""
+	if google.UDP {
+		transport = "udp"
+	} else if google.TCP {
+		transport = "tcp"
+	}
+	profile, err := SelectProfileWithDNS(content, c.Variant, transport)
 	if err != nil {
 		return err
 	}

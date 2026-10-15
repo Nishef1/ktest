@@ -20,7 +20,7 @@ import (
 	"github.com/Nishef1/ktest/internal/access"
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/experiment"
-	"github.com/Nishef1/ktest/internal/networkstate"
+	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/pathdiag"
 	"github.com/Nishef1/ktest/internal/probe"
 	"github.com/Nishef1/ktest/internal/proofserver"
@@ -386,44 +386,60 @@ func runPackagedByeDPI(option string) int {
 // A reachable IP is not a verified working fronting route.
 func runQuickScan(args []string) int {
 	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
-	provider := flags.String("provider", "akamai", "akamai, fastly or google")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: ktest scan [-provider akamai|fastly|google]")
+	provider := flags.String("provider", "cloudflare", "cloudflare (100+ IPs), akamai, google or fastly")
+	limit := flags.Int("limit", 300, "maximum unique CDN IPs; 100..300 for Cloudflare")
+	if flags.Parse(args) != nil || flags.NArg() != 0 || *limit < 1 || *limit > 300 {
+		fmt.Fprintln(os.Stderr, "usage: ktest scan [-provider cloudflare|akamai|google|fastly] [-limit 100..300]")
 		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	environment := networkstate.Inspect(ctx)
-	if environment.Suspected {
-		fmt.Fprintln(os.Stderr, "VPN detected or suspected:", strings.Join(environment.Reasons, "; "))
-		fmt.Fprintln(os.Stderr, "CDN IPs would be tested over a possibly tunneled route; disconnect the VPN and rerun for ISP-path measurements.")
-		return 1
+	dns := dnscheck.CheckGoogleDNS(ctx)
+	fmt.Println("DNS preflight:", dns.Format())
+	fmt.Println("An open DNS route does not prove a CDN or filtered website is reachable.")
+	var ips []string
+	var target, source string
+	if *provider == "cloudflare" {
+		var err error
+		ips, err = edges.CloudflareCandidates(*limit)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		target = "https://www.cloudflare.com/cdn-cgi/trace"
+		source = "https://www.cloudflare.com/ips/"
+	} else {
+		preset, err := edges.PresetCandidates(ctx, *provider)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "candidate source:", err)
+			return 1
+		}
+		ips, target, source = preset.IPs, preset.URL, preset.Source
+		if len(ips) > *limit {
+			ips = ips[:*limit]
+		}
 	}
-	preset, err := edges.PresetCandidates(ctx, *provider)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "candidate source:", err)
-		return 1
-	}
-	fmt.Printf("CDN %s | %d candidate IPs | source: %s\n", preset.Provider, len(preset.IPs), preset.Source)
-	fmt.Println("These IPs are unverified. Testing HTTPS and certificate identity; not a Fronting tunnel.")
-	report, err := edges.Run(ctx, edges.Plan{
-		URL: preset.URL, IPs: preset.IPs, Rounds: 1, Timeout: 4 * time.Second,
-	}, nil)
+	fmt.Printf("CDN %s | %d source-backed candidate IPs | source: %s\n", *provider, len(ips), source)
+	fmt.Println("Target: 10 certificate-verified HTTPS responses. This does NOT prove arbitrary domain fronting.")
+	scan, err := edges.ScanCDN(ctx, ips, target, 10, nil, func(ip string, r probe.Result, tried, passed int) {
+		switch {
+		case r.Success && r.TLSVersion != "" && r.Status >= 200 && r.Status < 300 && r.Error == "":
+			fmt.Printf("[%d/%d] VERIFIED HTTPS %-18s (%d/%d)\n", tried, len(ips), ip, passed, 10)
+		case tried%10 == 0:
+			fmt.Printf("[%d/%d] scanned; %d/10 verified; latest %s: %s\n", tried, len(ips), passed, ip, r.Phase)
+		}
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "CDN scan:", err)
 		return 1
 	}
-	for _, c := range report.Candidates {
-		fmt.Printf("%-42s %-22s TLS=%d/%d HTTP2xx=%d/%d %dms\n",
-			c.IP, c.Assessment, c.TLSVerified, c.Attempts, c.HTTP2xx, c.Attempts, c.MedianElapsedMS)
-		if c.LastError != "" {
-			message := strings.ReplaceAll(strings.ReplaceAll(c.LastError, "\n", " "), "\r", " ")
-			if len(message) > 170 {
-				message = message[:170] + "..."
-			}
-			fmt.Printf("  Reason: %s\n", message)
-		}
+	fmt.Printf("Finished: attempted=%d verified HTTPS=%d/10 duration=%s\n", scan.Attempted, len(scan.VerifiedHTTP), scan.Duration.Round(time.Second))
+	for _, ip := range scan.VerifiedHTTP {
+		fmt.Println("Verified provider HTTPS:", ip)
 	}
-	fmt.Println("TLS/HTTP checks do not prove that a CDN will route another domain.")
+	if !scan.ReachedGoal {
+		fmt.Println("No 10 verified candidates were found within the bounded scan. Do not label failed IPs as working.")
+	}
+	fmt.Println("For a FRONTED origin, route and nonce verification still require a compatible CDN/origin setup.")
 	return 0
 }
