@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"os"
 	"os/signal"
 	"runtime"
@@ -27,6 +29,9 @@ import (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	if len(args) == 0 {
+		return interactiveMenu()
+	}
 	if len(args) > 0 && args[0] == "edges" {
 		return runEdges(args[1:])
 	}
@@ -301,4 +306,58 @@ func runEdges(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// interactiveMenu keeps the existing CLI commands available while offering
+// an uncomplicated entry point for packaged desktop users.
+func interactiveMenu() int {
+	in := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Println("\nktest | Initial connectivity")
+		fmt.Println("1) Direct access (Fragment B)")
+		fmt.Println("2) Alternate direct access (Fragment A)")
+		fmt.Println("3) Show local setup information")
+		fmt.Println("0) Exit")
+		fmt.Print("Select > ")
+		if !in.Scan() {
+			return 0
+		}
+		switch strings.TrimSpace(in.Text()) {
+		case "1", "2":
+			base, err := os.Executable()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				continue
+			}
+			base = filepath.Dir(base)
+			binary := filepath.Join(base, "cores", "xray")
+			if runtime.GOOS == "windows" {
+				binary += ".exe"
+			}
+			profile := filepath.Join(base, "profiles", "Serverless-for-Iran.json")
+			if _, err := os.Stat(binary); err != nil {
+				fmt.Println("Xray core is not included in this build. Use the packaged archive.")
+				continue
+			}
+			if _, err := os.Stat(profile); err != nil {
+				fmt.Println("Offline profile is missing. Use the packaged archive.")
+				continue
+			}
+			variant := "B"
+			if strings.TrimSpace(in.Text()) == "2" {
+				variant = "A"
+			}
+			code := runRevive([]string{"-xray", binary, "-profile", profile, "-variant", variant, "-assets", filepath.Join(base, "cores")})
+			if code != 0 {
+				fmt.Printf("Core exited with code %d.\n", code)
+			}
+		case "3":
+			fmt.Println("This tool uses a local HTTP/SOCKS proxy at 127.0.0.1:10808.")
+			fmt.Println("It does not change your system proxy, DNS, certificates or VPN route.")
+		case "0", "q":
+			return 0
+		default:
+			fmt.Println("Choose a listed option.")
+		}
+	}
 }
