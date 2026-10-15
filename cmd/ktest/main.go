@@ -385,6 +385,10 @@ func runPackagedByeDPI(option string) int {
 // runQuickScan verifies selected CDN candidates through a real TLS connection.
 // A reachable IP is not a verified working fronting route.
 func runQuickScan(args []string) int {
+	return runQuickScanContext(context.Background(), args)
+}
+
+func runQuickScanContext(parent context.Context, args []string) int {
 	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
 	provider := flags.String("provider", "cloudflare", "cloudflare (100+ IPs), akamai, google or fastly")
 	limit := flags.Int("limit", 300, "maximum unique CDN IPs; 100..300 for Cloudflare")
@@ -392,7 +396,7 @@ func runQuickScan(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: ktest scan [-provider cloudflare|akamai|google|fastly] [-limit 100..300]")
 		return 2
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	dns := dnscheck.CheckGoogleDNS(ctx)
 	fmt.Println("DNS preflight:", dns.Format())
@@ -429,9 +433,13 @@ func runQuickScan(args []string) int {
 			fmt.Printf("[%d/%d] scanned; %d/10 verified; latest %s: %s\n", tried, len(ips), passed, ip, r.Phase)
 		}
 	})
-	if err != nil {
+	if err != nil && ctx.Err() == nil {
 		fmt.Fprintln(os.Stderr, "CDN scan:", err)
 		return 1
+	}
+	if ctx.Err() != nil {
+		fmt.Printf("Scan cancelled after %d candidates. No fronting claim made.\n", scan.Attempted)
+		return 0
 	}
 	fmt.Printf("Finished: attempted=%d verified HTTPS=%d/10 duration=%s\n", scan.Attempted, len(scan.VerifiedHTTP), scan.Duration.Round(time.Second))
 	for _, ip := range scan.VerifiedHTTP {

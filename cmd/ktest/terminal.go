@@ -43,6 +43,7 @@ type terminal struct {
 	status      string
 	results     []quickcheck.Result
 	assessments []quickcheck.Assessment
+	scanCancel  context.CancelFunc
 }
 
 func (t *terminal) print(format string, args ...any) {
@@ -66,6 +67,14 @@ func (t *terminal) setStatus(s *cliSession, status string) {
 }
 
 func (t *terminal) stop() bool {
+	t.mu.Lock()
+	scanCancel := t.scanCancel
+	t.mu.Unlock()
+	if scanCancel != nil {
+		scanCancel()
+		t.print("Cancelling CDN scan; current requests will finish or time out.\n")
+		return true
+	}
 	if !t.stopTunIfActive() {
 		return false
 	}
@@ -303,8 +312,16 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		case "1", "2", "3", "4":
 			t.start(option, base)
 		case "5":
-			t.print("CDN candidates are diagnostics only, not working VPN endpoints.\n")
-			runQuickScan([]string{"-provider", "cloudflare"})
+			t.print("Scanning up to 300 official Cloudflare IPs; Ctrl+C cancels.\n")
+			scanCtx, scanStop := context.WithCancel(context.Background())
+			t.mu.Lock()
+			t.scanCancel = scanStop
+			t.mu.Unlock()
+			runQuickScanContext(scanCtx, []string{"-provider", "cloudflare"})
+			scanStop()
+			t.mu.Lock()
+			t.scanCancel = nil
+			t.mu.Unlock()
 		case "6":
 			t.mu.Lock()
 			exists := t.tun != nil
