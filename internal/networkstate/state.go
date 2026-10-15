@@ -13,8 +13,10 @@ import (
 // clients support application-specific routing invisible to a simple adapter
 // scan. In the presence of doubt we refuse to attribute success to ktest.
 type Result struct {
-	Suspected bool
-	Reasons   []string
+	Suspected    bool
+	ClientOpen   bool
+	Reasons      []string
+	Observations []string
 }
 
 var suspiciousNames = []string{
@@ -44,8 +46,9 @@ func Inspect(ctx context.Context) Result {
 			}
 		}
 	}
-	// A running Windscribe client can use split tunneling and policy routes,
-	// even where its default route is not visibly a VPN adapter.
+	// A running Windscribe GUI is not evidence of a connected VPN.
+	// Preserve it as informational only; identify probable active VPNs through
+	// adapters. Split tunneling can still evade heuristic detection.
 	if runtime.GOOS == "windows" {
 		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
@@ -53,8 +56,8 @@ func Inspect(ctx context.Context) Result {
 			"-Command", "$p=Get-Process -Name 'Windscribe*' -ErrorAction SilentlyContinue; if ($p) { 'RUNNING' }")
 		output, err := cmd.Output()
 		if err == nil && strings.Contains(string(output), "RUNNING") {
-			result.Suspected = true
-			result.Reasons = append(result.Reasons, "Windscribe application is running (connection state unverified)")
+			result.ClientOpen = true
+			result.Observations = append(result.Observations, "Windscribe application open; connection status unknown")
 		}
 	}
 	return result
