@@ -233,7 +233,9 @@ func (t *terminal) check(ctx context.Context, s *cliSession) {
 	vpn := before.Suspected || after.Suspected
 	if vpn {
 		reasons := append(before.Reasons, after.Reasons...)
-		t.print("WARNING: Another VPN may be active (%s). These results cannot establish a ktest bypass.\n", strings.Join(reasons, "; "))
+		t.print("WARNING: An active VPN interface may carry traffic (%s). No bypass can be attributed.\n", strings.Join(reasons, "; "))
+	} else if before.ClientOpen || after.ClientOpen {
+		t.print("INFO: Windscribe app is open, but no VPN interface was identified. This does not prove connected or disconnected; split tunneling remains possible.\n")
 	}
 	compared := quickcheck.Compare(proxied, direct, vpn)
 	candidates := 0
@@ -246,6 +248,10 @@ func (t *terminal) check(ctx context.Context, s *cliSession) {
 			t.print("BASELINE  %-8s Works without ktest too. No bypass attributed.\n", a.Target)
 		case "vpn_confounded":
 			t.print("UNVERIFIED %-8s Another VPN may carry these packets.\n", a.Target)
+		case "proxy_regression":
+			t.print("PROXY BROKEN %-8s Direct works but proxy fails (DNS/route issue).\n", a.Target)
+		case "baseline_unknown":
+			t.print("UNVERIFIED %-8s Direct baseline did not finish.\n", a.Target)
 		default:
 			t.print("FAIL      %-8s %s\n", a.Target, a.Detail)
 		}
