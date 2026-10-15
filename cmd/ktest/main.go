@@ -30,6 +30,9 @@ import (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	if len(args) > 0 && args[0] == "scan" {
+		return runQuickScan(args[1:])
+	}
 	if len(args) == 0 {
 		return interactiveMenu()
 	}
@@ -319,7 +322,8 @@ func interactiveMenu() int {
 		fmt.Println("2) Alternate direct access (Fragment A)")
 		fmt.Println("3) Adaptive DPI (ByeDPI SOCKS)")
 		fmt.Println("4) TLS record slicing (ByeDPI SOCKS)")
-		fmt.Println("5) About proxy and safety")
+		fmt.Println("5) Find CDN IP candidates")
+		fmt.Println("6) About proxy and safety")
 		fmt.Println("0) Exit")
 		fmt.Print("Select > ")
 		if !in.Scan() {
@@ -360,6 +364,18 @@ func interactiveMenu() int {
 				fmt.Printf("ByeDPI exited with code %d.\n", code)
 			}
 		case "5":
+			fmt.Println("CDN provider: 1) Akamai seeds  2) Fastly DNS  3) Google DNS")
+			fmt.Print("Provider > ")
+			if !in.Scan() {
+				return 0
+			}
+			provider := map[string]string{"1": "akamai", "2": "fastly", "3": "google"}[strings.TrimSpace(in.Text())]
+			if provider == "" {
+				fmt.Println("Unknown provider.")
+				continue
+			}
+			runQuickScan([]string{"-provider", provider})
+		case "6":
 			fmt.Println("Xray: local HTTP/SOCKS at 127.0.0.1:10808; ByeDPI: SOCKS5 at 127.0.0.1:10809.")
 			fmt.Println("It does not change your system proxy, DNS, certificates or VPN route.")
 		case "0", "q":
@@ -401,5 +417,39 @@ func runPackagedByeDPI(option string) int {
 		fmt.Fprintln(os.Stderr, "ByeDPI:", err)
 		return 1
 	}
+	return 0
+}
+
+
+// runQuickScan verifies selected CDN candidates through a real TLS connection.
+// A reachable IP is not a verified working fronting route.
+func runQuickScan(args []string) int {
+	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
+	provider := flags.String("provider", "akamai", "akamai, fastly or google")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: ktest scan [-provider akamai|fastly|google]")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	preset, err := edges.PresetCandidates(ctx, *provider)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "candidate source:", err)
+		return 1
+	}
+	fmt.Printf("CDN %s | %d candidate IPs | source: %s\n", preset.Provider, len(preset.IPs), preset.Source)
+	fmt.Println("These IPs are unverified. Testing HTTPS and certificate identity; not a Fronting tunnel.")
+	report, err := edges.Run(ctx, edges.Plan{
+		URL: preset.URL, IPs: preset.IPs, Rounds: 1, Timeout: 4*time.Second,
+	}, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "CDN scan:", err)
+		return 1
+	}
+	for _, c := range report.Candidates {
+		fmt.Printf("%-42s %-22s TLS=%d/%d HTTP2xx=%d/%d %dms\n",
+			c.IP, c.Assessment, c.TLSVerified, c.Attempts, c.HTTP2xx, c.Attempts, c.MedianElapsedMS)
+	}
+	fmt.Println("TLS/HTTP checks do not prove that a CDN will route another domain.")
 	return 0
 }
