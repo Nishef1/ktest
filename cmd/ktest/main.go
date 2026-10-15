@@ -32,13 +32,21 @@ func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
 	// Internal schema-check export: no networking or core startup.
-	if len(args) == 4 && args[0] == "profile-preview" && args[1] == "-profile" {
+	if (len(args) == 4 || len(args) == 5) && args[0] == "profile-preview" && args[1] == "-profile" {
 		input, err := os.ReadFile(args[2])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 2
 		}
-		selected, err := revive.SelectProfile(input, args[3])
+		dnsMode := ""
+		if len(args) == 5 {
+			if args[4] != "udp" && args[4] != "tcp" {
+				fmt.Fprintln(os.Stderr, "DNS mode must be udp or tcp")
+				return 2
+			}
+			dnsMode = args[4]
+		}
+		selected, err := revive.SelectProfileWithDNS(input, args[3], dnsMode)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 2
