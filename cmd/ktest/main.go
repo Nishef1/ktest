@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/access"
+	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/experiment"
-	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/pathdiag"
 	"github.com/Nishef1/ktest/internal/probe"
 	"github.com/Nishef1/ktest/internal/proofserver"
