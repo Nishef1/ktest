@@ -247,7 +247,6 @@ func runAccess(args []string) int {
 	return 0
 }
 
-
 // runRevive launches the latest locally saved upstream serverless profile
 // using a separately installed official Xray CLI. No global system changes.
 func runRevive(args []string) int {
