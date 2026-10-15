@@ -24,11 +24,22 @@ import (
 	"github.com/Nishef1/ktest/internal/probe"
 	"github.com/Nishef1/ktest/internal/proofserver"
 	"github.com/Nishef1/ktest/internal/revive"
+	"github.com/Nishef1/ktest/internal/systemtun"
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	// Internal dry-run export used by CI; never changes Windows routes.
+	if len(args) == 1 && args[0] == "tun-preview" {
+		cfg, err := systemtun.BuildConfig(10808, "Ethernet")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		fmt.Println(string(cfg))
+		return 0
+	}
 	if len(args) > 0 && args[0] == "scan" {
 		return runQuickScan(args[1:])
 	}
