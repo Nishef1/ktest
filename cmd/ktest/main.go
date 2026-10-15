@@ -420,7 +420,6 @@ func runPackagedByeDPI(option string) int {
 	return 0
 }
 
-
 // runQuickScan verifies selected CDN candidates through a real TLS connection.
 // A reachable IP is not a verified working fronting route.
 func runQuickScan(args []string) int {
@@ -440,7 +439,7 @@ func runQuickScan(args []string) int {
 	fmt.Printf("CDN %s | %d candidate IPs | source: %s\n", preset.Provider, len(preset.IPs), preset.Source)
 	fmt.Println("These IPs are unverified. Testing HTTPS and certificate identity; not a Fronting tunnel.")
 	report, err := edges.Run(ctx, edges.Plan{
-		URL: preset.URL, IPs: preset.IPs, Rounds: 1, Timeout: 4*time.Second,
+		URL: preset.URL, IPs: preset.IPs, Rounds: 1, Timeout: 4 * time.Second,
 	}, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "CDN scan:", err)
