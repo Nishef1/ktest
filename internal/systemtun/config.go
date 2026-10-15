@@ -20,7 +20,7 @@ func BuildConfig(socksPort int, physicalNIC string) ([]byte, error) {
 		"log": map[string]any{"level": "warn"},
 		"inbounds": []any{map[string]any{
 			"type": "tun", "tag": "ktest-tun", "interface_name": "ktest-tun",
-			"address": []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
+			"address":    []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
 			"auto_route": true, "strict_route": true, "dns_mode": "hijack",
 			"stack": "gvisor",
 		}},
