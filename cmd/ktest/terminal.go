@@ -301,13 +301,13 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			t.mu.Lock()
 			verified := false
 			for _, result := range t.results {
-				if result.Success {
+				if result.Target == "YouTube" && result.Success {
 					verified = true
 				}
 			}
 			t.mu.Unlock()
 			if !verified {
-				t.print("No verified HTTPS result through proxy. Refusing to change system routes.\n")
+				t.print("YouTube is not reachable through the selected proxy. Refusing to change system routes.\n")
 				continue
 			}
 			t.print("BETA: TCP-wide TUN, administrator required; UDP except DNS is blocked.\n")
@@ -332,7 +332,9 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 				go t.check(s.ctx, s)
 			}
 		case "0", "q", "Q":
-			t.stopIfActive()
+			if !t.stopIfActive() {
+				continue
+			}
 			return 0
 		default:
 			t.print("Unknown option. Select 1-8 or 0 to exit.\n")
@@ -340,12 +342,11 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 	}
 }
 
-func (t *terminal) stopIfActive() {
+func (t *terminal) stopIfActive() bool {
 	if t.current() != nil {
-		t.stop()
-	} else {
-		t.stopTunIfActive()
+		return t.stop()
 	}
+	return t.stopTunIfActive()
 }
 
 func (t *terminal) stopTunIfActive() bool {
@@ -399,7 +400,7 @@ func (t *terminal) startTun(base string, socksPort int) {
 			return
 		case <-ts.done:
 			return
-		case <-time.After(3 * time.Second):
+		case <-time.After(6 * time.Second):
 		}
 		testCtx, stop := context.WithTimeout(ctx, 17*time.Second)
 		defer stop()
