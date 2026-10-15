@@ -12,13 +12,13 @@ func TestSafePolicyConfig(t *testing.T) {
 	}
 	var root struct {
 		Inbounds []struct {
-			AutoRoute   bool `json:"auto_route"`
-			StrictRoute bool `json:"strict_route"`
+			AutoRoute   bool   `json:"auto_route"`
+			StrictRoute bool   `json:"strict_route"`
 			Stack       string `json:"stack"`
 		} `json:"inbounds"`
 		Route struct {
 			Rules []map[string]any `json:"rules"`
-			Final string `json:"final"`
+			Final string           `json:"final"`
 		} `json:"route"`
 	}
 	if err := json.Unmarshal(buf, &root); err != nil {
