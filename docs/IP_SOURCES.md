@@ -22,3 +22,11 @@ One bounded HTTPS request per candidate with certificate verification. This repo
 ## Next practical gate
 
 Integrating a specific fronting route requires a provider-compatible edge, legitimate fronted origin / Psiphon server entry, and verified TLS. Never assume arbitrary Host/SNI mismatches are accepted. No in-Iran field success is claimed.
+
+## 2026-10-15 update: 100+ bounded provider IP tests
+
+The eight-entry Akamai list and tiny DNS answer lists were insufficient for a useful scan; no amount of repeated requests to those same eight IPs produces ten distinct healthy edge choices. The default CLI menu now samples up to **300 unique IPv4 addresses across the fifteen official Cloudflare CIDRs**, evenly dispersed across ranges. It performs at most six simultaneous TLS-verified HTTPS GET requests (4-second cap each) and stops at **ten genuine HTTPS 2xx responses**, or at the candidate budget. One source-backed IP is never counted twice. Every ten completions show progress. Ctrl+C cancels.
+
+This is real HTTPS reachability to the provider's own https://www.cloudflare.com/cdn-cgi/trace endpoint, **not** proof that arbitrary fronted domains work. It never suppresses certificate errors, does not invent successful candidates, and does not run forever if every address fails. Other providers remain available with smaller source-supported lists: akamai, google, fastly. Source: https://www.cloudflare.com/ips/ .
+
+`ktest scan -provider cloudflare -limit 100` checks at most 100. Interactive menu #5 defaults to up to 300; quota is 10.
