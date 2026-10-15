@@ -5,7 +5,7 @@ package quickcheck
 // a claim about the ISP, public egress IP, or censorship equipment.
 type Assessment struct {
 	Target string
-	Kind   string // unavailable, baseline_unknown, already_open, vpn_confounded, candidate
+	Kind   string // unavailable, proxy_regression, baseline_unknown, already_open, vpn_confounded, candidate
 	Detail string
 }
 
@@ -21,6 +21,9 @@ func Compare(proxied, direct []Result, vpnSuspected bool) []Assessment {
 		a := Assessment{Target: p.Target, Kind: "unavailable", Detail: p.Detail}
 		baseline, checked := byTarget[p.Target]
 		switch {
+		case !p.Success && checked && baseline.Success:
+			a.Kind = "proxy_regression"
+			a.Detail = "direct access succeeds, but the selected ktest proxy fails: check its DNS and routing"
 		case !p.Success:
 			// The proxy could not access this particular target.
 		case vpnSuspected:
