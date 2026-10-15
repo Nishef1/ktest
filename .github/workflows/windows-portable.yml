@@ -22,7 +22,7 @@ jobs:
         run: |
           # Full Go tests/vet run in the separate 'verify' workflow. Build and
           # native Windows smoke tests are sufficient for this packaging job.
-          New-Item -ItemType Directory -Force -Path portable/ktest/cores, portable/ktest/profiles, portable/ktest/THIRD_PARTY, build/xray, build/byedpi | Out-Null
+          New-Item -ItemType Directory -Force -Path portable/ktest/cores, portable/ktest/profiles, portable/ktest/THIRD_PARTY, build/xray, build/byedpi, build/singbox, build/wintun | Out-Null
           go build -trimpath -o portable/ktest/ktest.exe ./cmd/ktest
           if ($LASTEXITCODE -ne 0) { throw "Build failed" }
       - name: Download and verify official cores
@@ -49,6 +49,17 @@ jobs:
           $bye = Get-ChildItem -Path build/byedpi -Filter ciadpi.exe -File -Recurse | Select-Object -First 1
           if ($null -eq $bye) { throw "Official ByeDPI zip did not contain ciadpi.exe" }
           Copy-Item $bye.FullName portable/ktest/cores/ciadpi.exe
+          DownloadVerified "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-windows-amd64.zip" "build/singbox.zip" "d8b86ef58936dba9230ec6a57ffa4243933f3c14ef4809828b6c553440ed1518"
+          Expand-Archive -LiteralPath build/singbox.zip -DestinationPath build/singbox -Force
+          $sb = Get-ChildItem -Path build/singbox -Filter sing-box.exe -File -Recurse | Select-Object -First 1
+          if ($null -eq $sb) { throw "Official sing-box zip did not contain sing-box.exe" }
+          Copy-Item $sb.FullName portable/ktest/cores/sing-box.exe
+          DownloadVerified "https://www.wintun.net/builds/wintun-0.14.1.zip" "build/wintun.zip" "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51"
+          Expand-Archive -LiteralPath build/wintun.zip -DestinationPath build/wintun -Force
+          $driver = "build/wintun/wintun/bin/amd64/wintun.dll"
+          if (-not (Test-Path $driver)) { throw "Official Wintun AMD64 signed DLL missing" }
+          Copy-Item $driver portable/ktest/cores/wintun.dll
+          Copy-Item "build/wintun/wintun/LICENSE.txt" portable/ktest/THIRD_PARTY/Wintun-LICENSE.txt
       - name: Pin the offline profile and ship licenses
         shell: pwsh
         run: |
@@ -69,18 +80,23 @@ jobs:
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/XTLS/Xray-core/v26.10.10/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Xray-MPL-2.0.txt
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/hufrea/byedpi/v0.17.3/LICENSE" -OutFile portable/ktest/THIRD_PARTY/ByeDPI-MIT.txt
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/patterniha/Serverless-for-Iran/$rev/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Serverless-GPL-3.0.txt
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-box/v1.14.3/LICENSE" -OutFile portable/ktest/THIRD_PARTY/sing-box-GPL-3.0.txt
           Copy-Item docs/THIRD_PARTY_NOTICES.md portable/ktest/THIRD_PARTY/NOTICES.md
       - name: Windows smoke tests and portable ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $menu = "0`n" | & ./portable/ktest/ktest.exe
-          if ($LASTEXITCODE -ne 0 -or (($menu -join "`n") -notmatch "Initial connectivity")) {
+          if ($LASTEXITCODE -ne 0 -or (($menu -join "`n") -notmatch "Status: disconnected")) {
             throw "Terminal menu did not start and exit cleanly"
           }
           $version = & ./portable/ktest/cores/xray.exe version
           if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.10\.10")) {
             throw "Bundled Xray did not start or returned unexpected version"
+          }
+          $sb = & ./portable/ktest/cores/sing-box.exe version
+          if ($LASTEXITCODE -ne 0 -or (($sb -join "`n") -notmatch "1\.14\.3")) {
+            throw "Bundled sing-box failed native Windows version check"
           }
           Compress-Archive -Path portable/ktest -DestinationPath ktest-windows-portable.zip -CompressionLevel Optimal
           (Get-FileHash -Algorithm SHA256 ktest-windows-portable.zip).Hash.ToLowerInvariant() + "  ktest-windows-portable.zip" | Set-Content -Encoding ascii ktest-windows-portable.zip.sha256
