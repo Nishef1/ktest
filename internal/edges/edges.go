@@ -25,16 +25,16 @@ type Plan struct {
 }
 
 type Candidate struct {
-	IP               string `json:"ip"`
-	Attempts         int    `json:"attempts"`
-	TCPConnected     int    `json:"tcp_connected"`
-	TLSVerified      int    `json:"tls_verified"`
-	HTTP2xx          int    `json:"http_2xx"`
-	OriginVerified   int    `json:"origin_verified"`
-	MedianElapsedMS  int64  `json:"median_elapsed_ms"`
-	Assessment       string `json:"assessment"`
-	LastHTTPStatus   int    `json:"last_http_status,omitempty"`
-	LastError        string `json:"last_error,omitempty"`
+	IP              string `json:"ip"`
+	Attempts        int    `json:"attempts"`
+	TCPConnected    int    `json:"tcp_connected"`
+	TLSVerified     int    `json:"tls_verified"`
+	HTTP2xx         int    `json:"http_2xx"`
+	OriginVerified  int    `json:"origin_verified"`
+	MedianElapsedMS int64  `json:"median_elapsed_ms"`
+	Assessment      string `json:"assessment"`
+	LastHTTPStatus  int    `json:"last_http_status,omitempty"`
+	LastError       string `json:"last_error,omitempty"`
 }
 
 type Report struct {
