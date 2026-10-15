@@ -27,7 +27,7 @@ func PresetCandidates(ctx context.Context, provider string) (Preset, error) {
 	switch provider {
 	case "akamai":
 		return Preset{
-			Provider:   "akamai",
+			Provider: "akamai",
 			URL:      "https://a248.e.akamai.net/",
 			IPs: []string{
 				"92.123.102.43", "23.215.0.206", "23.215.0.203",
