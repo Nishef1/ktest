@@ -49,3 +49,30 @@ func TestMissingDNSRemainsMissing(t *testing.T) {
 		t.Fatal("DNS invented for an unrelated config")
 	}
 }
+
+func TestGoogleDNSVerifiedFallbackIsLastResortBeforeCloudflare(t *testing.T) {
+	data := []byte("{\"remarks\":\"fragB\",\"dns\":{\"servers\":[{\"address\":\"fakedns\"},{\"tag\":\"no-filter-dns\",\"address\":\"https://cloudflare-dns.com/dns-query\",\"finalQuery\":true}]},\"inbounds\":[{\"protocol\":\"mixed\"}]}")
+	for _, mode := range []string{"udp", "tcp"} {
+		out, err := SelectProfileWithDNS(data, "B", mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root map[string]any
+		if err := json.Unmarshal(out, &root); err != nil {
+			t.Fatal(err)
+		}
+		dns := root["dns"].(map[string]any)
+		servers := dns["servers"].([]any)
+		want := "8.8.8.8"
+		if mode == "tcp" {
+			want = "tcp://8.8.8.8"
+		}
+		lastResort := servers[3].(map[string]any)
+		cloudflare := servers[4].(map[string]any)
+		if len(servers) != 5 || lastResort["address"] != want ||
+			lastResort["tag"] != "domestic-dns" ||
+			cloudflare["address"] != "https://cloudflare-dns.com/dns-query" {
+			t.Fatalf("mode %s: unexpected fallback %v", mode, servers)
+		}
+	}
+}
