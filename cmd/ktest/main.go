@@ -31,6 +31,21 @@ import (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	// Internal schema-check export: no networking or core startup.
+	if len(args) == 4 && args[0] == "profile-preview" && args[1] == "-profile" {
+		input, err := os.ReadFile(args[2])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		selected, err := revive.SelectProfile(input, args[3])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		_, _ = os.Stdout.Write(selected)
+		return 0
+	}
 	// Internal dry-run export used by CI; never changes Windows routes.
 	if len(args) == 1 && args[0] == "tun-preview" {
 		cfg, err := systemtun.BuildConfig(10808, "Ethernet")
