@@ -67,6 +67,14 @@ func SelectProfile(data []byte, variant string) ([]byte, error) {
 			return nil, err
 		}
 		obj["inbounds"] = inbytes
+		// v52 pins all otherwise unfiltered names to Cloudflare DoH with a
+		// finalQuery gate. This fails even for reachable Google if Cloudflare
+		// DoH is blocked. Preserve upstream transport/routing rules, but
+		// prioritize local DNS for reachable Google services and add an
+		// independent encrypted DNS fallback for other destinations.
+		if err := improveDNSBootstrap(obj); err != nil {
+			return nil, err
+		}
 		return json.MarshalIndent(obj, "", "  ")
 	}
 	return nil, fmt.Errorf("frag%s profile was not found in subscription", variant)
