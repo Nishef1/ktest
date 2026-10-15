@@ -27,16 +27,16 @@ func PresetCandidates(ctx context.Context, provider string) (Preset, error) {
 	switch provider {
 	case "akamai":
 		return Preset{
-			Provider: "akamai",
-			URL: "https://a248.e.akamai.net/",
+			Provider:   "akamai",
+			URL:      "https://a248.e.akamai.net/",
 			IPs: []string{
 				"92.123.102.43", "23.215.0.206", "23.215.0.203",
 				"23.212.250.91", "23.212.250.78", "23.12.147.13",
 				"23.12.147.29", "23.73.207.8",
 			},
-			Origin: "Unverified candidate IPs; do not treat successful TLS as working fronting",
+			Origin:     "Unverified candidate IPs; do not treat successful TLS as working fronting",
 			UpdatedUTC: "2026-10-05",
-			Source: "https://github.com/KNG7-P/Se7en-Pro/blob/master/Se7enPro/Services/CdnFrontingBuilder.cs",
+			Source:     "https://github.com/KNG7-P/Se7en-Pro/blob/master/Se7enPro/Services/CdnFrontingBuilder.cs",
 		}, nil
 	case "fastly", "google":
 		hostname := "pypi.org"
@@ -68,12 +68,12 @@ func PresetCandidates(ctx context.Context, provider string) (Preset, error) {
 			return Preset{}, errors.New("resolver returned no usable addresses; do not trust a poisoned DNS result")
 		}
 		return Preset{
-			Provider: provider,
-			URL: "https://" + hostname + "/",
-			IPs: candidates,
-			Origin: "Fresh DNS answers, not a verified Fronting route",
+			Provider:   provider,
+			URL:        "https://" + hostname + "/",
+			IPs:        candidates,
+			Origin:     "Fresh DNS answers, not a verified Fronting route",
 			UpdatedUTC: time.Now().UTC().Format(time.RFC3339),
-			Source: "local DNS resolver for " + hostname,
+			Source:     "local DNS resolver for " + hostname,
 		}, nil
 	default:
 		return Preset{}, errors.New("choose akamai, fastly, or google")
