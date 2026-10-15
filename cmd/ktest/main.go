@@ -20,6 +20,7 @@ import (
 	"github.com/Nishef1/ktest/internal/access"
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/experiment"
+	"github.com/Nishef1/ktest/internal/networkstate"
 	"github.com/Nishef1/ktest/internal/pathdiag"
 	"github.com/Nishef1/ktest/internal/probe"
 	"github.com/Nishef1/ktest/internal/proofserver"
@@ -377,6 +378,12 @@ func runQuickScan(args []string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	environment := networkstate.Inspect(ctx)
+	if environment.Suspected {
+		fmt.Fprintln(os.Stderr, "VPN detected or suspected:", strings.Join(environment.Reasons, "; "))
+		fmt.Fprintln(os.Stderr, "CDN IPs would be tested over a possibly tunneled route; disconnect the VPN and rerun for ISP-path measurements.")
+		return 1
+	}
 	preset, err := edges.PresetCandidates(ctx, *provider)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "candidate source:", err)

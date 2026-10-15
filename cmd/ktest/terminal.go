@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/networkstate"
 	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/revive"
 	"github.com/Nishef1/ktest/internal/systemtun"
@@ -41,6 +42,7 @@ type terminal struct {
 	tun     *tunSession
 	status  string
 	results []quickcheck.Result
+	assessments []quickcheck.Assessment
 }
 
 func (t *terminal) print(format string, args ...any) {
@@ -165,7 +167,7 @@ func (t *terminal) start(choice, base string) {
 		choice: choice, name: label, port: port, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 	}
 	t.mu.Lock()
-	t.active, t.status, t.results = s, "starting local core", nil
+	t.active, t.status, t.results, t.assessments = s, "starting local core", nil, nil
 	t.mu.Unlock()
 	t.print("\nStarting %s...\n", label)
 	go func() {
@@ -214,31 +216,51 @@ func (t *terminal) waitAndCheck(ctx context.Context, s *cliSession) {
 }
 
 func (t *terminal) check(ctx context.Context, s *cliSession) {
-	checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	// Check ordinary OS routing and the selected SOCKS path at the same time.
+	// A third-party VPN may transparently carry either one; inspect possible
+	// VPN clients both before and after, including split tunnel users.
+	checkCtx, cancel := context.WithTimeout(ctx, 24*time.Second)
 	defer cancel()
-	results := quickcheck.Run(checkCtx, s.port, 8*time.Second)
+	before := networkstate.Inspect(checkCtx)
+	directCh := make(chan []quickcheck.Result, 1)
+	go func() { directCh <- quickcheck.RunDirect(checkCtx, 8*time.Second) }()
+	proxied := quickcheck.Run(checkCtx, s.port, 8*time.Second)
+	direct := <-directCh
+	after := networkstate.Inspect(checkCtx)
 	if ctx.Err() != nil || t.current() != s {
 		return
 	}
-	success := 0
-	for _, r := range results {
-		if r.Success {
-			success++
-			t.print("PASS %-8s expected HTTP 204 over verified TLS\n", r.Target)
-		} else {
-			t.print("FAIL %-8s %s\n", r.Target, r.Detail)
+	vpn := before.Suspected || after.Suspected
+	if vpn {
+		reasons := append(before.Reasons, after.Reasons...)
+		t.print("WARNING: Another VPN may be active (%s). These results cannot establish a ktest bypass.\n", strings.Join(reasons, "; "))
+	}
+	compared := quickcheck.Compare(proxied, direct, vpn)
+	candidates := 0
+	for _, a := range compared {
+		switch a.Kind {
+		case "candidate":
+			candidates++
+			t.print("CANDIDATE %-8s Proxy OK, direct failed. Requires VPN-off confirmation.\n", a.Target)
+		case "already_open":
+			t.print("BASELINE  %-8s Works without ktest too. No bypass attributed.\n", a.Target)
+		case "vpn_confounded":
+			t.print("UNVERIFIED %-8s Another VPN may carry these packets.\n", a.Target)
+		default:
+			t.print("FAIL      %-8s %s\n", a.Target, a.Detail)
 		}
 	}
 	t.mu.Lock()
 	if t.active == s {
-		t.results = results
-		t.status = fmt.Sprintf("%d/%d target websites verified through local SOCKS proxy", success, len(results))
+		t.results = proxied
+		t.assessments = compared
+		t.status = fmt.Sprintf("%d candidate target(s); VPN suspected=%t", candidates, vpn)
 	}
 	t.mu.Unlock()
-	if success == 0 {
-		t.print("No working web connection confirmed. Try a different mode; an open local proxy is not enough.\n")
+	if candidates == 0 {
+		t.print("No new ISP-path access verified. A local SOCKS listener or HTTP 204 alone is not proof.\n")
 	} else {
-		t.print("At least one website was reached via the selected mode. Public IP and other apps are not verified.\n")
+		t.print("Candidate only: compare with every other VPN OFF; this is not proof of a universal bypass.\n")
 	}
 }
 
@@ -300,14 +322,31 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			}
 			t.mu.Lock()
 			verified := false
-			for _, result := range t.results {
-				if result.Target == "YouTube" && result.Success {
+			for _, result := range t.assessments {
+				if result.Target == "YouTube" && result.Kind == "candidate" {
 					verified = true
 				}
 			}
 			t.mu.Unlock()
 			if !verified {
-				t.print("YouTube is not reachable through the selected proxy. Refusing to change system routes.\n")
+				t.print("YouTube has not been proven newly reachable through ktest. Refusing to change system routes.\n")
+				continue
+			}
+			if networkstate.Inspect(context.Background()).Suspected {
+				t.print("Windscribe or another VPN may still be active. Refusing to modify system routing. Disconnect and exit the VPN app, then retest.\n")
+				continue
+			}
+			t.print("Rechecking YouTube directly before TUN startup...\n")
+			directCtx, stopBaseline := context.WithTimeout(context.Background(), 9*time.Second)
+			recheck := quickcheck.RunDirect(directCtx, 4*time.Second)
+			stopBaseline()
+			for _, result := range recheck {
+				if result.Target == "YouTube" && result.Success {
+					verified = false
+				}
+			}
+			if !verified {
+				t.print("YouTube now works without ktest. TUN would be an unverified benefit; refusing activation.\n")
 				continue
 			}
 			t.print("BETA: TCP-wide TUN, administrator required; UDP except DNS is blocked.\n")
@@ -331,6 +370,10 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			} else {
 				go t.check(s.ctx, s)
 			}
+		case "":
+			// Asynchronous core logs can visually displace an input prompt.
+			// An empty Enter must never be presented as a bad user selection.
+			continue
 		case "0", "q", "Q":
 			if !t.stopIfActive() {
 				continue

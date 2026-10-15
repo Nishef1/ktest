@@ -51,3 +51,13 @@ func TestCancelledProbeIsCancelled(t *testing.T) {
 		t.Fatal("cancelled context unexpectedly live")
 	}
 }
+
+func TestBlankInputNeverShownAsInvalidChoice(t *testing.T) {
+	var out bytes.Buffer
+	if code := runInteractive(strings.NewReader("\n0\n"), &out, t.TempDir()); code != 0 {
+		t.Fatal(code)
+	}
+	if strings.Contains(out.String(), "Unknown option") {
+		t.Fatalf("empty line incorrectly rejected: %s", out.String())
+	}
+}
