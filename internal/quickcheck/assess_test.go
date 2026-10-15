@@ -26,3 +26,12 @@ func TestCompareCandidateOnlyWhenDirectFailsAndVPNAbsent(t *testing.T) {
 		t.Fatal(a)
 	}
 }
+
+func TestDirectlyReachableGoogleFailureIsProxyRegression(t *testing.T) {
+	viaProxy := []Result{{Target: "Google", Success: false, Detail: "DNS timeout"}}
+	direct := []Result{{Target: "Google", Success: true}}
+	assessment := Compare(viaProxy, direct, false)
+	if assessment[0].Kind != "proxy_regression" {
+		t.Fatalf("Google directly works, proxy is broken: %v", assessment)
+	}
+}
