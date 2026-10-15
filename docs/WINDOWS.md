@@ -33,3 +33,12 @@ Current terminal logic reports:
 Before attempting the comparison, disconnect Windscribe and close its desktop client. Its firewall may remain enabled with Manual/Always On settings, in which case direct traffic can stay blocked even after disconnecting. Do not let the CLI disable any firewall or privacy protection silently. The user must make any firewall change knowingly. Source: https://windscribe.com/knowledge-base/articles/firewall-modes
 
 CDN IP checks are refused when a VPN is detected or suspected: a reachable Akamai edge via Windscribe is not automatically reachable from the user's ISP. Network heuristics cannot perfectly detect every VPN (particularly per-app split tunneling), so all positive results remain cautious. The CLI does not read or reveal the user's external IP or upload their results.
+
+
+## 2026-10-15 update: DNS and CDN operations
+
+Before Fragment A/B, ktest sends actual Google Public DNS TXT identity queries to **8.8.8.8:53** using UDP and TCP. DNS reachability is not determined by Ping. When the Google identity TXT succeeds, an optional last-resort Google DNS resolver is added to Xray's profile, after encrypted Google DoH and before Cloudflare DoH; no Windows DNS setting is changed. Plaintext DNS can be interfered with and should not be confused with DoH or encrypted browsing. The absence of an answer does not prevent choosing another method.
+
+Menu #5 scans up to 300 diverse official Cloudflare IPv4 candidates, six concurrent HTTPS requests maximum, and tries to find 10 *real TLS-verified provider HTTPS* responses. Ctrl+C cancels. The output **does not** establish that SNI/Host domain fronting works for other websites. CLI: `ktest scan -provider cloudflare -limit 100` or increase to 300. A small Akamai/Google/Fastly list is still available through flags.
+
+**Windscribe heuristics were removed on request.** The app no longer checks the Windscribe process or VPN adapters, and it no longer blocks scanning based on them. For interpretable ISP results, disconnect any other VPN yourself. Proxy-vs-direct website results are still compared, but attribution assumes the user controlled the network state.
