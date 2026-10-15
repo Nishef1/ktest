@@ -33,15 +33,15 @@ func Run(ctx context.Context, socksPort int, timeout time.Duration) []Result {
 	}
 	proxy, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", socksPort))
 	transport := &http.Transport{
-		Proxy: http.ProxyURL(proxy),
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		Proxy:             http.ProxyURL(proxy),
+		TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
 		DisableKeepAlives: true,
 		ForceAttemptHTTP2: true,
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
 		Transport: transport,
-		Timeout: timeout,
+		Timeout:   timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
