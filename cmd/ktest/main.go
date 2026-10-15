@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"os"
 	"os/signal"
+	"os/exec"
 	"runtime"
 	"strings"
 	"syscall"
@@ -316,7 +317,9 @@ func interactiveMenu() int {
 		fmt.Println("\nktest | Initial connectivity")
 		fmt.Println("1) Direct access (Fragment B)")
 		fmt.Println("2) Alternate direct access (Fragment A)")
-		fmt.Println("3) Show local setup information")
+		fmt.Println("3) Adaptive DPI (ByeDPI SOCKS)")
+		fmt.Println("4) TLS record slicing (ByeDPI SOCKS)")
+		fmt.Println("5) About proxy and safety")
 		fmt.Println("0) Exit")
 		fmt.Print("Select > ")
 		if !in.Scan() {
@@ -351,8 +354,13 @@ func interactiveMenu() int {
 			if code != 0 {
 				fmt.Printf("Core exited with code %d.\n", code)
 			}
-		case "3":
-			fmt.Println("This tool uses a local HTTP/SOCKS proxy at 127.0.0.1:10808.")
+		case "3", "4":
+			code := runPackagedByeDPI(strings.TrimSpace(in.Text()))
+			if code != 0 {
+				fmt.Printf("ByeDPI exited with code %d.\n", code)
+			}
+		case "5":
+			fmt.Println("Xray: local HTTP/SOCKS at 127.0.0.1:10808; ByeDPI: SOCKS5 at 127.0.0.1:10809.")
 			fmt.Println("It does not change your system proxy, DNS, certificates or VPN route.")
 		case "0", "q":
 			return 0
@@ -360,4 +368,38 @@ func interactiveMenu() int {
 			fmt.Println("Choose a listed option.")
 		}
 	}
+}
+
+// runPackagedByeDPI launches an already bundled upstream executable, without
+// installing a service, changing DNS or enabling a system-wide proxy.
+func runPackagedByeDPI(option string) int {
+	base, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	binary := filepath.Join(filepath.Dir(base), "cores", "ciadpi")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	if _, err := os.Stat(binary); err != nil {
+		fmt.Println("ByeDPI is not included for this operating system in this package.")
+		return 1
+	}
+	args := []string{"-i", "127.0.0.1", "-p", "10809"}
+	if option == "3" {
+		args = append(args, "--auto=torst", "--timeout", "3", "--tlsrec", "3+s")
+	} else {
+		args = append(args, "--tlsrec", "3+s")
+	}
+	fmt.Println("Local SOCKS5 at 127.0.0.1:10809. Point your app to this address. Ctrl+C stops the core.")
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil && ctx.Err() == nil {
+		fmt.Fprintln(os.Stderr, "ByeDPI:", err)
+		return 1
+	}
+	return 0
 }
