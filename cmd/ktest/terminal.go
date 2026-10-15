@@ -36,12 +36,12 @@ type tunSession struct {
 }
 
 type terminal struct {
-	out     io.Writer
-	mu      sync.Mutex
-	active  *cliSession
-	tun     *tunSession
-	status  string
-	results []quickcheck.Result
+	out         io.Writer
+	mu          sync.Mutex
+	active      *cliSession
+	tun         *tunSession
+	status      string
+	results     []quickcheck.Result
 	assessments []quickcheck.Assessment
 }
 
