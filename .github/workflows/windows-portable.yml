@@ -80,6 +80,14 @@ jobs:
             $env:XRAY_LOCATION_ASSET = (Resolve-Path portable/ktest/cores).Path
             & ./portable/ktest/cores/xray.exe run -test -c $selected
             if ($LASTEXITCODE -ne 0) { throw "Xray rejected ktest patched Fragment $v" }
+            foreach ($dnsTransport in @("udp","tcp")) {
+              $selectedDNS = "build/selected-frag$v-$dnsTransport.json"
+              & ./portable/ktest/ktest.exe profile-preview -profile portable/ktest/profiles/Serverless-for-Iran.json $v $dnsTransport |
+                Set-Content -LiteralPath $selectedDNS -Encoding utf8
+              if ($LASTEXITCODE -ne 0) { throw "Profile $v with $dnsTransport failed generation" }
+              & ./portable/ktest/cores/xray.exe run -test -c $selectedDNS
+              if ($LASTEXITCODE -ne 0) { throw "Xray rejected profile $v with $dnsTransport DNS" }
+            }
           }
           if (@($profile).Count -ne 2 -or
               (@($profile | Where-Object { $_.remarks -like '*fragA' })).Count -ne 1 -or
