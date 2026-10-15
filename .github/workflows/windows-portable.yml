@@ -98,6 +98,10 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or (($sb -join "`n") -notmatch "1\.14\.3")) {
             throw "Bundled sing-box failed native Windows version check"
           }
+          & ./portable/ktest/ktest.exe tun-preview | Set-Content -Encoding utf8 build/tun-preview.json
+          if ($LASTEXITCODE -ne 0) { throw "TUN config generator failed" }
+          & ./portable/ktest/cores/sing-box.exe check -c build/tun-preview.json
+          if ($LASTEXITCODE -ne 0) { throw "sing-box rejected generated TUN config" }
           Compress-Archive -Path portable/ktest -DestinationPath ktest-windows-portable.zip -CompressionLevel Optimal
           (Get-FileHash -Algorithm SHA256 ktest-windows-portable.zip).Hash.ToLowerInvariant() + "  ktest-windows-portable.zip" | Set-Content -Encoding ascii ktest-windows-portable.zip.sha256
       - uses: actions/upload-artifact@v7
