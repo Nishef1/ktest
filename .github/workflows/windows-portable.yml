@@ -72,6 +72,15 @@ jobs:
             throw "Upstream profile content does not match pinned Git blob"
           }
           $profile = Get-Content -LiteralPath portable/ktest/profiles/Serverless-for-Iran.json -Raw | ConvertFrom-Json
+          foreach ($v in @("A","B")) {
+            $selected = "build/selected-frag$v.json"
+            & ./portable/ktest/ktest.exe profile-preview -profile portable/ktest/profiles/Serverless-for-Iran.json $v |
+              Set-Content -LiteralPath $selected -Encoding utf8
+            if ($LASTEXITCODE -ne 0) { throw "Profile $v generation failed" }
+            $env:XRAY_LOCATION_ASSET = (Resolve-Path portable/ktest/cores).Path
+            & ./portable/ktest/cores/xray.exe run -test -c $selected
+            if ($LASTEXITCODE -ne 0) { throw "Xray rejected ktest patched Fragment $v" }
+          }
           if (@($profile).Count -ne 2 -or
               (@($profile | Where-Object { $_.remarks -like '*fragA' })).Count -ne 1 -or
               (@($profile | Where-Object { $_.remarks -like '*fragB' })).Count -ne 1) {
