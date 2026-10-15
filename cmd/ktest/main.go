@@ -394,6 +394,13 @@ func runQuickScan(args []string) int {
 	for _, c := range report.Candidates {
 		fmt.Printf("%-42s %-22s TLS=%d/%d HTTP2xx=%d/%d %dms\n",
 			c.IP, c.Assessment, c.TLSVerified, c.Attempts, c.HTTP2xx, c.Attempts, c.MedianElapsedMS)
+		if c.LastError != "" {
+			message := strings.ReplaceAll(strings.ReplaceAll(c.LastError, "\n", " "), "\r", " ")
+			if len(message) > 170 {
+				message = message[:170] + "..."
+			}
+			fmt.Printf("  Reason: %s\n", message)
+		}
 	}
 	fmt.Println("TLS/HTTP checks do not prove that a CDN will route another domain.")
 	return 0
