@@ -98,3 +98,13 @@ Next meaningful improvements require a *specific confirmed-working combination* 
 - \`docs/REVIVE.md\` has offline setup and current restrictions. Root privileges and MITM CA are not required for the Xray profile itself; upstream tool/platform behavior may change.
 - Keep existing SNI-Spoofing-Go \`ktest access\` as a second method. ByeDPI remains an external standalone fallback rather than an auto-installed dependency; documented as SOCKS-only. Zapret2 can affect non-proxied traffic but is OS-specific and privileged; not falsely marketed as portable.
 - Evidence: Ahmad-2213's Sep 20–21 reports on #28 tested only Simin/Frough datacenters; specifically warned no mobile ISP/Android proof. The concrete observations are hypotheses, not globally usable values.
+
+
+## P6: narrow fronting architecture and practical edge selection (2026-10-15)
+
+Decision: **one CLI, multiple explicitly selected strategies**, not a blindly stacked chain. Use Xray's own direct/MITM functionality for sites known to support it; optional TLS/TCP splitting only for networks where it improves accepted handshakes; independently configured domain shadowing only where we control the CDN account/domain/origin. Do not pretend arbitrary CloudFront/Cloudflare Host-to-SNI mismatches work.
+
+- `ktest edges`: bounded ranker for 1–12 **explicit**, permitted candidate IPv4/IPv6 addresses. Performs 1–3 real HTTPS requests per candidate, connecting directly to the IP while retaining the configured TLS certificate name and HTTP Host. No ICMP, wide CIDR scans, root CA installation, or shell calls. Separates TLS-only from unverified 2xx and controlled-origin nonce proof.
+- No IP considered healthy solely from ping or TCP success. HTTP 421/403 is **not** fronting success; a 2xx without independently verified origin remains `http_2xx_unverified`. A valid local MITM CA does not authenticate the remote target.
+- Next fronting integration gate: parameterized Xray MITM v23 profile with **explicit** certificate paths; verify actual origin and fail closed on TLS verification failure, refuse untrusted CA auto-install; route only provider-confirmed host mappings. Keep optional shadow/CDN reverse-proxy profile separate to avoid accidental assumption of serverless reachability.
+- LICENSE decision is separate from TLS **certificate** issuance. Before vendoring GPL-3.0 components, review reciprocal-license obligations; Xray MPL-2.0, Lantern/domainfront Apache-2.0. Running a separate binary is architecturally different from copying its source into ktest.

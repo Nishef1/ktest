@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/access"
+	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/experiment"
 	"github.com/Nishef1/ktest/internal/pathdiag"
 	"github.com/Nishef1/ktest/internal/probe"
@@ -26,6 +27,9 @@ import (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	if len(args) > 0 && args[0] == "edges" {
+		return runEdges(args[1:])
+	}
 	if len(args) > 0 && args[0] == "revive" {
 		return runRevive(args[1:])
 	}
@@ -264,6 +268,36 @@ func runRevive(args []string) int {
 	err := revive.Run(ctx, revive.Config{XrayBinary: *xray, Profile: *profile, Variant: *variant, AssetDir: *assets, Output: os.Stderr})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "revive:", err)
+		return 1
+	}
+	return 0
+}
+
+// runEdges chooses from a short explicit list; it never enumerates CDN CIDRs.
+func runEdges(args []string) int {
+	fs := flag.NewFlagSet("edges", flag.ContinueOnError)
+	target := fs.String("url", "", "HTTPS URL for an authorized endpoint")
+	ipList := fs.String("ips", "", "comma-separated explicit IPv4 or IPv6 addresses (max 12)")
+	sni := fs.String("sni", "", "TLS SNI / certificate reference identity")
+	host := fs.String("host", "", "HTTP Host / :authority")
+	proof := fs.Bool("proof", false, "require fresh proof echoed by an origin under your control")
+	authorized := fs.Bool("authorized", false, "confirm permission to probe these endpoints")
+	rounds := fs.Int("rounds", 2, "1..3 requests per IP")
+	timeout := fs.Duration("timeout", 6*time.Second, "per-request timeout, max 15s")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || *target == "" || *ipList == "" || !*authorized {
+		fmt.Fprintln(os.Stderr, "usage: ktest edges -authorized -url https://example.org -ips 192.0.2.10,2001:db8::10 [-sni name] [-host name] [-proof] [-rounds 2]")
+		return 2
+	}
+	report, err := edges.Run(context.Background(), edges.Plan{
+		URL: *target, IPs: strings.Split(*ipList, ","), SNI: *sni, Host: *host,
+		Proof: *proof, Rounds: *rounds, Timeout: *timeout,
+	}, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "edges:", err)
+		return 2
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	return 0
