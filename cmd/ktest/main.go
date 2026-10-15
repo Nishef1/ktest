@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -312,78 +311,14 @@ func runEdges(args []string) int {
 	return 0
 }
 
-// interactiveMenu keeps the existing CLI commands available while offering
-// an uncomplicated entry point for packaged desktop users.
+// interactiveMenu presents a managed, non-blocking CLI with auto-verification.
 func interactiveMenu() int {
-	in := bufio.NewScanner(os.Stdin)
-	for {
-		fmt.Println("\nktest | Initial connectivity")
-		fmt.Println("1) Direct access (Fragment B)")
-		fmt.Println("2) Alternate direct access (Fragment A)")
-		fmt.Println("3) Adaptive DPI (ByeDPI SOCKS)")
-		fmt.Println("4) TLS record slicing (ByeDPI SOCKS)")
-		fmt.Println("5) Find CDN IP candidates")
-		fmt.Println("6) About proxy and safety")
-		fmt.Println("0) Exit")
-		fmt.Print("Select > ")
-		if !in.Scan() {
-			return 0
-		}
-		switch strings.TrimSpace(in.Text()) {
-		case "1", "2":
-			base, err := os.Executable()
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				continue
-			}
-			base = filepath.Dir(base)
-			binary := filepath.Join(base, "cores", "xray")
-			if runtime.GOOS == "windows" {
-				binary += ".exe"
-			}
-			profile := filepath.Join(base, "profiles", "Serverless-for-Iran.json")
-			if _, err := os.Stat(binary); err != nil {
-				fmt.Println("Xray core is not included in this build. Use the packaged archive.")
-				continue
-			}
-			if _, err := os.Stat(profile); err != nil {
-				fmt.Println("Offline profile is missing. Use the packaged archive.")
-				continue
-			}
-			variant := "B"
-			if strings.TrimSpace(in.Text()) == "2" {
-				variant = "A"
-			}
-			code := runRevive([]string{"-xray", binary, "-profile", profile, "-variant", variant, "-assets", filepath.Join(base, "cores")})
-			if code != 0 {
-				fmt.Printf("Core exited with code %d.\n", code)
-			}
-		case "3", "4":
-			code := runPackagedByeDPI(strings.TrimSpace(in.Text()))
-			if code != 0 {
-				fmt.Printf("ByeDPI exited with code %d.\n", code)
-			}
-		case "5":
-			fmt.Println("CDN provider: 1) Akamai seeds  2) Fastly DNS  3) Google DNS")
-			fmt.Print("Provider > ")
-			if !in.Scan() {
-				return 0
-			}
-			provider := map[string]string{"1": "akamai", "2": "fastly", "3": "google"}[strings.TrimSpace(in.Text())]
-			if provider == "" {
-				fmt.Println("Unknown provider.")
-				continue
-			}
-			runQuickScan([]string{"-provider", provider})
-		case "6":
-			fmt.Println("Xray: local HTTP/SOCKS at 127.0.0.1:10808; ByeDPI: SOCKS5 at 127.0.0.1:10809.")
-			fmt.Println("It does not change your system proxy, DNS, certificates or VPN route.")
-		case "0", "q":
-			return 0
-		default:
-			fmt.Println("Choose a listed option.")
-		}
+	path, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
+	return runInteractive(os.Stdin, os.Stdout, filepath.Dir(path))
 }
 
 // runPackagedByeDPI launches an already bundled upstream executable, without
