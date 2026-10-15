@@ -38,20 +38,20 @@ func improveDNSBootstrap(root map[string]json.RawMessage) error {
 		return nil // an unknown DNS topology is untouched
 	}
 	local := map[string]any{
-		"tag": "domestic-dns",
+		"tag":     "domestic-dns",
 		"address": "localhost",
 		"domains": []string{
 			"domain:google.com", "domain:googleapis.com",
 			"domain:gstatic.com", "full:dns.google",
 		},
 		"skipFallback": true,
-		"timeoutMs": 3500,
-		"finalQuery": true,
+		"timeoutMs":    3500,
+		"finalQuery":   true,
 	}
 	alternate := map[string]any{
-		"tag": "no-filter-dns",
-		"address": "https://dns.google/dns-query",
-		"timeoutMs": 4500,
+		"tag":        "no-filter-dns",
+		"address":    "https://dns.google/dns-query",
+		"timeoutMs":  4500,
 		"finalQuery": false,
 	}
 	localBytes, err := json.Marshal(local)
