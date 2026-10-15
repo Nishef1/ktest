@@ -87,3 +87,14 @@ The user requested prioritizing already deployed, user-reported anti-DPI tools o
 Status: **implemented, local pass only**. The upstream engine must still be assessed on an actual filtered network. The MITM-DomainFronting v23 route is deferred due to unresolved failure reports and CA trust implications. We will not claim universal access, a changed public IP, or full-system VPN support.
 
 Next meaningful improvements require a *specific confirmed-working combination* and one real destination that serves it: save only non-sensitive successful combinations, keep automatic profile switching opt-in, and do not broaden to unrelated DPI experiments without evidence.
+
+
+## P5: immediate terminal bootstrap (2026-10-15)
+
+- Added \`ktest revive\` as a shared Go-based CLI control plane for Windows, Linux, and macOS. It launches **official Xray** with the already-saved \`Serverless-for-Iran.json\` subscription profile B (or A). No network download is performed during launch.
+- Selects a single \`fragB\` or \`fragA\` profile; overwrites inbound to bind only 127.0.0.1:10808; runs \`xray version\` and \`xray run -test\` before starting. It keeps other upstream profile routing unchanged and does not mutate system proxy/DNS/TUN/firewall.
+- Xray is a separate upstream native executable with asset files, even though \`ktest\` shares Go source across OSes. No implication that a single identical binary runs natively on every platform.
+- **Critical:** this only exposes an opt-in HTTP/SOCKS proxy for applications that support one. It does **not** intercept WireGuard UDP or make Windscribe's app use that proxy; routing the VPN transport would require protocol-aware integration or OS-level packet hooks.
+- \`docs/REVIVE.md\` has offline setup and current restrictions. Root privileges and MITM CA are not required for the Xray profile itself; upstream tool/platform behavior may change.
+- Keep existing SNI-Spoofing-Go \`ktest access\` as a second method. ByeDPI remains an external standalone fallback rather than an auto-installed dependency; documented as SOCKS-only. Zapret2 can affect non-proxied traffic but is OS-specific and privileged; not falsely marketed as portable.
+- Evidence: Ahmad-2213's Sep 20–21 reports on #28 tested only Simin/Frough datacenters; specifically warned no mobile ISP/Android proof. The concrete observations are hypotheses, not globally usable values.

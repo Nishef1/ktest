@@ -20,11 +20,15 @@ import (
 	"github.com/Nishef1/ktest/internal/pathdiag"
 	"github.com/Nishef1/ktest/internal/probe"
 	"github.com/Nishef1/ktest/internal/proofserver"
+	"github.com/Nishef1/ktest/internal/revive"
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	if len(args) > 0 && args[0] == "revive" {
+		return runRevive(args[1:])
+	}
 	if len(args) > 0 && args[0] == "access" {
 		return runAccess(args[1:])
 	}
@@ -239,6 +243,29 @@ func runAccess(args []string) int {
 			return 1
 		default:
 		}
+	}
+	return 0
+}
+
+
+// runRevive launches the latest locally saved upstream serverless profile
+// using a separately installed official Xray CLI. No global system changes.
+func runRevive(args []string) int {
+	fs := flag.NewFlagSet("revive", flag.ContinueOnError)
+	xray := fs.String("xray", "xray", "installed Xray executable")
+	profile := fs.String("profile", "Serverless-for-Iran.json", "offline subscription JSON file")
+	variant := fs.String("variant", "B", "serverless profile A or B")
+	assets := fs.String("assets", "", "optional Xray geosite/geoip asset directory")
+	if fs.Parse(args) != nil || fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: ktest revive [-xray ./xray] [-profile ./Serverless-for-Iran.json] [-variant B] [-assets ./assets]")
+		return 2
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	err := revive.Run(ctx, revive.Config{XrayBinary: *xray, Profile: *profile, Variant: *variant, AssetDir: *assets, Output: os.Stderr})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "revive:", err)
+		return 1
 	}
 	return 0
 }
