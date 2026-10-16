@@ -445,6 +445,27 @@ func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *r
 		rc.err = l(cctx, m.dns)
 		close(rc.done)
 	}()
+	// Once the VPN is back, unfinished discovery attempts must stop. Do not
+	// cancel a transport that has already passed try() and is carrying the VPN.
+	if m.monitor != nil {
+		watchEnd := make(chan struct{})
+		defer close(watchEnd)
+		go func() {
+			tick := time.NewTicker(2 * time.Second)
+			defer tick.Stop()
+			for {
+				select {
+				case <-watchEnd: return
+				case <-cctx.Done(): return
+				case <-tick.C:
+					if m.monitor.Connected() {
+						rc.cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
 	deadline := time.Now().Add(attemptTimeout(p))
 	if waitForPort(ctx, rc.done, port, time.Until(deadline)) && exitCarries(ctx, rc.done, port, time.Until(deadline)) {
 		return true, rc
