@@ -273,6 +273,10 @@ func (t *terminal) mainMenu() {
 	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("3")), u.Bold("Diagnose         "), u.Dim("what is this network doing? DNS, SNI, packet cutting"))
 	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("4")), u.Bold("Setup            "), u.Dim("certificate for domain fronting, exit paths (WARP, Psiphon) for Telegram"))
 	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("5")), u.Bold("Advanced         "), u.Dim("single methods, CDN scan"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("7")), u.Bold("Fast / flexible  "), u.Dim("fastest working route, IP can vary"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("8")), u.Bold("Windscribe       "), u.Dim("TCP bootstrap for Windscribe, without ktest TUN"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("9")), u.Bold("VPN / exit-only  "), u.Dim("verified foreign exit, pinned for the session"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("10")), u.Bold("Tor only         "), u.Dim("Tor circuit only, no direct fallback"))
 	if t.current() != nil {
 		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("6")), u.Bold("Stop             "), u.Dim("stop the running method"))
 	}
@@ -350,11 +354,22 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			// Asynchronous output can visually displace the prompt; an empty
 			// Enter is never an invalid choice.
 			continue
-		case "1", "2":
+		case "1", "2", "7", "8", "9", "10":
 			if t.current() != nil && !t.stop() {
 				continue
 			}
-			if !t.connectFromMenu(base, lines, readLine, line == "2") {
+			mode := ModeBalanced
+			switch line {
+			case "7":
+				mode = ModeFast
+			case "8":
+				mode = ModeWindscribe
+			case "9":
+				mode = ModeVPN
+			case "10":
+				mode = ModeTor
+			}
+			if !t.connectFromMenu(base, lines, readLine, line == "2", mode) {
 				return 0
 			}
 		case "3":
@@ -373,7 +388,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			}
 			return 0
 		default:
-			t.ui.Line(toneWarn, "Unknown option. Select 1-5, or 0 to exit.")
+			t.ui.Line(toneWarn, "Unknown option. Select 1-5, 7-10, or 0 to exit.")
 		}
 	}
 }
@@ -381,8 +396,8 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 // connectFromMenu is Connect (or Connect for the whole PC) with the certificate
 // offered first when domain fronting would need it. It reports false when stdin
 // closed.
-func (t *terminal) connectFromMenu(base string, lines <-chan string, readLine func() (string, bool), tun bool) bool {
-	if state := certState(); state != "ok" && !t.certDeclined {
+func (t *terminal) connectFromMenu(base string, lines <-chan string, readLine func() (string, bool), tun bool, mode ConnectionMode) bool {
+	if state := certState(); state != "ok" && !t.certDeclined && mode != ModeVPN && mode != ModeTor {
 		why := map[string]string{
 			"missing":   "Domain fronting (YouTube, X, Instagram, Reddit ...) needs a local certificate that is not set up.",
 			"outdated":  "The local certificate predates sites this ktest can front.",
@@ -415,17 +430,18 @@ func (t *terminal) connectFromMenu(base string, lines <-chan string, readLine fu
 		relaunchElevated(t.ui, o)
 		return true
 	}
-	return t.runConnect(base, lines, tun)
+	return t.runConnect(base, lines, tun, mode)
 }
 
 // runConnect shows the connect view until the session ends or the user presses
 // Enter / Ctrl+C. It reports false when stdin closed.
-func (t *terminal) runConnect(base string, lines <-chan string, tun bool) bool {
+func (t *terminal) runConnect(base string, lines <-chan string, tun bool, mode ConnectionMode) bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.mu.Lock()
 	t.connect = cancel
 	t.mu.Unlock()
 	o := defaultConnectOptions(base)
+	o.mode = mode
 	o.stopHint = "Press Enter or Ctrl+C to disconnect"
 	o.tun = tun
 	done := make(chan int, 1)
