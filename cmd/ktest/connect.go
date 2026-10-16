@@ -42,7 +42,8 @@ type pathCore struct {
 	run    *runningCore
 	logs   *tailBuffer
 	// localDNS: the core resolves names with the system resolver.
-	localDNS bool
+	localDNS    bool
+	localBypass bool // explicit ktest-managed, IP-preserving packet shaping
 }
 
 func xrayLauncher(base, variant string, port int, out io.Writer) (launcher, error) {
@@ -59,6 +60,20 @@ func xrayLauncher(base, variant string, port int, out io.Writer) (launcher, erro
 	}
 	return func(ctx context.Context, dns *dnscheck.Result) error {
 		return revive.Run(ctx, revive.Config{XrayBinary: bin, Profile: profile, Variant: variant, AssetDir: core, Port: port, Output: out, DNS: dns})
+	}, nil
+}
+
+func localXrayLauncher(base, variant string, port int, out io.Writer) (launcher, error) {
+	core := filepath.Join(base, "cores")
+	bin := filepath.Join(core, "xray")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if !fileOK(bin) {
+		return nil, fmt.Errorf("missing %s", bin)
+	}
+	return func(ctx context.Context, _ *dnscheck.Result) error {
+		return revive.RunLocalTCP(ctx, revive.Config{XrayBinary: bin, Variant: variant, AssetDir: core, Port: port, Output: out})
 	}, nil
 }
 
@@ -110,7 +125,7 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
 	fs.StringVar(&o.listen, "listen", o.listen, "loopback SOCKS5 address for your applications")
 	fs.IntVar(&o.strategies, "strategies", o.strategies, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")
-	fs.BoolVar(&o.noXray, "no-xray", false, "do not run the two Xray profiles")
+	fs.BoolVar(&o.noXray, "no-xray", false, "do not run Xray profiles (including generated local TCP methods in Windscribe mode)")
 	fs.BoolVar(&o.noSelf, "no-self", false, "do not add ktest's built-in ClientHello cutting paths")
 	fs.BoolVar(&o.noDoH, "no-doh", false, "never use encrypted DNS (system DNS only)")
 	fs.BoolVar(&o.noDirect, "no-direct", false, "do not race the plain, uncut connection")
@@ -181,7 +196,7 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	t := s.t
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
-		t.Line(toneInfo, "%-26s TCP established via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
+		t.Line(toneInfo, "%-26s TCP proxy accepted via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
 		return
 	}
 	if e.Rejected {
@@ -300,8 +315,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 2. The cores that carry the external paths.
 	var cores []*pathCore
 	var skipped []string
-	add := func(name string, port int, localDNS bool, mk func(io.Writer) (launcher, error)) {
-		c := &pathCore{name: name, port: port, logs: &tailBuffer{max: 4096}, localDNS: localDNS}
+	add := func(name string, port int, localDNS, localBypass bool, mk func(io.Writer) (launcher, error)) {
+		c := &pathCore{name: name, port: port, logs: &tailBuffer{max: 4096}, localDNS: localDNS, localBypass: localBypass}
 		if o.verbose {
 			c.logs.tee = os.Stderr
 		}
@@ -313,7 +328,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		c.launch = l
 		cores = append(cores, c)
 	}
-	if !o.noXray && o.mode != ModeVPN && o.mode != ModeTor && o.mode != ModeWindscribe {
+	if !o.noXray && o.mode != ModeVPN && o.mode != ModeTor {
 		// Imported Xray profiles may contain foreign outbound proxies. Do
 		// not trust a filename containing "fragment" as identity-preserving.
 		for _, x := range []struct {
@@ -321,7 +336,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			port    int
 		}{{"B", connectXrayBPort}, {"A", connectXrayAPort}} {
 			x := x
-			add("Xray fragment "+x.variant, x.port, true, func(w io.Writer) (launcher, error) { return xrayLauncher(o.base, x.variant, x.port, w) })
+			if o.mode == ModeWindscribe {
+				// Only our generated freedom/fragment configuration is trusted.
+				// Imported subscription profiles remain prohibited in this mode.
+				add("Xray local TCP fragment "+x.variant, x.port, true, true, func(w io.Writer) (launcher, error) { return localXrayLauncher(o.base, x.variant, x.port, w) })
+			} else {
+				add("Xray fragment "+x.variant, x.port, true, false, func(w io.Writer) (launcher, error) { return xrayLauncher(o.base, x.variant, x.port, w) })
+			}
 		}
 	}
 	if o.strategies > 0 && o.mode != ModeVPN && o.mode != ModeTor {
@@ -338,7 +359,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 			for i, s := range list {
 				s, port := s, connectByeDPIBase+i
-				add("ByeDPI "+s.Label, port, true, func(w io.Writer) (launcher, error) { return byeDPILauncher(bin, port, s.Args, w), nil })
+				add("ByeDPI "+s.Label, port, true, true, func(w io.Writer) (launcher, error) { return byeDPILauncher(bin, port, s.Args, w), nil })
 			}
 		}
 	}
@@ -372,7 +393,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if len(live) > 0 {
 		progressLabel := "Starting external paths"
 		if o.mode == ModeWindscribe {
-			progressLabel = "Starting LOCAL ByeDPI paths"
+			progressLabel = "Starting LOCAL anti-DPI paths"
 		}
 		prog := t.Progress(progressLabel, len(live))
 		var mu sync.Mutex
@@ -432,8 +453,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	for _, c := range up {
 		ups = append(ups, smartproxy.Upstream{
 			Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port),
-			LocalDNS: c.localDNS, SoftResolve: strings.HasPrefix(c.name, "Xray"),
-			Rank: 2, LocalBypass: o.mode == ModeWindscribe && strings.HasPrefix(c.name, "ByeDPI "),
+			LocalDNS: c.localDNS, SoftResolve: strings.HasPrefix(c.name, "Xray") && !c.localBypass,
+			Rank: 2, LocalBypass: o.mode == ModeWindscribe && c.localBypass,
 		})
 	}
 	if !o.noSelf && o.mode != ModeVPN && o.mode != ModeTor {
@@ -632,7 +653,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if httpAddr != "" {
 		lines = append(lines, t.Bold("HTTP    ")+"  http://"+httpAddr+t.Dim("   (Windscribe Proxy Settings; TCP only)"))
 		if o.mode == ModeWindscribe {
-			lines = append(lines, t.Bold("VPN TCP ")+"  "+t.Yellow("Only locally run ByeDPI paths; 502 if unavailable. HTTP 200 does NOT prove VPN handshake."))
+			lines = append(lines, t.Bold("VPN TCP ")+"  "+t.Yellow("Local Xray TCP fragmentation + ByeDPI; 502 if unavailable. HTTP 200 does NOT prove VPN handshake."))
 		}
 	}
 	if frontNote != "" {
@@ -727,7 +748,7 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 	t.Println("  " + t.Bold("Session summary"))
 	ok, fail := feed.ok.Load(), feed.fail.Load()
 	if n := feed.tcpOnly.Load(); n > 0 {
-		t.Printf("    %d TCP proxy connections established; application/VPN negotiation not verified by these counts\n", n)
+		t.Printf("    %d TCP proxy requests accepted; destination/application/VPN negotiation not verified by these counts\n", n)
 	}
 	if total := ok + fail; total > 0 {
 		pct := float64(ok) / float64(total)

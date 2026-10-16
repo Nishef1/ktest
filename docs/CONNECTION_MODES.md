@@ -8,7 +8,7 @@ The menu also allows selecting each mode. CLI:
 | --- | --- | --- | --- |
 | `-mode balanced` | normal mixed access, **AI sites protected** | Ordinary sites may use own IP; AI via verified foreign exit | AI domains stop if foreign exit absent |
 | `-mode fast` | fastest usable destination path | Direct, fragment, fronting, or Psiphon may win; public IP may differ by destination | Can fall back to local ISP IP |
-| `-mode windscribe` | **strict local-only anti-DPI** HTTP/SOCKS bootstrap for installed Windscribe | No Psiphon/Aether/WARP/Tor, no foreign/unknown Xray exit, no Plain, no CDN relay; only Windscribe changes public VPN IP | Local ByeDPI attempted for Windscribe TCP, fails 502 when unavailable; Windscribe Firewall protects other apps |
+| `-mode windscribe` | **strict local-only anti-DPI** HTTP/SOCKS bootstrap for installed Windscribe | Generated local Xray TCP fragmentation + ByeDPI; no Psiphon/Aether/WARP/Tor, foreign/unknown Xray exit, Plain or CDN relay; only Windscribe changes public VPN IP | Local TCP methods attempted, fails 502 when unavailable; Windscribe Firewall protects other apps |
 | `-mode vpn` | all traffic **sent through ktest's SOCKS/HTTP listeners** | One verified foreign SOCKS path is pinned after its first success in this session | Fail closed; never switch to direct/fragment/fronting |
 | `-mode tor` | all traffic **sent through ktest's SOCKS/HTTP listeners** | Tor-only, may use different exit IPs by circuit/site | Fail closed while Tor is unavailable |
 

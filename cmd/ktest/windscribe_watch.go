@@ -47,6 +47,8 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 	loggedIn := false
 	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
 		line = strings.TrimSpace(line)
+		pendingField := strings.HasPrefix(line, "*")
+		line = strings.TrimSpace(strings.TrimPrefix(line, "*"))
 		low := strings.ToLower(line)
 		if strings.HasPrefix(low, "login state:") {
 			status := strings.TrimSpace(strings.TrimPrefix(low, "login state:"))
@@ -56,7 +58,7 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 			continue
 		}
 		value := strings.TrimSpace(line[len("connect state:"):])
-		pending := strings.HasPrefix(value, "*")
+		pending := pendingField || strings.HasPrefix(value, "*")
 		value = strings.TrimSpace(strings.TrimPrefix(value, "*"))
 		lower := strings.ToLower(value)
 		switch {
@@ -204,7 +206,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		m.disconnectedSamples = 0
 	}
 	// Windscribe mode never enables foreign exits. Wait for a stable
-	// disconnected state and an available LOCAL ByeDPI path; otherwise the
+	// disconnected state and an available LOCAL packet-shaping path; otherwise the
 	// CLI would keep restarting an unreachable VPN every few seconds.
 	shouldReconnect := m.autoReconnect && state == windscribeDisconnected &&
 		m.disconnectedSamples >= 3 && p != nil && p.HasLocalBypass() &&

@@ -171,6 +171,45 @@ func Run(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
+	return runProfile(ctx, c, profile)
+}
+
+// LocalTCPProfile generates a closed local-only configuration. No imported
+// subscription, relay, redirect, DNS route or TLS-specific modifier is used.
+// Numeric fragment.packets slices TCP writes, including opaque OpenVPN frames.
+func LocalTCPProfile(port int, variant string) ([]byte, error) {
+	if port < 1 || port > 65535 {
+		return nil, errors.New("invalid local port")
+	}
+	packets, length, interval := "1-3", "1-8", "1-2"
+	switch variant {
+	case "A":
+	case "B":
+		packets, length, interval = "1-5", "8-32", "5-10"
+	default:
+		return nil, errors.New("local TCP variant must be A or B")
+	}
+	return []byte(fmt.Sprintf(`{
+  "log":{"loglevel":"warning"},
+  "inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"socks","settings":{"auth":"noauth","udp":false}}],
+  "outbounds":[{"protocol":"freedom","settings":{"fragment":{"packets":%q,"length":%q,"interval":%q}}}]
+}`, port, packets, length, interval)), nil
+}
+
+// RunLocalTCP uses only generated local TCP packet shaping. Config.Profile is
+// deliberately rejected rather than trusted as a local-only subscription.
+func RunLocalTCP(ctx context.Context, c Config) error {
+	if c.XrayBinary == "" || c.Profile != "" {
+		return errors.New("local TCP requires an Xray binary and forbids imported profiles")
+	}
+	profile, err := LocalTCPProfile(c.port(), c.Variant)
+	if err != nil {
+		return err
+	}
+	return runProfile(ctx, c, profile)
+}
+
+func runProfile(ctx context.Context, c Config, profile []byte) error {
 	checkCtx, cancel := context.WithTimeout(ctx, 15_000_000_000)
 	defer cancel()
 	ver, err := exec.CommandContext(checkCtx, c.XrayBinary, "version").CombinedOutput()
@@ -213,7 +252,11 @@ func Run(ctx context.Context, c Config) error {
 	if output == nil {
 		output = os.Stderr
 	}
-	fmt.Fprintf(output, "Local HTTPS/SOCKS5 mixed proxy: 127.0.0.1:%d (Fragment %s)\n", c.port(), strings.ToUpper(c.Variant))
+	if c.Profile == "" {
+		fmt.Fprintf(output, "Local-only SOCKS5 TCP fragmentation: 127.0.0.1:%d (generated variant %s; no remote exit)\n", c.port(), c.Variant)
+	} else {
+		fmt.Fprintf(output, "Local HTTPS/SOCKS5 mixed proxy: 127.0.0.1:%d (Fragment %s)\n", c.port(), strings.ToUpper(c.Variant))
+	}
 	fmt.Fprintln(output, "Use an application that explicitly supports this proxy. Other traffic, including Windscribe WireGuard, is unchanged.")
 	cmd := exec.CommandContext(ctx, c.XrayBinary, "run", "-c", f.Name())
 	cmd.Env = env

@@ -432,7 +432,7 @@ func (p *Proxy) DialLocalBypass(ctx context.Context, host, port string) (net.Con
 			lastErr = err
 			continue
 		}
-		p.logf("Windscribe TCP %s:%s via local anti-DPI %s (VPN negotiation not yet verified)", host, port, u.Name)
+		p.logf("Windscribe CONNECT %s:%s accepted via local anti-DPI %s (destination/VPN negotiation not yet verified)", host, port, u.Name)
 		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
 		return conn, nil
 	}

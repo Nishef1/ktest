@@ -37,6 +37,7 @@ func TestParseWindscribeStatus(t *testing.T) {
 	}{
 		{"connected", "Login state: Logged in\nConnect state: Connected: Toronto\nFirewall state: On\n", windscribeConnected, true},
 		{"pending", "Login state: Logged in\nConnect state: *Connected: Berlin\n", windscribeConnecting, true},
+		{"pending field prefix", "Login state: Logged in\n*Connect state: Connected: Stockholm - Fika\nProtocol: WireGuard:443\n", windscribeConnecting, true},
 		{"interference", "Login state: Logged in\nConnect state: Connected: London [Network interference]\n", windscribeConnecting, true},
 		{"connecting", "Login state: Logged in\nConnect state: Connecting\n", windscribeConnecting, true},
 		{"reconnecting", "Login state: Logged in\nConnect state: Reconnecting\n", windscribeConnecting, true},
