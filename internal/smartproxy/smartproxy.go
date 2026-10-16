@@ -104,6 +104,9 @@ type Config struct {
 	// RejectExits is defense-in-depth for Windscribe's local-only mode.
 	// Both initial and dynamically added foreign routes are refused.
 	RejectExits bool
+	// LocalOnly forbids any path other than explicitly marked local anti-DPI
+	// SOCKS cores or built-in ClientHello modifiers on direct connections.
+	LocalOnly bool
 	// Stagger is how long the best path gets alone before the next one joins.
 	Stagger time.Duration
 	// ConnectTimeout bounds dial plus SOCKS handshake; FirstByteTimeout bounds
@@ -180,6 +183,23 @@ type Proxy struct {
 	bootstrapSkip   string // avoid retrying the same failed DPI strategy next attempt
 }
 
+func allowedLocalOnly(u Upstream) bool {
+	if u.Exit || u.Takeover != nil {
+		return false
+	}
+	if u.LocalBypass && u.Addr != "" {
+		host, _, err := net.SplitHostPort(u.Addr)
+		if err != nil {
+			return false
+		}
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	}
+	// An ordinary direct connection has no Send function; it is forbidden.
+	// A built-in TLS ClientHello modification uses the ISP's own network.
+	return u.Addr == "" && u.Send != nil
+}
+
 func New(cfg Config) (*Proxy, error) {
 	if len(cfg.Upstreams) == 0 && cfg.ExitOnly == nil {
 		return nil, errors.New("at least one upstream is required")
@@ -190,6 +210,9 @@ func New(cfg Config) (*Proxy, error) {
 	for _, u := range cfg.Upstreams {
 		if cfg.RejectExits && u.Exit {
 			return nil, fmt.Errorf("foreign exit %q prohibited by local-only mode", u.Name)
+		}
+		if cfg.LocalOnly && !allowedLocalOnly(u) {
+			return nil, fmt.Errorf("nonlocal/plain route %q prohibited by Windscribe local-only mode", u.Name)
 		}
 		if u.Name == "" || seen[u.Name] {
 			return nil, fmt.Errorf("upstream names must be unique and non-empty (%q)", u.Name)
@@ -807,6 +830,15 @@ func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (wi
 	all := p.order(host)
 	var cands []*upstreamState
 	for _, u := range all {
+		if p.cfg.LocalOnly {
+			// The in-process ClientHello cutters are direct TCP once passed a
+			// non-TLS flight. They must never masquerade as an anti-DPI
+			// method for raw OpenVPN traffic.
+			if u.LocalBypass && !u.Exit && u.Addr != "" && u.Takeover == nil {
+				cands = append(cands, u)
+			}
+			continue
+		}
 		if u.Takeover == nil && (u.Addr == "" || u.Exit) {
 			cands = append(cands, u)
 		}
@@ -825,7 +857,7 @@ func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (wi
 			cands = verified
 		}
 	}
-	if len(cands) == 0 { // no direct or exit path configured: use whatever relays
+	if len(cands) == 0 && !p.cfg.LocalOnly { // no direct or exit path configured: use whatever relays
 		for _, u := range all {
 			if u.Takeover == nil {
 				cands = append(cands, u)
@@ -977,6 +1009,9 @@ func (p *Proxy) Add(u Upstream) error {
 	}
 	if p.cfg.RejectExits && u.Exit {
 		return errors.New("foreign exit is prohibited by local-only Windscribe mode")
+	}
+	if p.cfg.LocalOnly && !allowedLocalOnly(u) {
+		return errors.New("nonlocal/plain route prohibited by Windscribe local-only mode")
 	}
 	for _, x := range p.ups {
 		if x.Name == u.Name {
