@@ -113,8 +113,12 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 		},
 		"inbounds": []any{map[string]any{
 			"type": "tun", "tag": "ktest-tun", "interface_name": "ktest-tun",
-			"address":    []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
-			"auto_route": true, "strict_route": true, "stack": "gvisor",
+			"address": []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
+			// strict_route would add Windows firewall rules that block DNS on every
+			// other interface for every process, which also blocks the proxy's own
+			// name lookups. A DNS answer that still leaks out is poisoned at worst,
+			// and a poisoned answer is recovered from the TLS SNI by the proxy.
+			"auto_route": true, "strict_route": false, "stack": "gvisor",
 		}},
 		"outbounds": []any{
 			map[string]any{"type": "socks", "tag": "ktest", "server": "127.0.0.1", "server_port": o.SocksPort, "version": "5", "network": "tcp"},

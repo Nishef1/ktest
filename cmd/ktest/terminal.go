@@ -394,7 +394,7 @@ func (t *terminal) connectFromMenu(base string, lines <-chan string, readLine fu
 		if !ok {
 			return false
 		}
-		if ans == "YES" {
+		if strings.EqualFold(ans, "YES") {
 			ensureCert(t.ui)
 		} else {
 			t.certDeclined = true
@@ -407,7 +407,7 @@ func (t *terminal) connectFromMenu(base string, lines <-chan string, readLine fu
 		if !ok {
 			return false
 		}
-		if ans != "YES" {
+		if !strings.EqualFold(ans, "YES") {
 			t.ui.Line(toneInfo, "Cancelled.")
 			return true
 		}
@@ -533,7 +533,7 @@ func (t *terminal) toggleTun(base string, readLine func() (string, bool)) {
 	t.ui.Note("May disrupt Windows and other VPNs. Routes should restore when stopped.")
 	t.print("  Type YES to modify system-wide routes > ")
 	answer, ok := readLine()
-	if !ok || answer != "YES" {
+	if !ok || !strings.EqualFold(answer, "YES") {
 		t.ui.Line(toneInfo, "Cancelled.")
 		return
 	}

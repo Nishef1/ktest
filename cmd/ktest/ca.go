@@ -213,19 +213,19 @@ func (t *terminal) frontSetup(readLine func() (string, bool)) {
 	switch {
 	case ca != nil && trusted && len(caMissing(ca)) > 0:
 		u.Printf("  Type RENEW to replace the CA by one covering every site (Windows asks you to confirm), or press Enter to keep it > ")
-		if ans, ok := readLine(); ok && ans == "RENEW" {
+		if ans, ok := readLine(); ok && strings.EqualFold(ans, "RENEW") {
 			if caRemove(u, true) == 0 {
 				caInstall(u)
 			}
 		}
 	case ca != nil && trusted:
 		u.Printf("  Type REMOVE to stop trusting and delete the CA, or press Enter to keep it > ")
-		if ans, ok := readLine(); ok && ans == "REMOVE" {
+		if ans, ok := readLine(); ok && strings.EqualFold(ans, "REMOVE") {
 			caRemove(u, true)
 		}
 	default:
 		u.Printf("  Type YES to create the CA and trust it for your Windows user (Windows asks you to confirm) > ")
-		if ans, ok := readLine(); ok && ans == "YES" {
+		if ans, ok := readLine(); ok && strings.EqualFold(ans, "YES") {
 			caInstall(u)
 		} else {
 			u.Line(toneInfo, "Cancelled; nothing was changed.")

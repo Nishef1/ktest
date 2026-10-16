@@ -59,3 +59,20 @@ func (c *runningCore) stop() bool {
 		return false
 	}
 }
+
+// lastLines returns up to n of the most recent non-empty lines.
+func (b *tailBuffer) lastLines(n int) []string {
+	b.mu.Lock()
+	text := string(b.data)
+	b.mu.Unlock()
+	var out []string
+	for _, l := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return out
+}

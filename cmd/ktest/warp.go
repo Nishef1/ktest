@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
+	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -79,10 +81,16 @@ type aetherProfile struct {
 	Args  []string
 }
 
-func aetherProfiles() []aetherProfile {
+// aetherProfiles lists the profiles. ech is the ECH configuration to hand to
+// Aether (base64), or "auto" to let it look the key up by DNS, which is what a
+// network that filters DNS denies it.
+func aetherProfiles(ech string) []aetherProfile {
+	if ech == "" {
+		ech = "auto"
+	}
 	return []aetherProfile{
 		{"WARP exit, MASQUE over HTTP/2", []string{"--masque", "--h2"}},
-		{"WARP exit, MASQUE over HTTP/2 with ECH", []string{"--masque", "--h2", "--no-fragment", "--ech", "auto"}},
+		{"WARP exit, MASQUE over HTTP/2 with ECH", []string{"--masque", "--h2", "--no-fragment", "--ech", ech}},
 	}
 }
 
@@ -171,15 +179,21 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	return fmt.Errorf("the archive does not contain %s", want)
 }
 
-// registerAttempts are tried in turn: the WARP API's own name is filtered on
-// some networks, so it is reached through ktest's proxy when that is running,
-// then fragmented, then with ECH.
-func registerAttempts(proxyUp bool) [][]string {
+// registerAttempts are tried in turn. The route to the WARP API (the key) is
+// closed on some networks, so the first ways in are the ones this program has
+// already shown to work there: through ktest's own proxy when it runs, and
+// with Encrypted Client Hello using a configuration ktest fetched itself and an
+// address it reached, so that neither DNS nor the API's name is needed. The
+// plain and fragmented routes come last.
+func registerAttempts(proxyUp bool, ech, ip string) [][]string {
 	var out [][]string
 	if proxyUp {
 		out = append(out, []string{"--upstream", "socks5://127.0.0.1:10800"})
 	}
-	return append(out, nil, []string{"--api-fragment"}, []string{"--ech", "auto"})
+	if ech != "" && ip != "" {
+		out = append(out, []string{"--ech", ech, "--enroll-address", ip})
+	}
+	return append(out, nil, []string{"--api-fragment"})
 }
 
 func registerWarp(ctx context.Context, u *term, bin string) error {
@@ -191,7 +205,11 @@ func registerWarp(ctx context.Context, u *term, bin string) error {
 		conn.Close()
 	}
 	var lastLine string
-	for i, extra := range registerAttempts(derr == nil) {
+	ech, ip := "", ""
+	if cfg, addr, err := front.FetchCloudflareECH(ctx); err == nil {
+		ech, ip = base64.StdEncoding.EncodeToString(cfg), addr
+	}
+	for i, extra := range registerAttempts(derr == nil, ech, ip) {
 		step := u.Progress(fmt.Sprintf("Registering a WARP identity (try %d)", i+1), 1)
 		actx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		logs := &tailBuffer{max: 4096}
@@ -304,7 +322,11 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 		return "off - optional: `ktest warp -enable` lets Telegram and sites blocked by address open", func() {}
 	}
 	var started []*runningCore
-	for i, p := range aetherProfiles() {
+	ech := ""
+	if cfg, _, err := front.FetchCloudflareECH(ctx); err == nil {
+		ech = base64.StdEncoding.EncodeToString(cfg)
+	}
+	for i, p := range aetherProfiles(ech) {
 		port := aetherBasePort + i
 		if err := portFree(port); err != nil {
 			t.Note("skipped %s: %v", p.Label, err)
@@ -386,13 +408,13 @@ func (t *terminal) warpSetup(base string, readLine func() (string, bool)) {
 	warpStatus(u, base)
 	if warpState(base) == "ready" {
 		u.Printf("  Type REMOVE to delete the WARP identity, or press Enter to keep it > ")
-		if ans, ok := readLine(); ok && ans == "REMOVE" {
+		if ans, ok := readLine(); ok && strings.EqualFold(ans, "REMOVE") {
 			warpDisable(u)
 		}
 		return
 	}
 	u.Printf("  Type YES to enable it (downloads the pinned Aether core if missing and registers a free anonymous WARP identity) > ")
-	if ans, ok := readLine(); !ok || ans != "YES" {
+	if ans, ok := readLine(); !ok || !strings.EqualFold(ans, "YES") {
 		u.Line(toneInfo, "Cancelled; nothing was changed.")
 		return
 	}

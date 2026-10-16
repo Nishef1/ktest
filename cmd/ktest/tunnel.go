@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/systemtun"
 )
 
@@ -72,12 +73,15 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 		return nil
 	}
 	step.Set(2, "adapter up")
-	vctx, vcancel := context.WithTimeout(ctx, 18*time.Second)
-	results := quickcheck.RunDirect(vctx, 7*time.Second)
+	// ktest itself is exempt from the tunnel, so its own requests would test the
+	// plain network. A separate process (curl.exe, part of Windows) goes through
+	// the real system route: Windows DNS, the fake address, the adapter, the proxy.
+	vctx, vcancel := context.WithTimeout(ctx, 25*time.Second)
+	results := systemRouteProbe(vctx)
 	vcancel()
 	pass := 0
 	for _, r := range results {
-		if r.Success {
+		if r.ok {
 			pass++
 		}
 	}
@@ -88,11 +92,20 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 	}
 	if pass == 0 {
 		step.Finish(toneFail, "no site was reachable through the tunnel; stopped")
-		t.Note("Your network is back to normal. Run with -v to see sing-box's output.")
+		for _, r := range results {
+			t.Note("%s: %s", r.url, r.detail)
+		}
+		for _, l := range logs.lastLines(5) {
+			t.Note("sing-box: %s", trimDetail(l))
+		}
+		t.Note("Your network is back to normal.")
 		tn.stop(t)
 		return nil
 	}
 	step.Finish(toneOK, fmt.Sprintf("%d of %d sites reachable through the system route", pass, len(results)))
+	for _, r := range results {
+		t.Note("%s: %s", r.url, r.detail)
+	}
 	return tn
 }
 
@@ -129,4 +142,45 @@ func pinSystemDNS(servers []string) func() {
 		},
 	}
 	return func() { net.DefaultResolver = old }
+}
+
+// routeResult is one request made through the system route.
+type routeResult struct {
+	url    string
+	ok     bool
+	detail string
+}
+
+// systemRouteProbe fetches two small pages with curl.exe, a process that is not
+// exempt from the tunnel, so the request takes the whole system path.
+func systemRouteProbe(ctx context.Context) []routeResult {
+	curl, err := exec.LookPath("curl.exe")
+	if err != nil {
+		return []routeResult{{url: "curl.exe", detail: "not found, cannot test the system route"}}
+	}
+	urls := []string{"https://www.google.com/generate_204", "https://www.youtube.com/generate_204"}
+	out := make([]routeResult, len(urls))
+	var wg sync.WaitGroup
+	for i, u := range urls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			b, err := exec.CommandContext(cctx, curl, "-s", "-o", "NUL", "-m", "15", "--ssl-no-revoke", "-w", "%{http_code}", u).CombinedOutput()
+			code := strings.TrimSpace(string(b))
+			r := routeResult{url: u}
+			switch {
+			case err == nil && (code == "204" || code == "200"):
+				r.ok, r.detail = true, "HTTP "+code
+			case err != nil:
+				r.detail = "failed (" + err.Error() + ") " + code
+			default:
+				r.detail = "HTTP " + code
+			}
+			out[i] = r
+		}()
+	}
+	wg.Wait()
+	return out
 }

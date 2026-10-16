@@ -9,6 +9,7 @@ import (
 	"fmt"
 	mrand "math/rand/v2"
 	"net"
+	"time"
 )
 
 // Encrypted Client Hello without DNS.
@@ -118,4 +119,49 @@ func shuffled(s []string) []string {
 	out := append([]string(nil), s...)
 	mrand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
 	return out
+}
+
+// FetchCloudflareECH asks a Cloudflare edge address for the current ECH
+// configuration without any DNS: a dummy configuration is rejected and the
+// edge answers with the real one. It returns the configuration (the wire
+// ECHConfigList, which is what DNS HTTPS records and Aether's --ech carry) and
+// the address that answered, which can be reused as an address that is known to
+// be reachable.
+func FetchCloudflareECH(ctx context.Context) ([]byte, string, error) {
+	var hints []string
+	for _, f := range DefaultFamilies() {
+		if f.Name == "cloudflare" {
+			hints = f.Hints
+		}
+	}
+	var last error
+	for i, ip := range shuffled(hints) {
+		if i == 3 {
+			break
+		}
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		raw, err := (&net.Dialer{}).DialContext(cctx, "tcp", net.JoinHostPort(ip, "443"))
+		if err != nil {
+			cancel()
+			last = err
+			continue
+		}
+		c := tls.Client(raw, &tls.Config{
+			ServerName:                     "api.cloudflareclient.com",
+			EncryptedClientHelloConfigList: dummyECHConfig(CloudflareECH),
+			MinVersion:                     tls.VersionTLS13,
+		})
+		err = c.HandshakeContext(cctx)
+		cancel()
+		_ = raw.Close()
+		var rej *tls.ECHRejectionError
+		if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
+			return rej.RetryConfigList, ip, nil
+		}
+		last = fmt.Errorf("%s: %v", ip, err)
+	}
+	if last == nil {
+		last = errors.New("no Cloudflare address to ask")
+	}
+	return nil, "", last
 }

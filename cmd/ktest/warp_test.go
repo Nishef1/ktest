@@ -67,7 +67,7 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyTheCore(t *testing.T) {
 
 func TestAetherRunArgsNeverPromptAndStayOnLoopback(t *testing.T) {
 	t.Setenv("KTEST_WARP_DIR", t.TempDir())
-	for i, p := range aetherProfiles() {
+	for i, p := range aetherProfiles("") {
 		args := strings.Join(aetherRunArgs(i, p, aetherBasePort+i), " ")
 		// Protocol, scan mode, IP version and the reconnect question each have a flag.
 		for _, want := range []string{"--masque", "--h2", "--turbo", "-4", "--quick-reconnect", "--masque-config"} {
@@ -79,7 +79,7 @@ func TestAetherRunArgsNeverPromptAndStayOnLoopback(t *testing.T) {
 			t.Errorf("profile %d must bind to loopback: %s", i, args)
 		}
 	}
-	ps := aetherProfiles()
+	ps := aetherProfiles("")
 	if len(ps) < 2 || !strings.Contains(strings.Join(ps[1].Args, " "), "--ech") || !strings.Contains(strings.Join(ps[1].Args, " "), "--no-fragment") {
 		t.Fatalf("the second profile must be the ECH one for firewalls that close fragmentation: %+v", ps)
 	}
@@ -100,11 +100,11 @@ func TestWarpStateAndRegisterOrder(t *testing.T) {
 	if warpState(base) != "ready" {
 		t.Fatal(warpState(base))
 	}
-	with := registerAttempts(true)
-	if len(with) != 4 || with[0][0] != "--upstream" {
+	with := registerAttempts(true, "B64", "1.2.3.4")
+	if len(with) != 4 || with[0][0] != "--upstream" || with[1][0] != "--ech" || with[1][1] != "B64" || with[1][3] != "1.2.3.4" {
 		t.Fatalf("the running ktest proxy must be tried first: %v", with)
 	}
-	if without := registerAttempts(false); len(without) != 3 || without[0] != nil {
+	if without := registerAttempts(false, "", ""); len(without) != 2 || without[0] != nil {
 		t.Fatalf("%v", without)
 	}
 }
