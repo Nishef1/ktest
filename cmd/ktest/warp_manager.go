@@ -187,6 +187,11 @@ type warpManager struct {
 // startWarp runs the search for a working exit in the background and returns
 // the note for the result box and the function that stops everything.
 func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, dns *dnscheck.Result, t *term, monitors ...*windscribeMonitor) (string, func()) {
+	if o.mode == ModeWindscribe {
+		// Safety boundary: even accidental calls must not launch Aether,
+		// Psiphon, WARP or a foreign proxy in Windscribe mode.
+		return "prohibited (Windscribe local-only mode)", func() {}
+	}
 	if o.noWarp {
 		return "off (-no-warp)", func() {}
 	}
