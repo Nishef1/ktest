@@ -164,11 +164,11 @@ type memo struct {
 }
 
 type Proxy struct {
-	cfg      Config
-	mu       sync.Mutex
-	ups      []*upstreamState
-	mem      map[string]memo
-	aiPinned string // first working AI exit stays selected until this session ends
+	cfg             Config
+	mu              sync.Mutex
+	ups             []*upstreamState
+	mem             map[string]memo
+	aiPinned        string // first working AI exit stays selected until this session ends
 	bootstrapPinned string // Windscribe TCP bootstrap uses one verified foreign upstream per session
 }
 
