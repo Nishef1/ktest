@@ -168,7 +168,9 @@ func TestRefuseNonLoopbackBind(t *testing.T) {
 
 func TestWindscribeStrictCONNECTRejectsBeforeAcknowledgement(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan error, 1)
 	dialed := make(chan string, 1)
@@ -183,15 +185,23 @@ func TestWindscribeStrictCONNECTRejectsBeforeAcknowledgement(t *testing.T) {
 	}()
 	defer func() { cancel(); _ = l.Close(); <-finished }()
 	c, err := net.DialTimeout("tcp", l.Addr().String(), time.Second)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.WriteString(c, "CONNECT 198.51.100.15:443 HTTP/1.1\r\nHost: 198.51.100.15:443\r\n\r\n"); err != nil { t.Fatal(err) }
+	if _, err := io.WriteString(c, "CONNECT 198.51.100.15:443 HTTP/1.1\r\nHost: 198.51.100.15:443\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
 	line, err := bufio.NewReader(c).ReadString('\n')
-	if err != nil || !strings.Contains(line, "502") { t.Fatalf("expected 502 instead of false 200, got %q %v", line, err) }
+	if err != nil || !strings.Contains(line, "502") {
+		t.Fatalf("expected 502 instead of false 200, got %q %v", line, err)
+	}
 	select {
 	case dest := <-dialed:
-		if dest != "198.51.100.15:443" { t.Fatal(dest) }
+		if dest != "198.51.100.15:443" {
+			t.Fatal(dest)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("strict dial was not called")
 	}
