@@ -107,14 +107,14 @@ func windscribeCLIPath(override string) (string, error) {
 }
 
 type windscribeMonitor struct {
-	cli           string
-	t             *term
-	autoReconnect bool
-	mu            sync.RWMutex
-	state         windscribeState
-	connectedOnce bool
-	proxy         *smartproxy.Proxy
-	nextReconnect time.Time
+	cli                 string
+	t                   *term
+	autoReconnect       bool
+	mu                  sync.RWMutex
+	state               windscribeState
+	connectedOnce       bool
+	proxy               *smartproxy.Proxy
+	nextReconnect       time.Time
 	disconnectedSamples int
 }
 
