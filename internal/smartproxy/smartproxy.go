@@ -38,6 +38,9 @@ type Upstream struct {
 	// through Config.Resolve and hands them an IP. Name-resolving upstreams
 	// (Xray) keep receiving the name.
 	LocalDNS bool
+	// Send, when set, writes the first flight instead of a plain Write. It is
+	// how built-in desync families cut the ClientHello.
+	Send func(c net.Conn, flight []byte) error
 }
 
 type Config struct {
@@ -95,6 +98,9 @@ type Proxy struct {
 	mu  sync.Mutex
 	ups []*upstreamState
 	mem map[string]memo
+	// dohFails counts consecutive resolver failures; dohOffUntil pauses it.
+	dohFails    int
+	dohOffUntil time.Time
 }
 
 func New(cfg Config) (*Proxy, error) {
@@ -330,7 +336,11 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 		return nil, nil, err
 	}
 	_ = conn.SetDeadline(time.Now().Add(p.cfg.FirstByteTimeout))
-	if _, err := conn.Write(flight); err != nil {
+	send := u.Send
+	if send == nil {
+		send = func(c net.Conn, f []byte) error { _, err := c.Write(f); return err }
+	}
+	if err := send(conn, flight); err != nil {
 		return fail(err)
 	}
 	header := make([]byte, 5)
@@ -378,10 +388,8 @@ func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Co
 	defer cancel()
 	d := net.Dialer{}
 	if (u.LocalDNS || u.Addr == "") && p.cfg.Resolve != nil && net.ParseIP(host) == nil {
-		if ips, err := p.cfg.Resolve(dctx, host); err == nil && len(ips) > 0 {
-			host = ips[0]
-		} else if ctx.Err() == nil {
-			p.logf("%s: encrypted DNS failed (%v); using the system resolver", host, err)
+		if ip, ok := p.resolve(dctx, host); ok {
+			host = ip
 		}
 	}
 	if u.Addr == "" {
@@ -582,4 +590,41 @@ func DialVia(ctx context.Context, socksAddr, host, port string, timeout time.Dur
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn, nil
+}
+
+// resolve asks the encrypted resolver, but never lets it make things worse.
+// DoH/DoT is itself filtered on many networks, so the wait is short and after
+// repeated failures the resolver is skipped for a while (system DNS is used
+// instead), then probed again.
+func (p *Proxy) resolve(ctx context.Context, host string) (string, bool) {
+	p.mu.Lock()
+	if time.Now().Before(p.dohOffUntil) {
+		p.mu.Unlock()
+		return "", false
+	}
+	p.mu.Unlock()
+	rctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	ips, err := p.cfg.Resolve(rctx, host)
+	if err == nil && len(ips) > 0 {
+		p.mu.Lock()
+		p.dohFails = 0
+		p.mu.Unlock()
+		return ips[0], true
+	}
+	if ctx.Err() != nil {
+		return "", false // the race ended; not the resolver's fault
+	}
+	p.mu.Lock()
+	p.dohFails++
+	off := p.dohFails >= 3 && !time.Now().Before(p.dohOffUntil)
+	if off {
+		p.dohOffUntil = time.Now().Add(5 * time.Minute)
+		p.dohFails = 0
+	}
+	p.mu.Unlock()
+	if off {
+		p.logf("encrypted DNS keeps failing here (%v); using the system resolver for 5 minutes", err)
+	}
+	return "", false
 }

@@ -65,6 +65,7 @@ func runSmart(args []string) int {
 	listen := fs.String("listen", smartListenDefault, "loopback SOCKS5 address for your applications")
 	strategies := fs.Int("strategies", 3, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")
 	noXray := fs.Bool("no-xray", false, "do not run the two Xray profiles")
+	noSelf := fs.Bool("no-self", false, "do not add ktest's built-in ClientHello cutting paths")
 	noDoH := fs.Bool("no-doh", false, "let ByeDPI paths use the system DNS (poisoned on many filtered networks)")
 	direct := fs.Bool("direct", false, "also race the ordinary system route (uses local DNS)")
 	stagger := fs.Duration("stagger", 300*time.Millisecond, "head start of the best-known path before the next one joins")
@@ -129,7 +130,7 @@ func runSmart(args []string) int {
 			}
 		}
 	}
-	if len(cores) == 0 {
+	if len(cores) == 0 && *noSelf {
 		fmt.Fprintln(os.Stderr, "nothing to run; extract the complete portable ZIP (cores/ and profiles/)")
 		return 1
 	}
@@ -189,7 +190,7 @@ func runSmart(args []string) int {
 	if ctx.Err() != nil {
 		return 0
 	}
-	if len(up) == 0 {
+	if len(up) == 0 && *noSelf {
 		fmt.Println("No upstream core started; run `ktest doctor`.")
 		return 1
 	}
@@ -198,6 +199,9 @@ func runSmart(args []string) int {
 	var ups []smartproxy.Upstream
 	for _, c := range up {
 		ups = append(ups, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port), LocalDNS: c.localDNS})
+	}
+	if !*noSelf {
+		ups = append(ups, smartproxy.DesyncUpstreams()...)
 	}
 	if *direct {
 		ups = append(ups, smartproxy.Upstream{Name: "direct (system route)", LocalDNS: true})
