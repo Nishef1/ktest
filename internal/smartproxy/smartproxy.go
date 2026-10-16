@@ -630,10 +630,14 @@ func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (wi
 	// misleading direct TCP socket which can connect but drop later packets.
 	if p.cfg.PreferVerifiedExit {
 		var verified []*upstreamState
-		for _,u:=range cands {
-			if u.Exit && u.AIEligible { verified=append(verified,u) }
+		for _, u := range cands {
+			if u.Exit && u.AIEligible {
+				verified = append(verified, u)
+			}
 		}
-		if len(verified)>0 {cands=verified}
+		if len(verified) > 0 {
+			cands = verified
+		}
 	}
 	if len(cands) == 0 { // no direct or exit path configured: use whatever relays
 		for _, u := range all {
