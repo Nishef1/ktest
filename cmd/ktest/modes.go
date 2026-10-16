@@ -34,12 +34,13 @@ func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.Doma
 	switch m {
 	case ModeBalanced:
 		cfg.ExitOnly = rules.Match
-	case ModeFast, ModeWindscribe:
+	case ModeFast:
 		cfg.ExitOnly = nil
-		cfg.PreferVerifiedExit = m == ModeWindscribe
-		if m == ModeFast {
-			cfg.Stagger = 125 * time.Millisecond
-		}
+		cfg.Stagger = 125 * time.Millisecond
+	case ModeWindscribe:
+		cfg.ExitOnly = nil
+		cfg.PreferVerifiedExit = false
+		cfg.RejectExits = true
 	case ModeVPN, ModeTor:
 		cfg.ExitOnly = func(string) bool { return true }
 	}
@@ -52,7 +53,7 @@ func (m ConnectionMode) message() string {
 	case ModeFast:
 		return "Speed first: direct, fronting, desync and VPN exits can win; public IP may change by site."
 	case ModeWindscribe:
-		return "Windscribe bootstrap only: HTTP 127.0.0.1:10801. Enable Windscribe firewall; no ktest whole-PC TUN."
+		return "IP-preserving local anti-DPI only (ByeDPI/ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."
 	case ModeVPN:
 		return "Exit-only: one verified foreign upstream pinned for this session; no direct fallback for managed apps."
 	case ModeTor:
