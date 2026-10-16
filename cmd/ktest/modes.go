@@ -41,6 +41,7 @@ func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.Doma
 		cfg.ExitOnly = nil
 		cfg.PreferVerifiedExit = false
 		cfg.RejectExits = true
+		cfg.LocalOnly = true
 	case ModeVPN, ModeTor:
 		cfg.ExitOnly = func(string) bool { return true }
 	}
