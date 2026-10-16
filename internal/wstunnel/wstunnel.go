@@ -97,7 +97,37 @@ func Dial(ctx context.Context, c Config) (net.Conn, error) {
 	return &Conn{c: conn, r: br}, nil
 }
 
-func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Conn, *bufio.Reader, error) {
+// DialStealth opens Windscribe's Stealth transport (stunnel): TLS, then the
+// raw OpenVPN TCP stream. Path and Host are not used.
+func DialStealth(ctx context.Context, c Config) (net.Conn, error) {
+	if c.Dial == nil || c.Addr == "" {
+		return nil, errors.New("stealth: Addr and Dial are required")
+	}
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 12 * time.Second
+	}
+	dctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	raw, err := c.Dial(dctx, c.Addr)
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(dctx, func() { _ = raw.Close() })
+	conn, err := clientTLS(dctx, raw, c)
+	if !stop() || err != nil {
+		_ = raw.Close()
+		if err == nil {
+			err = dctx.Err()
+		}
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
+
+// clientTLS runs a Chrome-like TLS handshake offering only http/1.1.
+func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = raw.SetDeadline(dl)
 	}
@@ -122,11 +152,19 @@ func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Co
 	}
 	u := utls.UClient(raw, conf, utls.HelloChrome_Auto)
 	if err := u.BuildHandshakeState(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	onlyHTTP11(u)
 	if err := u.HandshakeContext(ctx); err != nil {
-		return nil, nil, fmt.Errorf("TLS: %w", err)
+		return nil, fmt.Errorf("TLS: %w", err)
+	}
+	return u, nil
+}
+
+func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Conn, *bufio.Reader, error) {
+	u, err := clientTLS(ctx, raw, c)
+	if err != nil {
+		return nil, nil, err
 	}
 	keyBytes := make([]byte, 16)
 	if _, err := rand.Read(keyBytes); err != nil {

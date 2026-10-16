@@ -25,13 +25,20 @@ The local HTTP proxy is just a loopback bridge. **HTTP does NOT mean Windscribe'
 
 Set Windscribe to **OpenVPN TCP** (port 443) with the HTTP proxy above. Windscribe then sends `CONNECT <OpenVPN TCP IP>:443` to ktest. ktest waits for the first bytes: TLS/HTTP (Windscribe API) keeps the local anti-DPI dialer; anything else is OpenVPN and is re-wrapped exactly like Windscribe's own **WStunnel** protocol ([source](https://github.com/Windscribe/wstunnel)): TLS, then a WebSocket upgrade to `/tcp/127.0.0.1/1194`, then binary messages. The Windscribe node forwards that to its own OpenVPN server, so credentials, encryption and the public exit stay Windscribe's. Differences from the official client: a Chrome-like TLS ClientHello offering only `http/1.1`, and a **chosen SNI**.
 
-Carriers, tried in this order for each new OpenVPN connection (rotation starts after the last one used; a carrier whose stream stayed up ≥1 min and received ≥64 KiB stays first):
+### How a carrier is chosen (Shir-o-Khorshid style, Windscribe instead of Psiphon)
 
-1. **CDN** (only with `-windscribe-cdn`): TLS to a CDN edge with SNI = your hostname (or `-windscribe-cdn-sni`), certificate **verified** against that SNI, `Host:` your hostname. Direct TCP first, then the TCP leg through local anti-DPI.
-2. **Direct WStunnel**: TLS straight to the node's WStunnel address with SNI from `-windscribe-wstunnel-sni` (comma-separated, default `www.speedtest.net`). The WStunnel address is the OpenVPN TCP address **minus one** (observed: `68.67.118.163` → `.162`, `198.44.157.28` → `.27`); override with `-windscribe-wstunnel-ip`. The server certificate must name a `*.windscribe.com` host, otherwise the carrier is refused. Direct TCP first, then through local anti-DPI.
-3. **Raw OpenVPN TCP** through local Xray/ByeDPI (the previous behaviour).
+Shir-o-Khorshid, Se7en Pro and MahsaNG all run Psiphon: they scan CDN IPs and reach **Psiphon's own meek servers** that Psiphon keeps behind Cloudflare/Akamai/Fastly (`FrontedMeekCDNScan` / `FrontedMeekDialOverride` in psiphon-tunnel-core). Windscribe keeps no VPN server behind any CDN (its Cloudflare hostnames are only the website and API; checked 2026-10-16), so the CDN scan alone cannot reach it. What ktest copies is the method: many candidates, tested on your network, the first that really answers wins.
 
-`-windscribe-wstunnel=false` disables carrier 2. HTTP 101 proves the Windscribe WStunnel server answered; it is reported as `Windscribe WStunnel answered (HTTP 101) … VPN handshake not verified`.
+For each new OpenVPN connection ktest sends Windscribe's first OpenVPN packet over **every** carrier, launched 250 ms apart, and keeps the first one whose **OpenVPN server answers that packet** (a tls-auth-checked server reset). That proves the path end to end on this network right now, not just an open socket. The losers are closed.
+
+| Carrier | Where it goes | TLS SNI |
+| --- | --- | --- |
+| `CDN host@edge` (only with `-windscribe-cdn`) | your Cloudflare hostname → its origin, a Windscribe WStunnel IP | your hostname (or `-windscribe-cdn-sni`), certificate verified |
+| `WStunnel sni=…` | node's OpenVPN TCP IP **− 1**, WebSocket `/tcp/127.0.0.1/1194` | each of `-windscribe-wstunnel-sni` |
+| `Stealth sni=…` | node's OpenVPN TCP IP **+ 1**, TLS then raw OpenVPN | each of `-windscribe-wstunnel-sni` |
+| `raw OpenVPN +anti-DPI` | the OpenVPN TCP IP itself through local Xray/ByeDPI | none (not TLS) |
+
+Every TLS carrier runs twice: straight, and with its TCP leg through local Xray/ByeDPI (`+anti-DPI`). The direct carriers accept only a certificate naming a `*.windscribe.com` host. Default SNIs: `www.speedtest.net,www.digikala.com,www.aparat.com`. A carrier whose VPN stayed up ≥1 min with ≥64 KiB is launched first next time; one whose stream died within 20 s is launched last for ten minutes. `-windscribe-wstunnel=false` disables WStunnel and Stealth. The live feed prints `Windscribe OpenVPN server answered via …`; the Windscribe login itself is still checked by Windscribe.
 
 Measured on 2026-10-16 on the author's ISP with Windscribe disconnected: Windscribe's own WStunnel client failed against `68.67.118.162` (timeout / `tls: illegal parameter`), while this bridge with SNI `www.speedtest.net` got HTTP 101 from `68.67.118.162` and `198.44.157.27`, and a tls-auth-signed OpenVPN `P_CONTROL_HARD_RESET_CLIENT_V2` sent through it was answered with `P_CONTROL_HARD_RESET_SERVER_V2` by both. A full Windscribe login and sustained data transfer through the bridge is **not yet verified**.
 
@@ -42,10 +49,10 @@ ktest cannot create this for you; it needs your Cloudflare account and a domain 
 1. Pick one Windscribe location and its WStunnel IP (Windscribe log line `Connecting to IP: "…" protocol: "WStunnel"`, or OpenVPN TCP IP minus one).
 2. In Cloudflare DNS add an `A` record, e.g. `ws.example.com` → that IP, **Proxied** (orange cloud).
 3. SSL/TLS mode **Full** (not *Full (strict)*: the origin presents a `windscribe.com` certificate). WebSockets stay on (default).
-4. Optionally find reachable Cloudflare edge IPs (`ktest edges`, see [FRONTING.md](FRONTING.md)).
+4. Run ktest. Without `-windscribe-cdn-edge` it scans up to 300 official Cloudflare IPs for edges this network reaches **and** that carry your hostname to a WebSocket upgrade (HTTP 101), and keeps the six fastest, like Shir-o-Khorshid's IP scan.
 
 ```powershell
-go run ./cmd/ktest connect -mode windscribe -windscribe-cdn ws.example.com -windscribe-cdn-edge 104.16.0.1,172.67.0.1 -v
+go run ./cmd/ktest connect -mode windscribe -windscribe-cdn ws.example.com -v
 ```
 
 Every OpenVPN connection then reaches that **one** origin, whatever location Windscribe shows; keep Windscribe on the same location to avoid confusion. Cloudflare sees only TLS-wrapped OpenVPN between you and Windscribe; it is a transport hop, not an exit. Check Cloudflare's terms for your plan before relying on it.

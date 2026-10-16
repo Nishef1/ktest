@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
+	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/revive"
@@ -113,7 +114,7 @@ type connectOptions struct {
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
 		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12, windscribeReconnect: true,
-		ws:      wsOptions{direct: true, sni: "www.speedtest.net"},
+		ws:      wsOptions{direct: true, sni: defaultWindscribeSNIs},
 		stagger: 250 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
 		stopHint: "Press Ctrl+C to disconnect",
 	}
@@ -127,13 +128,13 @@ func runConnect(args []string) int {
 	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, vpn (all exit-only), tor (Tor-only)")
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", "", "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
-	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: carry OpenVPN TCP inside WStunnel straight to the Windscribe server with a chosen SNI")
-	fs.StringVar(&o.ws.sni, "windscribe-wstunnel-sni", o.ws.sni, "comma-separated TLS SNIs for the direct WStunnel carrier (rotated)")
+	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: race WStunnel and Stealth straight to the Windscribe node with chosen SNIs")
+	fs.StringVar(&o.ws.sni, "windscribe-wstunnel-sni", o.ws.sni, "comma-separated TLS SNIs raced on the direct carriers")
 	fs.StringVar(&o.ws.serverIP, "windscribe-wstunnel-ip", "", "Windscribe WStunnel server IP (default: the OpenVPN TCP IP minus one, as Windscribe numbers its nodes)")
 	fs.StringVar(&o.ws.path, "windscribe-wstunnel-path", "", "WStunnel path (default "+wstunnel.DefaultPath+")")
 	fs.StringVar(&o.ws.cdnHost, "windscribe-cdn", "", "your Cloudflare hostname whose proxied DNS record points at a Windscribe WStunnel IP; tried first")
 	fs.StringVar(&o.ws.cdnSNI, "windscribe-cdn-sni", "", "TLS SNI for the CDN carrier (default: -windscribe-cdn)")
-	fs.StringVar(&o.ws.cdnEdges, "windscribe-cdn-edge", "", "comma-separated CDN edge IPs to connect to (default: resolve -windscribe-cdn)")
+	fs.StringVar(&o.ws.cdnEdges, "windscribe-cdn-edge", "", "comma-separated CDN edge IPs (default: scan Cloudflare for edges that reach -windscribe-cdn)")
 	fs.StringVar(&o.listen, "listen", o.listen, "loopback SOCKS5 address for your applications")
 	fs.IntVar(&o.strategies, "strategies", o.strategies, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")
 	fs.BoolVar(&o.noXray, "no-xray", false, "do not run Xray profiles (including generated local TCP methods in Windscribe mode)")
@@ -215,8 +216,8 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	t := s.t
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
-		if strings.HasPrefix(e.Path, "wstunnel") {
-			t.Line(toneInfo, "%-26s Windscribe WStunnel answered (HTTP 101) via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
+		if isWindscribeCarrier(e.Path) {
+			t.Line(toneOK, "%-26s Windscribe OpenVPN server answered via %s (%s); login is up to Windscribe", e.Host, e.Path, shortDur(e.Took))
 			return
 		}
 		t.Line(toneInfo, "%-26s TCP proxy accepted via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
@@ -596,7 +597,15 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				if logf == nil {
 					logf = func(string, ...any) {}
 				}
-				dial = newWSBridge(o.ws, proxy.DialWindscribeLocal, cfg.OnEvent, logf).Dial
+				bridge := newWSBridge(o.ws, proxy.DialWindscribeLocal, cfg.OnEvent, logf)
+				bridge.note = func(f string, a ...any) { t.Line(toneInfo, f, a...) }
+				if o.ws.cdnHost != "" && o.ws.cdnEdges == "" {
+					if ips, err := edges.CloudflareCandidates(300); err == nil {
+						t.Line(toneInfo, "Scanning %d Cloudflare IPs for edges that reach %s", len(ips), o.ws.cdnHost)
+						go bridge.scanCDNEdges(ctx, ips)
+					}
+				}
+				dial = bridge.Dial
 			}
 			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String(), dial)
 		} else {

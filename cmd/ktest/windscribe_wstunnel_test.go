@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
-	"io"
 	"net"
 	"strings"
 	"sync"
@@ -76,21 +75,54 @@ func TestLooksTLSorHTTP(t *testing.T) {
 }
 
 // fakeConn answers with a label so tests can tell which dialer carried it.
-func fakeConn(label string) net.Conn {
+func TestStealthIsOneAboveOpenVPNTCP(t *testing.T) {
+	if got, ok := neighbourIP("68.67.118.163", +1); !ok || got != "68.67.118.164" {
+		t.Fatalf("got %s", got)
+	}
+	if _, ok := neighbourIP("10.0.0.254", +1); ok {
+		t.Fatal("x.x.x.255 is not a node address")
+	}
+}
+
+// fakeServer answers the first packet with label after delay; silent never
+// answers.
+func fakeServer(label string, delay time.Duration, silent bool, closed chan<- string) net.Conn {
 	a, b := net.Pipe()
 	go func() {
+		defer func() {
+			b.Close()
+			if closed != nil {
+				closed <- label
+			}
+		}()
 		buf := make([]byte, 64)
-		if _, err := b.Read(buf); err == nil {
-			b.Write([]byte(label))
+		if _, err := b.Read(buf); err != nil {
+			return
 		}
-		b.Close()
+		if silent {
+			_, _ = b.Read(buf) // until closed
+			return
+		}
+		time.Sleep(delay)
+		if _, err := b.Write([]byte(label)); err != nil {
+			return
+		}
+		_, _ = b.Read(buf) // keep the stream open until closed
 	}()
 	return a
 }
 
+type carrierSpec struct {
+	name   string
+	fail   bool
+	silent bool
+	delay  time.Duration
+}
+
 type dialLog struct {
-	mu    sync.Mutex
-	calls []string
+	mu     sync.Mutex
+	calls  []string
+	closed chan string
 }
 
 func (d *dialLog) add(s string) {
@@ -99,94 +131,153 @@ func (d *dialLog) add(s string) {
 	d.mu.Unlock()
 }
 
-func testBridge(log *dialLog, failing map[string]bool) *wsBridge {
-	carrier := func(name string) wsCarrier {
-		return wsCarrier{name: name, open: func(ctx context.Context, host, port string) (net.Conn, error) {
-			log.add(name)
-			if failing[name] {
-				return nil, errors.New("blocked")
-			}
-			return fakeConn(name), nil
-		}}
-	}
+func testBridge(log *dialLog, specs ...carrierSpec) *wsBridge {
 	local := func(ctx context.Context, host, port string) (net.Conn, error) {
 		log.add("local:" + host)
-		return fakeConn("local"), nil
+		return fakeServer("local", 0, false, nil), nil
 	}
-	b := &wsBridge{local: local, logf: func(string, ...any) {}, next: map[string]int{}}
-	b.carriers = []wsCarrier{carrier("cdn"), carrier("direct"), {name: "raw", open: local}}
+	b := newWSBridge(wsOptions{}, local, nil, func(string, ...any) {})
+	b.stagger = 5 * time.Millisecond
+	b.candidates = func(string) []wsCarrier {
+		var cs []wsCarrier
+		for _, s := range specs {
+			cs = append(cs, wsCarrier{name: s.name, open: func(ctx context.Context, host, port string) (net.Conn, error) {
+				log.add(s.name)
+				if s.fail {
+					return nil, errors.New("blocked")
+				}
+				return fakeServer(s.name, s.delay, s.silent, log.closed), nil
+			}})
+		}
+		return cs
+	}
 	return b
 }
 
-func roundTrip(t *testing.T, b *wsBridge, host string, first []byte) string {
+// roundTrip writes first and returns what the carrier answered.
+func roundTrip(t *testing.T, b *wsBridge, host string, first []byte) (string, net.Conn) {
 	t.Helper()
 	c, err := b.Dial(context.Background(), host, "443")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
 	if _, err := c.Write(first); err != nil {
-		t.Fatal(err)
+		c.Close()
+		return "error: " + err.Error(), nil
 	}
-	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	got, _ := io.ReadAll(c)
-	return string(got)
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 64)
+	n, _ := c.Read(buf)
+	return string(buf[:n]), c
 }
 
 var openvpnReset = []byte{0x00, 0x0e, 0x38, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0}
 
-func TestBridgeSendsOnlyOpenVPNThroughWStunnel(t *testing.T) {
+func TestBridgeSendsOnlyOpenVPNToTheRace(t *testing.T) {
 	log := &dialLog{}
-	b := testBridge(log, nil)
-	if got := roundTrip(t, b, "api.windscribe.com", []byte{0x16, 0x03, 0x01}); got != "local" {
+	b := testBridge(log, carrierSpec{name: "WStunnel a"})
+	if got, c := roundTrip(t, b, "api.windscribe.com", []byte{0x16, 0x03, 0x01}); got != "local" {
 		t.Fatalf("hostname went to %q", got)
+	} else {
+		c.Close()
 	}
-	if got := roundTrip(t, b, "68.67.118.163", []byte{0x16, 0x03, 0x01}); got != "local" {
+	if got, c := roundTrip(t, b, "68.67.118.163", []byte{0x16, 0x03, 0x01}); got != "local" {
 		t.Fatalf("TLS to an IP went to %q", got)
+	} else {
+		c.Close()
 	}
-	if got := roundTrip(t, b, "68.67.118.163", openvpnReset); got != "cdn" {
-		t.Fatalf("OpenVPN went to %q, want first carrier", got)
+	got, c := roundTrip(t, b, "68.67.118.163", openvpnReset)
+	if got != "WStunnel a" {
+		t.Fatalf("OpenVPN went to %q", got)
+	}
+	c.Close()
+}
+
+func TestRaceTakesFirstAnswerNotFirstSocket(t *testing.T) {
+	log := &dialLog{closed: make(chan string, 8)}
+	b := testBridge(log,
+		carrierSpec{name: "CDN dead", fail: true},
+		carrierSpec{name: "WStunnel silent", silent: true},
+		carrierSpec{name: "Stealth slow", delay: 300 * time.Millisecond},
+		carrierSpec{name: "Stealth fast"},
+	)
+	got, c := roundTrip(t, b, "68.67.118.163", openvpnReset)
+	if got != "Stealth fast" {
+		t.Fatalf("winner %q", got)
+	}
+	defer c.Close()
+	// Every loser that opened a socket is closed; the winner stays open.
+	losers := map[string]bool{}
+	timeout := time.After(3 * time.Second)
+	for len(losers) < 2 {
+		select {
+		case name := <-log.closed:
+			if name == "Stealth fast" {
+				t.Fatal("winner was closed")
+			}
+			losers[name] = true
+		case <-timeout:
+			t.Fatalf("losers not closed: %v", losers)
+		}
 	}
 }
 
-func TestBridgeRotatesAndFallsBackToRawLocal(t *testing.T) {
-	log := &dialLog{}
-	b := testBridge(log, map[string]bool{"cdn": true, "direct": true})
-	if got := roundTrip(t, b, "68.67.118.163", openvpnReset); got != "local" {
-		t.Fatalf("all WStunnel carriers failed but got %q", got)
-	}
-	if strings.Join(log.calls, ",") != "cdn,direct,local:68.67.118.163" {
-		t.Fatalf("order %v", log.calls)
-	}
-
-	log2 := &dialLog{}
-	b2 := testBridge(log2, nil)
-	first := roundTrip(t, b2, "68.67.118.163", openvpnReset)
-	second := roundTrip(t, b2, "68.67.118.163", openvpnReset)
-	if first != "cdn" || second != "direct" {
-		t.Fatalf("a short-lived stream should rotate: %q then %q", first, second)
+func TestRaceFailsWhenNothingAnswers(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "a", fail: true}, carrierSpec{name: "b", fail: true})
+	if got, _ := roundTrip(t, b, "68.67.118.163", openvpnReset); !strings.Contains(got, "no Windscribe carrier answered") {
+		t.Fatalf("got %q", got)
 	}
 }
 
-func TestBridgeKeepsCarrierThatCarriedAVPN(t *testing.T) {
-	b := testBridge(&dialLog{}, nil)
-	_, done, err := b.openTunnel(context.Background(), "68.67.118.163", "443")
+func TestRaceOrderLearnsFromStreamLifetime(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "a"}, carrierSpec{name: "b"}, carrierSpec{name: "c"})
+	key := "68.67.118.163:443"
+	_, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset)
 	if err != nil {
 		t.Fatal(err)
 	}
-	done(2*time.Minute, 1<<20)
-	if b.next["68.67.118.163:443"] != 0 {
-		t.Fatal("working carrier was rotated away")
+	done(2*time.Second, 100) // answered but died at once
+	order := b.ordered(key, b.carriersFor("68.67.118.163"))
+	if order[len(order)-1].name != "a" {
+		t.Fatalf("early death not demoted: %v", order[len(order)-1].name)
+	}
+	b.mu.Lock()
+	b.bad = map[string]map[string]time.Time{}
+	b.mu.Unlock()
+	b.good[key] = "c"
+	if order := b.ordered(key, b.carriersFor("68.67.118.163")); order[0].name != "c" {
+		t.Fatalf("working carrier not first: %v", order[0].name)
 	}
 }
 
-func TestBridgeReportsUnverifiedTunnel(t *testing.T) {
+func TestBridgeReportsAnsweredCarrier(t *testing.T) {
 	var got []smartproxy.Event
-	b := testBridge(&dialLog{}, nil)
-	b.report = func(e smartproxy.Event) { got = append(got, e) }
-	roundTrip(t, b, "68.67.118.163", openvpnReset)
-	if len(got) != 1 || !got[0].TCPOnly || got[0].OK || got[0].Path != "cdn" {
+	var mu sync.Mutex
+	b := testBridge(&dialLog{}, carrierSpec{name: "WStunnel sni=x"})
+	b.report = func(e smartproxy.Event) { mu.Lock(); got = append(got, e); mu.Unlock() }
+	_, c := roundTrip(t, b, "68.67.118.163", openvpnReset)
+	c.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || !got[0].TCPOnly || got[0].OK || got[0].Path != "WStunnel sni=x" || !isWindscribeCarrier(got[0].Path) {
 		t.Fatalf("events %+v", got)
+	}
+}
+
+func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
+	b := newWSBridge(wsOptions{direct: true, sni: "a.example,b.example", cdnHost: "ws.example.com"}, nil, nil, func(string, ...any) {})
+	var names []string
+	for _, c := range b.carriersFor("68.67.118.163") {
+		names = append(names, c.name)
+	}
+	all := strings.Join(names, "\n")
+	for _, want := range []string{"CDN ws.example.com@ws.example.com:443", "WStunnel sni=a.example", "Stealth sni=b.example +anti-DPI", "raw OpenVPN +anti-DPI"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("missing %q in\n%s", want, all)
+		}
+	}
+	if len(names) != 2+2*2*2+1 {
+		t.Fatalf("%d carriers:\n%s", len(names), all)
 	}
 }
 

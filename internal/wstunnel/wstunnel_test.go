@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
@@ -182,5 +183,36 @@ func TestConfigValidation(t *testing.T) {
 		if _, err := Dial(context.Background(), c); err == nil {
 			t.Fatalf("accepted %+v", c)
 		}
+	}
+}
+
+func TestStealthCarriesRawStreamOverTLS(t *testing.T) {
+	cert := httptest.NewTLSServer(http.NotFoundHandler())
+	defer cert.Close()
+	l, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: cert.TLS.Certificates})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = io.Copy(c, c) // echo
+	}()
+	c, err := DialStealth(context.Background(), Config{Addr: l.Addr().String(), SNI: "www.speedtest.net", Dial: dialTCP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("openvpn")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 7)
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(c, got); err != nil || string(got) != "openvpn" {
+		t.Fatalf("%q %v", got, err)
 	}
 }
