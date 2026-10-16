@@ -13,11 +13,12 @@ import (
 func TestWindscribeLocalOnlyRejectsForeignExits(t *testing.T) {
 	if _, err := New(Config{
 		RejectExits: true,
+		LocalOnly: true,
 		Upstreams:   []Upstream{{Name: "foreign", Exit: true, Addr: "127.0.0.1:10002"}},
 	}); err == nil {
 		t.Fatal("started foreign exit in Windscribe local-only mode")
 	}
-	p, err := New(Config{RejectExits: true, Upstreams: []Upstream{
+	p, err := New(Config{RejectExits: true, LocalOnly: true, Upstreams: []Upstream{
 		{Name: "packet cutter", Send: func(net.Conn, []byte) error { return nil }},
 		{Name: "local ByeDPI", Addr: "127.0.0.1:12001", LocalBypass: true},
 	}})
@@ -26,6 +27,12 @@ func TestWindscribeLocalOnlyRejectsForeignExits(t *testing.T) {
 	}
 	if err := p.Add(Upstream{Name: "Aether", Exit: true, Addr: "127.0.0.1:12002"}); err == nil {
 		t.Fatal("dynamically added forbidden foreign exit")
+	}
+	if err := p.Add(Upstream{Name:"plain",Rank:0});err==nil {
+		t.Fatal("dynamic plain connection bypassed local-only policy")
+	}
+	if err := p.Add(Upstream{Name:"unknown relay",Addr:"127.0.0.1:22002"});err==nil {
+		t.Fatal("dynamic unverified SOCKS relay bypassed local-only policy")
 	}
 	if p.HasVerifiedExit() {
 		t.Fatal("foreign exit was registered")
@@ -132,5 +139,18 @@ func TestWindscribeNoLocalBypassReturnsErrorWithoutDial(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "no local IP-preserving") {
 		t.Fatalf("wrong error %v", err)
+	}
+}
+
+func TestWindscribeLocalOnlyRejectsPlainAndUnknownProxiesAtStartup(t *testing.T) {
+	for _, u := range []Upstream{
+		{Name:"plain",Addr:""},
+		{Name:"plain fake label",Addr:"127.0.0.1:22001"},
+		{Name:"untrusted remote",Addr:"198.51.100.4:22002",LocalBypass:true},
+		{Name:"front takeover",Takeover:func(context.Context,string,string,[]byte)(Session,error){return nil,nil}},
+	} {
+		if _,err:=New(Config{LocalOnly:true,RejectExits:true,Upstreams:[]Upstream{u}});err==nil{
+			t.Fatalf("unsafe upstream %q accepted",u.Name)
+		}
 	}
 }
