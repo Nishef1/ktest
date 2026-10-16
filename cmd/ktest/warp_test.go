@@ -176,3 +176,10 @@ func TestLastGoodProfileGoesFirstAndWarpStateAndRegisterOrder(t *testing.T) {
 		t.Fatalf("%v", without)
 	}
 }
+
+func TestWindscribeCannotLaunchAetherOrPsiphon(t *testing.T) {
+	note,stop:=startWarp(context.Background(),connectOptions{mode:ModeWindscribe},nil,nil,nil)
+	if stop==nil{t.Fatal("expected no-op teardown")}
+	defer stop()
+	if !strings.Contains(note,"prohibited"){t.Fatalf("Aether not rejected: %s",note)}
+}
