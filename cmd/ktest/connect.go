@@ -26,6 +26,7 @@ import (
 
 const (
 	connectListenDefault = "127.0.0.1:10800"
+	connectHTTPDefault   = "127.0.0.1:10801"
 	connectPort          = 10800
 	connectXrayBPort     = xrayPort // 10808
 	connectXrayAPort     = 10811
@@ -72,6 +73,8 @@ type connectOptions struct {
 	noDirect   bool
 	noFront    bool
 	noWarp     bool
+	noHTTP     bool
+	httpListen string
 	tun        bool
 	cert       bool
 	forceFront bool
@@ -84,7 +87,7 @@ type connectOptions struct {
 
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
-		base: base, listen: connectListenDefault, strategies: 12,
+		base: base, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12,
 		stagger: 250 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
 		stopHint: "Press Ctrl+C to disconnect",
 	}
@@ -103,6 +106,8 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.noDirect, "no-direct", false, "do not race the plain, uncut connection")
 	fs.BoolVar(&o.noFront, "no-front", false, "do not use domain fronting even if the ktest CA is trusted")
 	fs.BoolVar(&o.noWarp, "no-warp", false, "do not start the WARP exit even if it is enabled")
+	fs.BoolVar(&o.noHTTP, "no-http", false, "disable the local HTTP proxy for Windscribe")
+	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
 	fs.BoolVar(&o.tun, "tun", false, "route the whole system through ktest (Windows; asks for Administrator)")
 	fs.BoolVar(&o.cert, "cert", false, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", false, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
@@ -416,6 +421,19 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	var lport int
 	fmt.Sscanf(portText, "%d", &lport)
 	go func() { _ = proxy.Serve(ctx, l) }()
+	// Windscribe accepts an HTTP upstream proxy, while Connect speaks SOCKS5.
+	// The HTTP bridge shares Connect's learned path selection without changing
+	// system DNS, routing, or trust stores.
+	httpAddr := ""
+	if !o.noHTTP {
+		var stopHTTP func()
+		httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String())
+		if err != nil {
+			t.Note("Windscribe HTTP proxy unavailable: %v (normal SOCKS5 still works)", err)
+		} else {
+			defer stopHTTP()
+		}
+	}
 	warpNote, stopWarp := startWarp(ctx, o, proxy, &dns, t)
 	defer stopWarp()
 
@@ -458,6 +476,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	lines := []string{
 		t.Bold("Proxy   ") + "  socks5://" + l.Addr().String() + t.Dim("   (turn on \"proxy DNS\" / remote DNS in the app)"),
 		t.Bold("Paths   ") + fmt.Sprintf("  %d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)) + frontSuffix(fronter),
+	}
+	if httpAddr != "" {
+		lines = append(lines, t.Bold("HTTP    ")+"  http://"+httpAddr+t.Dim("   (Windscribe Proxy Settings; TCP only)"))
 	}
 	if frontNote != "" {
 		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))
