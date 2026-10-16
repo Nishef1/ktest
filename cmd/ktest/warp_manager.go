@@ -181,11 +181,12 @@ type warpManager struct {
 	profs  []aetherProfile
 	logsMu sync.Mutex
 	files  []*os.File
+	monitor *windscribeMonitor
 }
 
 // startWarp runs the search for a working exit in the background and returns
 // the note for the result box and the function that stops everything.
-func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, dns *dnscheck.Result, t *term) (string, func()) {
+func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, dns *dnscheck.Result, t *term, monitors ...*windscribeMonitor) (string, func()) {
 	if o.noWarp {
 		return "off (-no-warp)", func() {}
 	}
@@ -221,6 +222,7 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	_ = os.MkdirAll(warpDir(), 0o700)
 	last, _ := os.ReadFile(lastGoodFile())
 	m := &warpManager{o: o, proxy: proxy, dns: dns, t: t, profs: lastGoodFirst(profs, strings.TrimSpace(string(last)))}
+	if len(monitors) > 0 { m.monitor = monitors[0] }
 	mctx, stopManager := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -241,33 +243,77 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 // maxExits is how many tunnels are kept open at once.
 const maxExits = 3
 
-// run searches, holds the tunnels that were found until all of them have ended,
-// and searches again; after a round with no result it waits before the next.
+// waitWhileConnected preserves an active foreign transport if Windscribe
+// needs it as its own OpenVPN TCP upstream; it only pauses NEW discovery.
+func (m *warpManager) waitWhileConnected(ctx context.Context) bool {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for m.monitor != nil && m.monitor.Connected() {
+		select {
+		case <-ctx.Done(): return false
+		case <-ticker.C:
+		}
+	}
+	return ctx.Err() == nil
+}
+
+// waitRetry allows immediate recovery when Windscribe changes from connected
+// to disconnected. A failed ordinary search otherwise backs off for two
+// minutes instead of repeatedly hammering blocked gateways.
+func (m *warpManager) waitRetry(ctx context.Context) bool {
+	timer := time.NewTimer(2 * time.Minute)
+	defer timer.Stop()
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	sawConnected := m.monitor != nil && m.monitor.Connected()
+	for {
+		select {
+		case <-ctx.Done(): return false
+		case <-timer.C: return true
+		case <-tick.C:
+			if m.monitor == nil { continue }
+			if m.monitor.Connected() { sawConnected = true }
+			if sawConnected && m.monitor.State() == windscribeDisconnected {
+				return true
+			}
+		}
+	}
+}
+
+// run keeps established foreign TCP transports alive when Windscribe reports
+// Connected; killing one would also kill an OpenVPN session using that path.
+// Dead transports are removed immediately rather than advertised as healthy.
 func (m *warpManager) run(ctx context.Context) {
 	for ctx.Err() == nil {
+		if !m.waitWhileConnected(ctx) { return }
 		found := m.search(ctx)
 		if len(found) == 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(2 * time.Minute):
-			}
+			if !m.waitRetry(ctx) { return }
 			continue
 		}
+		done := make(chan *warpFound, len(found))
 		for _, w := range found {
+			go func(w *warpFound) {
+				select {
+				case <-ctx.Done():
+				case <-w.rc.done: done <- w
+				}
+			}(w)
+		}
+		remaining := len(found)
+		for remaining > 0 {
 			select {
 			case <-ctx.Done():
-				for _, x := range found {
-					x.rc.cancel()
-					x.rc.stop()
-				}
+				for _, w := range found { w.rc.cancel(); w.rc.stop() }
 				return
-			case <-w.rc.done:
-				m.t.Line(toneWarn, "%s ended", w.p.Label)
-				w.rc.stop()
+			case ended := <-done:
+				remaining--
+				m.proxy.Remove("Exit: " + ended.p.Label)
+				m.t.Line(toneWarn, "%s ended; no longer eligible for new connections", ended.p.Label)
+				ended.rc.stop()
 			}
 		}
-		m.t.Line(toneWarn, "Every exit path ended; searching again")
+		m.t.Line(toneWarn, "Every exit path ended; searching again when Windscribe needs recovery")
 	}
 }
 
@@ -302,6 +348,7 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 		go func() {
 			defer wg.Done()
 			for ctx.Err() == nil {
+				if m.monitor != nil && m.monitor.Connected() { return }
 				i, ok := take()
 				if !ok {
 					return
