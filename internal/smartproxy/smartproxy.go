@@ -41,6 +41,9 @@ type Upstream struct {
 	// Send, when set, writes the first flight instead of a plain Write. It is
 	// how built-in desync families cut the ClientHello.
 	Send func(c net.Conn, flight []byte) error
+	// Network is "tcp" (default) or "tcp6". IPv6 paths matter because some
+	// networks filter the IPv4 and IPv6 data planes differently.
+	Network string
 }
 
 type Config struct {
@@ -53,8 +56,10 @@ type Config struct {
 	FirstByteTimeout time.Duration
 	// MemoryTTL is how long a per-host winner is trusted first.
 	MemoryTTL time.Duration
-	// Resolve is used for LocalDNS upstreams; nil leaves them on system DNS.
-	Resolve Resolver
+	// Resolve (A records) and Resolve6 (AAAA records) are used for LocalDNS
+	// upstreams; nil leaves them on system DNS.
+	Resolve  Resolver
+	Resolve6 Resolver
 	// Logf receives one line per decision; nil is silent.
 	Logf func(format string, args ...any)
 }
@@ -387,13 +392,17 @@ func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Co
 	dctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
 	defer cancel()
 	d := net.Dialer{}
-	if (u.LocalDNS || u.Addr == "") && p.cfg.Resolve != nil && net.ParseIP(host) == nil {
-		if ip, ok := p.resolve(dctx, host); ok {
+	network, resolver := "tcp", p.cfg.Resolve
+	if u.Network == "tcp6" {
+		network, resolver = "tcp6", p.cfg.Resolve6
+	}
+	if (u.LocalDNS || u.Addr == "") && resolver != nil && net.ParseIP(host) == nil {
+		if ip, ok := p.resolve(dctx, resolver, host); ok {
 			host = ip
 		}
 	}
 	if u.Addr == "" {
-		return d.DialContext(dctx, "tcp", net.JoinHostPort(host, port))
+		return d.DialContext(dctx, network, net.JoinHostPort(host, port))
 	}
 	conn, err := d.DialContext(dctx, "tcp", u.Addr)
 	if err != nil {
@@ -596,7 +605,7 @@ func DialVia(ctx context.Context, socksAddr, host, port string, timeout time.Dur
 // DoH/DoT is itself filtered on many networks, so the wait is short and after
 // repeated failures the resolver is skipped for a while (system DNS is used
 // instead), then probed again.
-func (p *Proxy) resolve(ctx context.Context, host string) (string, bool) {
+func (p *Proxy) resolve(ctx context.Context, resolver Resolver, host string) (string, bool) {
 	p.mu.Lock()
 	if time.Now().Before(p.dohOffUntil) {
 		p.mu.Unlock()
@@ -605,7 +614,7 @@ func (p *Proxy) resolve(ctx context.Context, host string) (string, bool) {
 	p.mu.Unlock()
 	rctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
-	ips, err := p.cfg.Resolve(rctx, host)
+	ips, err := resolver(rctx, host)
 	if err == nil && len(ips) > 0 {
 		p.mu.Lock()
 		p.dohFails = 0

@@ -120,7 +120,7 @@ func TestDoHBreakerStopsWaitingOnAFilteredResolver(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 10; i++ {
-		if _, ok := p.resolve(context.Background(), "youtube.com"); ok {
+		if _, ok := p.resolve(context.Background(), failing, "youtube.com"); ok {
 			t.Fatal("failed lookup reported success")
 		}
 	}

@@ -46,3 +46,36 @@ func TestDoHResolvesCachesAndVerifiesCertificates(t *testing.T) {
 		t.Fatal("certificate verification was skipped")
 	}
 }
+
+func TestDoHAAAAReturnsIPv6Records(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("type") != "AAAA" {
+			http.Error(w, "want AAAA", 400)
+			return
+		}
+		w.Write([]byte(`{"Status":0,"Answer":[{"type":28,"TTL":60,"data":"2a00:1450:4001:81b::200e"}]}`))
+	}))
+	defer srv.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}
+	r := NewDoHType([]DoHEndpoint{{URL: "https://example.com/resolve"}}, dial, pool, "AAAA")
+	ips, err := r(context.Background(), "youtube.com")
+	if err != nil || len(ips) != 1 || ips[0] != "2a00:1450:4001:81b::200e" {
+		t.Fatalf("ips=%v err=%v", ips, err)
+	}
+}
+
+func TestDesyncFamiliesIncludeIPv6Twins(t *testing.T) {
+	v6 := 0
+	for _, u := range DesyncUpstreams() {
+		if u.Network == "tcp6" {
+			v6++
+		}
+	}
+	if v6 != 2 {
+		t.Fatalf("expected 2 IPv6 families, got %d", v6)
+	}
+}

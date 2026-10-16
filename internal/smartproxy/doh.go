@@ -47,6 +47,11 @@ type dohAnswer struct {
 // NewDoH returns a caching resolver. Certificates are always verified. Names
 // that are already IP literals are returned as they are.
 func NewDoH(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool) Resolver {
+	return NewDoHType(endpoints, dial, roots, "A")
+}
+
+// NewDoHType is NewDoH for a record type: "A" (IPv4) or "AAAA" (IPv6).
+func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qtype string) Resolver {
 	transport := &http.Transport{
 		DialContext:         dial,
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
@@ -122,13 +127,13 @@ func NewDoH(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool) Resolv
 		defer cancel()
 		var lastErr error
 		for _, ep := range endpoints {
-			ips, ttl, err := query(ctx, ep, host, "A")
+			ips, ttl, err := query(ctx, ep, host, qtype)
 			if err != nil {
 				lastErr = err
 				continue
 			}
 			if len(ips) == 0 {
-				lastErr = fmt.Errorf("%s: no A record", host)
+				lastErr = fmt.Errorf("%s: no %s record", host, qtype)
 				continue
 			}
 			if ttl < 30 {

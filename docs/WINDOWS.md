@@ -57,3 +57,12 @@ Encrypted DNS for ByeDPI paths: ByeDPI and the direct route resolve names with t
 DoH/DoT is itself filtered on many networks, so it must never be a dependency. The resolver gets at most 1.5 s per attempt; after three consecutive failures it is skipped for five minutes and the system resolver is used, then probed again. Xray paths never depend on it.
 
 `ktest smart` also adds four paths implemented inside ktest (no external core, no raw sockets, no administrator rights; `-no-self` removes them). They connect directly and differ only in how the ClientHello is cut: two TCP segments split inside the SNI, two TLS records split inside the SNI, records plus separate segments, and three records in three segments. Cut points and pauses are drawn at random for every connection, so there is no fixed byte or timing pattern, and the race learns per site which family the current network tolerates. All output is valid TLS/TCP (a ClientHello may be fragmented over records and segments); tests complete real TLS handshakes with every family. Whether any of them defeats a given filter is an empirical question for the target network; they only cost a duplicate flight when they lose.
+
+### Field notes from the Patterniha Telegram channel (https://t.me/patt_channel_x, read 2026-10-16)
+
+Secondary, dated, per-operator reports; treat them as hypotheses to measure, not guarantees. The channel is in Persian and publishes times without calendar dates.
+
+- Fragmentation is reported fully blocked on Hamrah-e Aval (MCI), IPv6 included, so Xray Fragment A/B and our `self:` cutting paths are not expected to help there. Reported alternatives there: CDN routes via ECH or IPv6, and MASQUE over HTTP/2.
+- Irancell is reported to accept fragment + fingerprint for Cloudflare CDN routes, while throttling the ECH domain's upload.
+- Serverless v52 is described as needing IPv6, and only for YouTube-style access. This is why `ktest smart` now includes two IPv6 twins (`self6:`) of the record-splitting families, resolving AAAA records, and races them against the IPv4 paths. The machine used for development has no global IPv6, so these were unit-tested only and could not be exercised live.
+- ECH and Cloudflare-specific tunnel settings from the channel need a TLS-terminating client; a transparent relay like `smart` cannot add them. MITM-DomainFronting is the channel's suggestion for direct YouTube; ktest does not install a CA, so that stays out of scope.

@@ -230,6 +230,7 @@ func runSmart(args []string) int {
 			return (&net.Dialer{Timeout: 6 * time.Second}).DialContext(ctx, "tcp", addr)
 		}
 		cfg.Resolve = smartproxy.NewDoH(smartproxy.DefaultDoH, dial, nil)
+		cfg.Resolve6 = smartproxy.NewDoHType(smartproxy.DefaultDoH, dial, nil, "AAAA")
 	}
 	if *verbose {
 		cfg.Logf = func(f string, a ...any) { fmt.Printf("  "+f+"\n", a...) }

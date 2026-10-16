@@ -149,7 +149,7 @@ func concat(parts [][]byte) []byte {
 // DesyncUpstreams are direct (system route, encrypted-DNS-resolved) paths that
 // differ only in how the ClientHello is cut. They add no external process.
 func DesyncUpstreams() []Upstream {
-	return []Upstream{
+	v4 := []Upstream{
 		{Name: "self: SNI split over 2 TCP segments", LocalDNS: true, Send: func(c net.Conn, f []byte) error {
 			cuts := cutsInSNI(f, 1)
 			if len(cuts) == 0 {
@@ -184,4 +184,13 @@ func DesyncUpstreams() []Upstream {
 			return writeSegments(c, recs)
 		}},
 	}
+	// IPv6 twins of the record-splitting families: field reports show some
+	// networks treat the two address families differently.
+	out := append([]Upstream(nil), v4...)
+	for _, u := range v4[1:3] {
+		u.Name = "self6: " + u.Name[len("self: "):]
+		u.Network = "tcp6"
+		out = append(out, u)
+	}
+	return out
 }
