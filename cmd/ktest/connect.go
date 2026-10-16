@@ -26,6 +26,7 @@ import (
 
 const (
 	connectListenDefault = "127.0.0.1:10800"
+	connectHTTPDefault   = "127.0.0.1:10801"
 	connectPort          = 10800
 	connectXrayBPort     = xrayPort // 10808
 	connectXrayAPort     = 10811
@@ -72,6 +73,9 @@ type connectOptions struct {
 	noDirect   bool
 	noFront    bool
 	noWarp     bool
+	noHTTP     bool
+	httpListen string
+	exitSocks  string
 	tun        bool
 	cert       bool
 	forceFront bool
@@ -84,7 +88,7 @@ type connectOptions struct {
 
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
-		base: base, listen: connectListenDefault, strategies: 12,
+		base: base, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12,
 		stagger: 250 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
 		stopHint: "Press Ctrl+C to disconnect",
 	}
@@ -103,6 +107,9 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.noDirect, "no-direct", false, "do not race the plain, uncut connection")
 	fs.BoolVar(&o.noFront, "no-front", false, "do not use domain fronting even if the ktest CA is trusted")
 	fs.BoolVar(&o.noWarp, "no-warp", false, "do not start the WARP exit even if it is enabled")
+	fs.BoolVar(&o.noHTTP, "no-http", false, "disable the local HTTP proxy for Windscribe")
+	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
+	fs.StringVar(&o.exitSocks, "exit-socks", "", "optional loopback SOCKS5 exit (Tor, Psiphon or authorized Worker), TCP only")
 	fs.BoolVar(&o.tun, "tun", false, "route the whole system through ktest (Windows; asks for Administrator)")
 	fs.BoolVar(&o.cert, "cert", false, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", false, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
@@ -356,6 +363,22 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if !o.noSelf {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
 	}
+	// An independent, already-running TCP exit (e.g. Tor, Psiphon or a
+	// user-owned serverless Worker) can carry Windscribe's TCP bootstrap
+	// when all direct anti-DPI routes fail. Never loop back into ktest.
+	if o.exitSocks != "" {
+		exit, e := net.ResolveTCPAddr("tcp", o.exitSocks)
+		socks, _ := net.ResolveTCPAddr("tcp", o.listen)
+		http, _ := net.ResolveTCPAddr("tcp", o.httpListen)
+		if e != nil || exit.IP == nil || !exit.IP.IsLoopback() || exit.Port == 0 ||
+			(socks != nil && exit.Port == socks.Port) || (http != nil && exit.Port == http.Port) {
+			t.Line(toneFail, "-exit-socks must be a distinct loopback SOCKS5 port (not ktest's own listeners)")
+			return 2
+		}
+		ups = append(ups, smartproxy.Upstream{
+			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, Late: true, Rank: 3,
+		})
+	}
 	if len(ups) == 0 && !o.forceFront {
 		t.Box("NOTHING TO RUN", toneFail, []string{"No path is available. Extract the complete portable ZIP (cores/ and profiles/)", "or run `ktest doctor`."})
 		return 1
@@ -416,6 +439,19 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	var lport int
 	fmt.Sscanf(portText, "%d", &lport)
 	go func() { _ = proxy.Serve(ctx, l) }()
+	// Windscribe accepts an HTTP upstream proxy, while Connect speaks SOCKS5.
+	// The HTTP bridge shares Connect's learned path selection without changing
+	// system DNS, routing, or trust stores.
+	httpAddr := ""
+	if !o.noHTTP {
+		var stopHTTP func()
+		httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String())
+		if err != nil {
+			t.Note("Windscribe HTTP proxy unavailable: %v (normal SOCKS5 still works)", err)
+		} else {
+			defer stopHTTP()
+		}
+	}
 	warpNote, stopWarp := startWarp(ctx, o, proxy, &dns, t)
 	defer stopWarp()
 
@@ -458,6 +494,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	lines := []string{
 		t.Bold("Proxy   ") + "  socks5://" + l.Addr().String() + t.Dim("   (turn on \"proxy DNS\" / remote DNS in the app)"),
 		t.Bold("Paths   ") + fmt.Sprintf("  %d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)) + frontSuffix(fronter),
+	}
+	if httpAddr != "" {
+		lines = append(lines, t.Bold("HTTP    ")+"  http://"+httpAddr+t.Dim("   (Windscribe Proxy Settings; TCP only)"))
 	}
 	if frontNote != "" {
 		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))

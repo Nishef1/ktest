@@ -14,7 +14,7 @@ From source: `go run ./cmd/ktest` (see "Where ktest looks for its files").
 
 ## 1. Connect
 
-Connect starts every available method at once and puts **one** local SOCKS5 address in front of them: `socks5://127.0.0.1:10800`. Point an application at it and turn on "proxy DNS" / remote DNS (in Firefox: Settings → Network Settings → Manual proxy → SOCKS Host `127.0.0.1`, Port `10800`, SOCKS v5, and tick "Proxy DNS when using SOCKS v5").
+Connect starts every available method at once and puts **one** local SOCKS5 address in front of them: `socks5://127.0.0.1:10800`. It also exposes a loopback HTTP CONNECT proxy at `http://127.0.0.1:10801` for clients such as Windscribe that accept an HTTP upstream proxy. Both share the same path-selection engine; `-no-http` disables the optional HTTP listener and `-http-listen 127.0.0.1:10802` changes its port. To add a working external SOCKS5 exit as a last resort, use `-exit-socks 127.0.0.1:<port>` (loopback only; not the ktest ports). **Windscribe setup:** see [WINDSCRIBE_BOOTSTRAP.md](WINDSCRIBE_BOOTSTRAP.md) and use **Proxy Settings**, not **Proxy Gateway**. This bridge carries TCP, not WireGuard/IKEv2 UDP, and an HTTP page working is not proof that a VPN tunnel is established. Point an application at it and turn on "proxy DNS" / remote DNS (in Firefox: Settings → Network Settings → Manual proxy → SOCKS Host `127.0.0.1`, Port `10800`, SOCKS v5, and tick "Proxy DNS when using SOCKS v5").
 
 The screen shows four phases with a percentage and a final state:
 
