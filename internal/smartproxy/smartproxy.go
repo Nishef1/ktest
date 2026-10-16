@@ -64,6 +64,9 @@ type Upstream struct {
 	// AIEligible means the remote exit IP was independently checked as non-Iran.
 	// An external SOCKS listener opening is not sufficient to set this flag.
 	AIEligible bool
+	// LocalBypass means this is a ktest-managed, loopback-only DPI-evasion
+	// SOCKS core making direct connections, never a foreign exit.
+	LocalBypass bool
 	// Late keeps the path out of the race until every other path has failed or
 	// lateAfter has passed, unless it is the remembered first choice. An exit
 	// that carries everything through a third party should be the last resort,
@@ -169,7 +172,8 @@ type Proxy struct {
 	ups             []*upstreamState
 	mem             map[string]memo
 	aiPinned        string // first working AI exit stays selected until this session ends
-	bootstrapPinned string // Windscribe TCP bootstrap uses one verified foreign upstream per session
+	bootstrapPinned string // Windscribe TCP bootstrap uses one local bypass per session
+	bootstrapSkip   string // avoid retrying the same failed DPI strategy next attempt
 }
 
 func New(cfg Config) (*Proxy, error) {
@@ -325,10 +329,87 @@ func (p *Proxy) Remove(name string) {
 	// pinned and fails closed if a previously chosen exit disappeared.
 }
 
+// HasLocalBypass reports whether an explicitly trusted local anti-DPI SOCKS
+// listener is registered. It does not prove that Windscribe's handshake works.
+func (p *Proxy) HasLocalBypass() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, u := range p.ups {
+		if u.LocalBypass && !u.Exit && u.Takeover == nil && u.Addr != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// DialLocalBypass is the only authorized Windscribe bootstrap dialer. It
+// rejects direct/plain and all exits, Tor, Aether, Psiphon, and takeover
+// fronting. The core must be a ktest-managed local TCP DPI bypass. A successful
+// SOCKS reply only confirms upstream TCP connectivity, not a VPN handshake.
+func (p *Proxy) DialLocalBypass(ctx context.Context, host, port string) (net.Conn, error) {
+	p.mu.Lock()
+	pinned, skip := p.bootstrapPinned, p.bootstrapSkip
+	p.mu.Unlock()
+	var candidates []*upstreamState
+	for _, u := range p.order(host) {
+		if !u.LocalBypass || u.Exit || u.Takeover != nil || u.Addr == "" {
+			continue
+		}
+		address, err := net.ResolveTCPAddr("tcp", u.Addr)
+		if err != nil || address.IP == nil || !address.IP.IsLoopback() {
+			continue
+		}
+		if pinned != "" && u.Name != pinned {
+			continue
+		}
+		candidates = append(candidates, u)
+	}
+	if len(candidates) == 0 {
+		return nil, errors.New("Windscribe local anti-DPI bootstrap unavailable; no foreign exit will be used")
+	}
+	if pinned == "" && skip != "" && len(candidates) > 1 {
+		for i, u := range candidates {
+			if u.Name == skip {
+				candidates = append(candidates[i+1:], candidates[:i+1]...)
+				break
+			}
+		}
+	}
+	var lastErr error
+	for _, u := range candidates {
+		began := time.Now()
+		conn, err := p.dial(ctx, u.Upstream, host, port)
+		if err != nil {
+			p.record(u, host, false, time.Since(began))
+			lastErr = err
+			continue
+		}
+		p.mu.Lock()
+		if p.bootstrapPinned == "" {
+			p.bootstrapPinned = u.Name
+		}
+		accepted := p.bootstrapPinned == u.Name
+		p.mu.Unlock()
+		if !accepted {
+			_ = conn.Close()
+			continue
+		}
+		p.record(u, host, true, time.Since(began))
+		p.logf("Windscribe TCP %s:%s via local anti-DPI %s (VPN negotiation not yet verified)", host, port, u.Name)
+		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
+		return conn, nil
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("all local Windscribe DPI bypass paths failed TCP CONNECT: %w", lastErr)
+	}
+	return nil, errors.New("Windscribe local bypass path changed during connection")
+}
+
 // ResetBootstrapPin is allowed only when the authoritative Windscribe CLI
 // reports a disconnected session. Live TCP streams are not touched.
 func (p *Proxy) ResetBootstrapPin() {
 	p.mu.Lock()
+	p.bootstrapSkip = p.bootstrapPinned
 	p.bootstrapPinned = ""
 	p.mu.Unlock()
 }
