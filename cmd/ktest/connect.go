@@ -75,6 +75,7 @@ type connectOptions struct {
 	noWarp     bool
 	noHTTP     bool
 	httpListen string
+	exitSocks   string
 	tun        bool
 	cert       bool
 	forceFront bool
@@ -108,6 +109,7 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.noWarp, "no-warp", false, "do not start the WARP exit even if it is enabled")
 	fs.BoolVar(&o.noHTTP, "no-http", false, "disable the local HTTP proxy for Windscribe")
 	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
+	fs.StringVar(&o.exitSocks, "exit-socks", "", "optional loopback SOCKS5 exit (Tor, Psiphon or authorized Worker), TCP only")
 	fs.BoolVar(&o.tun, "tun", false, "route the whole system through ktest (Windows; asks for Administrator)")
 	fs.BoolVar(&o.cert, "cert", false, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", false, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
@@ -360,6 +362,22 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	if !o.noSelf {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
+	}
+	// An independent, already-running TCP exit (e.g. Tor, Psiphon or a
+	// user-owned serverless Worker) can carry Windscribe's TCP bootstrap
+	// when all direct anti-DPI routes fail. Never loop back into ktest.
+	if o.exitSocks != "" {
+		exit, e := net.ResolveTCPAddr("tcp", o.exitSocks)
+		socks, _ := net.ResolveTCPAddr("tcp", o.listen)
+		http, _ := net.ResolveTCPAddr("tcp", o.httpListen)
+		if e != nil || exit.IP == nil || !exit.IP.IsLoopback() || exit.Port == 0 ||
+			(socks != nil && exit.Port == socks.Port) || (http != nil && exit.Port == http.Port) {
+			t.Line(toneFail, "-exit-socks must be a distinct loopback SOCKS5 port (not ktest's own listeners)")
+			return 2
+		}
+		ups = append(ups, smartproxy.Upstream{
+			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, Late: true, Rank: 3,
+		})
 	}
 	if len(ups) == 0 && !o.forceFront {
 		t.Box("NOTHING TO RUN", toneFail, []string{"No path is available. Extract the complete portable ZIP (cores/ and profiles/)", "or run `ktest doctor`."})
