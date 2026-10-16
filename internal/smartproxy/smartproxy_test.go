@@ -129,7 +129,7 @@ func TestRaceSkipsBlockedPathAndLearnsWinner(t *testing.T) {
 	blocked := fakeSocks(t, dest, false, &blockedHits)
 	good := fakeSocks(t, dest, true, &goodHits)
 	// The blocked path is listed first, so the first connection must replay.
-	p, addr := startProxy(t, []Upstream{{"blocked", blocked}, {"good", good}})
+	p, addr := startProxy(t, []Upstream{{Name: "blocked", Addr: blocked}, {Name: "good", Addr: good}})
 	host, port, _ := net.SplitHostPort(dest)
 
 	if got := viaProxy(t, addr, "site.example", port, clientHello()); !bytes.Equal(got, serverHello) {
@@ -157,7 +157,7 @@ func TestRaceSkipsBlockedPathAndLearnsWinner(t *testing.T) {
 func TestRaceFailsWhenEveryPathIsBlocked(t *testing.T) {
 	dest := destination(t)
 	var h1, h2 atomic.Int32
-	_, addr := startProxy(t, []Upstream{{"a", fakeSocks(t, dest, false, &h1)}, {"b", fakeSocks(t, dest, false, &h2)}})
+	_, addr := startProxy(t, []Upstream{{Name: "a", Addr: fakeSocks(t, dest, false, &h1)}, {Name: "b", Addr: fakeSocks(t, dest, false, &h2)}})
 	_, port, _ := net.SplitHostPort(dest)
 	if got := viaProxy(t, addr, "site.example", port, clientHello()); len(got) != 0 {
 		t.Fatalf("unexpected data %x", got)
@@ -167,7 +167,7 @@ func TestRaceFailsWhenEveryPathIsBlocked(t *testing.T) {
 func TestNonTLSTrafficUsesBestPathWithoutRacing(t *testing.T) {
 	dest := destination(t)
 	var hits atomic.Int32
-	_, addr := startProxy(t, []Upstream{{"only", fakeSocks(t, dest, true, &hits)}})
+	_, addr := startProxy(t, []Upstream{{Name: "only", Addr: fakeSocks(t, dest, true, &hits)}})
 	_, port, _ := net.SplitHostPort(dest)
 	if got := viaProxy(t, addr, "plain.example", port, []byte("GET / HTTP/1.1\r\n\r\n")); !bytes.Equal(got, serverHello) {
 		t.Fatalf("got %x", got)
@@ -178,10 +178,74 @@ func TestUpstreamValidationAndTLSDetection(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("empty upstream list accepted")
 	}
-	if _, err := New(Config{Upstreams: []Upstream{{"a", "x"}, {"a", "y"}}}); err == nil {
+	if _, err := New(Config{Upstreams: []Upstream{{Name: "a", Addr: "x"}, {Name: "a", Addr: "y"}}}); err == nil {
 		t.Fatal("duplicate names accepted")
 	}
 	if !isTLSFlight(clientHello()) || isTLSFlight([]byte("GET / HTTP/1.1")) || isTLSFlight(nil) {
 		t.Fatal("TLS flight detection wrong")
+	}
+}
+
+func TestLocalDNSUpstreamGetsResolvedIPWhileOthersGetTheName(t *testing.T) {
+	dest := destination(t)
+	_, port, _ := net.SplitHostPort(dest)
+	seen := make(chan string, 4)
+	capture := func(name string) string {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { l.Close() })
+		go func() {
+			for {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer c.Close()
+					host, _, err := socksRequest(c)
+					if err != nil {
+						return
+					}
+					seen <- name + "=" + host
+					_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+					d, err := net.Dial("tcp", dest)
+					if err != nil {
+						return
+					}
+					defer d.Close()
+					pipe(c, d)
+				}()
+			}
+		}()
+		return l.Addr().String()
+	}
+	resolver := func(_ context.Context, host string) ([]string, error) { return []string{"203.0.113.9"}, nil }
+	for _, tc := range []struct {
+		up   Upstream
+		want string
+	}{
+		{Upstream{Name: "bye", LocalDNS: true}, "bye=203.0.113.9"},
+		{Upstream{Name: "xray"}, "xray=poisoned.example"},
+	} {
+		tc.up.Addr = capture(tc.up.Name)
+		p, err := New(Config{Upstreams: []Upstream{tc.up}, Resolve: resolver, FirstByteTimeout: time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, _ := net.Listen("tcp", "127.0.0.1:0")
+		ctx, cancel := context.WithCancel(context.Background())
+		go p.Serve(ctx, l)
+		viaProxy(t, l.Addr().String(), "poisoned.example", port, clientHello())
+		cancel()
+		select {
+		case got := <-seen:
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("upstream never contacted")
+		}
 	}
 }

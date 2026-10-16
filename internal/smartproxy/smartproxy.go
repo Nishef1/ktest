@@ -32,6 +32,12 @@ import (
 type Upstream struct {
 	Name string
 	Addr string
+	// LocalDNS marks upstreams that resolve host names with the system
+	// resolver (ByeDPI, the direct route). On a network that poisons DNS those
+	// would connect to a bogus address, so the proxy resolves the name itself
+	// through Config.Resolve and hands them an IP. Name-resolving upstreams
+	// (Xray) keep receiving the name.
+	LocalDNS bool
 }
 
 type Config struct {
@@ -44,6 +50,8 @@ type Config struct {
 	FirstByteTimeout time.Duration
 	// MemoryTTL is how long a per-host winner is trusted first.
 	MemoryTTL time.Duration
+	// Resolve is used for LocalDNS upstreams; nil leaves them on system DNS.
+	Resolve Resolver
 	// Logf receives one line per decision; nil is silent.
 	Logf func(format string, args ...any)
 }
@@ -369,6 +377,13 @@ func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Co
 	dctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
 	defer cancel()
 	d := net.Dialer{}
+	if (u.LocalDNS || u.Addr == "") && p.cfg.Resolve != nil && net.ParseIP(host) == nil {
+		if ips, err := p.cfg.Resolve(dctx, host); err == nil && len(ips) > 0 {
+			host = ips[0]
+		} else if ctx.Err() == nil {
+			p.logf("%s: encrypted DNS failed (%v); using the system resolver", host, err)
+		}
+	}
 	if u.Addr == "" {
 		return d.DialContext(dctx, "tcp", net.JoinHostPort(host, port))
 	}
@@ -550,4 +565,21 @@ func socksConnect(c net.Conn, host, port string) error {
 	}
 	_, err = io.CopyN(io.Discard, c, int64(skip))
 	return err
+}
+
+// DialVia opens host:port through a SOCKS5 proxy at socksAddr.
+func DialVia(ctx context.Context, socksAddr, host, port string, timeout time.Duration) (net.Conn, error) {
+	dctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(dctx, "tcp", socksAddr)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	if err := socksConnect(conn, host, port); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
 }

@@ -35,6 +35,8 @@ type smartCore struct {
 	launch launcher
 	run    *runningCore
 	logs   *tailBuffer
+	// localDNS: the core resolves names with the system resolver.
+	localDNS bool
 }
 
 func xrayLauncher(base, variant string, port int, out io.Writer) (launcher, error) {
@@ -63,6 +65,7 @@ func runSmart(args []string) int {
 	listen := fs.String("listen", smartListenDefault, "loopback SOCKS5 address for your applications")
 	strategies := fs.Int("strategies", 3, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")
 	noXray := fs.Bool("no-xray", false, "do not run the two Xray profiles")
+	noDoH := fs.Bool("no-doh", false, "let ByeDPI paths use the system DNS (poisoned on many filtered networks)")
 	direct := fs.Bool("direct", false, "also race the ordinary system route (uses local DNS)")
 	stagger := fs.Duration("stagger", 300*time.Millisecond, "head start of the best-known path before the next one joins")
 	firstByte := fs.Duration("first-byte", 5*time.Second, "how long a path may take to answer the TLS ClientHello")
@@ -85,8 +88,8 @@ func runSmart(args []string) int {
 	defer stopSignals()
 
 	var cores []*smartCore
-	add := func(name string, port int, mk func(io.Writer) (launcher, error)) {
-		c := &smartCore{name: name, port: port, logs: &tailBuffer{max: 4096}}
+	add := func(name string, port int, localDNS bool, mk func(io.Writer) (launcher, error)) {
+		c := &smartCore{name: name, port: port, logs: &tailBuffer{max: 4096}, localDNS: localDNS}
 		if *verbose {
 			c.logs.tee = os.Stderr
 		}
@@ -104,7 +107,7 @@ func runSmart(args []string) int {
 			port    int
 		}{{"B", smartXrayBPort}, {"A", smartXrayAPort}} {
 			x := x
-			add("Xray "+x.variant, x.port, func(w io.Writer) (launcher, error) { return xrayLauncher(*base, x.variant, x.port, w) })
+			add("Xray "+x.variant, x.port, false, func(w io.Writer) (launcher, error) { return xrayLauncher(*base, x.variant, x.port, w) })
 		}
 	}
 	if *strategies > 0 {
@@ -122,7 +125,7 @@ func runSmart(args []string) int {
 			fmt.Printf("ByeDPI strategies from %s (first %d)\n", source, len(list))
 			for i, s := range list {
 				s, port := s, smartByeDPIBase+i
-				add("ByeDPI "+s.Label, port, func(w io.Writer) (launcher, error) { return byeDPILauncher(bin, port, s.Args, w), nil })
+				add("ByeDPI "+s.Label, port, true, func(w io.Writer) (launcher, error) { return byeDPILauncher(bin, port, s.Args, w), nil })
 			}
 		}
 	}
@@ -194,12 +197,36 @@ func runSmart(args []string) int {
 
 	var ups []smartproxy.Upstream
 	for _, c := range up {
-		ups = append(ups, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port)})
+		ups = append(ups, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port), LocalDNS: c.localDNS})
 	}
 	if *direct {
-		ups = append(ups, smartproxy.Upstream{Name: "direct (system route)"})
+		ups = append(ups, smartproxy.Upstream{Name: "direct (system route)", LocalDNS: true})
 	}
 	cfg := smartproxy.Config{Upstreams: ups, Stagger: *stagger, FirstByteTimeout: *firstByte}
+	if !*noDoH {
+		// Encrypted DNS for upstreams that would otherwise use the system
+		// resolver. The DoH requests travel over a name-resolving upstream
+		// (Xray) when one is up, else over the system route.
+		var carriers []string
+		for _, u := range ups {
+			if !u.LocalDNS {
+				carriers = append(carriers, u.Addr)
+			}
+		}
+		dial := func(ctx context.Context, _, addr string) (net.Conn, error) {
+			h, p, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			for _, carrier := range carriers {
+				if c, err := smartproxy.DialVia(ctx, carrier, h, p, 6*time.Second); err == nil {
+					return c, nil
+				}
+			}
+			return (&net.Dialer{Timeout: 6 * time.Second}).DialContext(ctx, "tcp", addr)
+		}
+		cfg.Resolve = smartproxy.NewDoH(smartproxy.DefaultDoH, dial, nil)
+	}
 	if *verbose {
 		cfg.Logf = func(f string, a ...any) { fmt.Printf("  "+f+"\n", a...) }
 	}
