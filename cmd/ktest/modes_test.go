@@ -39,6 +39,9 @@ func TestConnectionModes(t *testing.T) {
 		if cfg.RejectExits != (mode == ModeWindscribe) {
 			t.Errorf("%s: RejectExits=%v; Windscribe must reject all foreign egress", c.mode, cfg.RejectExits)
 		}
+		if cfg.LocalOnly != (mode == ModeWindscribe) {
+			t.Errorf("%s: LocalOnly=%v; Windscribe cannot allow plain or unknown proxy routes", c.mode, cfg.LocalOnly)
+		}
 	}
 	if _, err := parseConnectionMode("unknown"); err == nil {
 		t.Fatal("unrecognized mode accepted")
