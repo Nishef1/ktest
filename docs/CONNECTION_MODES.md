@@ -22,7 +22,7 @@ go run ./cmd/ktest connect -mode fast
 go run ./cmd/ktest connect -mode balanced
 
 # Windscribe's LAN HTTP proxy in its Preferences: 127.0.0.1 / 10801
-# Windscribe's own actual VPN protocol: TCP/443 WStunnel/Stealth/OpenVPN TCP
+# Windscribe's own actual VPN protocol: OpenVPN TCP/443
 go run ./cmd/ktest connect -mode windscribe  # strictly local ByeDPI/packet manipulation, no foreign egress
 
 # Verified foreign exit only; Aether/Psiphon is searched in the background
@@ -46,6 +46,6 @@ In `balanced` mode, hostname routing cannot protect what it cannot identify (for
 
 ## Windscribe debugging
 
-See [WINDSCRIBE_BOOTSTRAP.md](WINDSCRIBE_BOOTSTRAP.md). HTTP proxy `127.0.0.1:10801` is separate from Windscribe's destination VPN port. `HTTP CONNECT 200` only proves an initial TCP proxy connection; the VPN's handshake and data plane must also work. Logs from 2026-10-16 show HTTP CONNECT 200 but OpenVPN resets, and a whole-PC ktest `sing-tun` adapter incorrectly selected as the default route. Stop that adapter first.
+See [WINDSCRIBE_BOOTSTRAP.md](WINDSCRIBE_BOOTSTRAP.md). HTTP proxy `127.0.0.1:10801` is separate from Windscribe's destination VPN port. `HTTP CONNECT 200` only proves an initial TCP proxy connection; the VPN's handshake and data plane must also work. New HTTP CONNECT attempts rotate local methods per host:port, independently of API traffic, without interrupting open streams. The supplied 2026-10-16 logs show OpenVPN resets after HTTP 200 and successful Dallas WireGuard with the LAN proxy ignored; that success does not verify ktest's bootstrap. Check for a conflicting whole-PC `sing-tun` adapter, but do not assume one is active.
 
 Never share credentials, auth tokens, private keys or full proprietary Windscribe logs without removing sensitive identifiers.

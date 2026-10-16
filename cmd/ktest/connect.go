@@ -174,10 +174,16 @@ type siteEvents struct {
 	last     map[string]string
 	failedAt map[string]time.Time
 	ok, fail atomic.Int64
+	tcpOnly  atomic.Int64
 }
 
 func (s *siteEvents) print(e smartproxy.Event) {
 	t := s.t
+	if e.TCPOnly {
+		s.tcpOnly.Add(1)
+		t.Line(toneInfo, "%-26s TCP established via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
+		return
+	}
 	if e.Rejected {
 		if time.Since(s.failedAt[e.Site]) >= 20*time.Second {
 			s.failedAt[e.Site] = time.Now()
@@ -663,7 +669,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Println("")
 	t.Box(title, verdict, lines)
 	t.Println("")
-	t.Println("  " + t.Dim("Live connections (a site is listed when its winning path is known or changes)"))
+	if o.mode == ModeWindscribe {
+		t.Println("  " + t.Dim("TCP attempts (new connections rotate local methods per destination; only Windscribe verifies the VPN)"))
+	} else {
+		t.Println("  " + t.Dim("Live connections (a site is listed when its winning path is known or changes)"))
+	}
 
 	// 5b. The system-wide tunnel, once the proxy has proven itself.
 	if o.tun && verdict != toneFail {
@@ -716,6 +726,9 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 	t.Println("")
 	t.Println("  " + t.Bold("Session summary"))
 	ok, fail := feed.ok.Load(), feed.fail.Load()
+	if n := feed.tcpOnly.Load(); n > 0 {
+		t.Printf("    %d TCP proxy connections established; application/VPN negotiation not verified by these counts\n", n)
+	}
 	if total := ok + fail; total > 0 {
 		pct := float64(ok) / float64(total)
 		k := toneOK
@@ -726,7 +739,7 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 			k = toneFail
 		}
 		t.Printf("    %s %3d%%  %d of %d connections answered\n", t.Bar(pct, 20, k), int(pct*100+0.5), ok, total)
-	} else {
+	} else if feed.tcpOnly.Load() == 0 {
 		t.Println("    " + t.Dim("no connections were made through the proxy"))
 	}
 	stats := proxy.Stats()

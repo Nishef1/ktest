@@ -1,10 +1,33 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
+
+	"github.com/Nishef1/ktest/internal/smartproxy"
 )
+
+func TestParseWindscribeProtocol(t *testing.T) {
+	for _, protocol := range []string{"TCP:443", "WireGuard:443", "Stealth:443", "IKEv2:500", "WStunnel:443"} {
+		if got := parseWindscribeProtocol("Login state: Logged in\r\nProtocol: " + protocol + "\r\n"); got != protocol {
+			t.Fatalf("got %q, want %q", got, protocol)
+		}
+	}
+	if got := parseWindscribeProtocol("CLI unavailable"); got != "" {
+		t.Fatalf("invented protocol: %q", got)
+	}
+}
+
+func TestWindscribeTCPEstablishmentDoesNotCountAsAnsweredOrFailed(t *testing.T) {
+	var output bytes.Buffer
+	feed := &siteEvents{t: plainTerm(&output)}
+	feed.print(smartproxy.Event{Host: "198.51.100.23", Path: "local ByeDPI", TCPOnly: true})
+	if feed.ok.Load() != 0 || feed.fail.Load() != 0 || feed.tcpOnly.Load() != 1 {
+		t.Fatalf("unverified TCP counted as an application outcome: ok=%d fail=%d tcp=%d", feed.ok.Load(), feed.fail.Load(), feed.tcpOnly.Load())
+	}
+}
 
 func TestParseWindscribeStatus(t *testing.T) {
 	cases := []struct {

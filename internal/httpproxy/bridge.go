@@ -19,8 +19,8 @@ import (
 
 // Server bridges HTTP CONNECT or absolute-form HTTP requests into a local
 // SOCKS5 CONNECT server. It does not change system DNS, routes or certificates.
-// Dial, when supplied, replaces the generic SOCKS5 bridge. It is used by
-// Windscribe to require an already verified foreign TCP exit before HTTP 200.
+// Dial, when supplied, replaces the generic SOCKS5 bridge. Windscribe uses it
+// to restrict HTTP CONNECT to local anti-DPI paths. HTTP 200 only confirms TCP.
 type Server struct {
 	Upstream string
 	Dial     func(context.Context, string, string) (net.Conn, error)

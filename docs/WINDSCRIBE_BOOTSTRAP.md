@@ -19,7 +19,7 @@ Menu option **8** launches the same mode. Windscribe **Proxy Settings** (not Pro
 | Port | `10801` |
 | Username/password | leave empty |
 
-The local HTTP proxy is just a loopback bridge. **HTTP does NOT mean Windscribe's VPN destination port must be 80**. Start with **OpenVPN TCP port 443**. Try WStunnel/443 or Stealth/443 separately if Windscribe's own logs confirm that protocol respects its LAN HTTP proxy. WireGuard/IKEv2 use UDP and cannot travel through this TCP-only HTTP proxy. Do not combine ktest **whole-PC TUN** with Windscribe.
+The local HTTP proxy is just a loopback bridge. **HTTP does NOT mean Windscribe's VPN destination port must be 80**. Start with **OpenVPN TCP port 443**. The supplied Windscribe 2.25.4 Windows logs explicitly ignore the LAN proxy for WireGuard, IKEv2, Stealth and WStunnel. Use OpenVPN TCP to test this bootstrap; a connection through those other protocols does not verify ktest's VPN transport. ktest reports the selected protocol when it observes a connecting/connected non-TCP tunnel. Do not combine ktest **whole-PC TUN** with Windscribe.
 
 ## Allowed versus forbidden in Windscribe mode
 
@@ -53,7 +53,11 @@ The automatic retry interval is at least **three minutes**. ktest never calls `d
 go run ./cmd/ktest connect -mode windscribe -windscribe-auto-reconnect=false
 ```
 
-The first selected local ByeDPI transport is pinned for the Windscribe session to avoid changing it mid-tunnel. A new transport can be considered after Windscribe reports Disconnected.
+Each **new HTTP CONNECT** rotates to the next eligible local ByeDPI method for that exact **host:port**, in stable configured rank/order. If TCP/SOCKS establishment fails, the remaining local methods are tried within the same request; if all fail, the proxy returns 502. If TCP establishment succeeds but the VPN later resets or stalls, Windscribe's next connection to that destination tries the next method. Retry history expires after the configured memory TTL (30 minutes by default).
+
+API/DNS requests and other destinations have independent retry histories. TCP acceptance never pins the whole Windscribe session or trains the verified-answer scores. Existing streams keep their original transport; ktest neither replays opaque VPN bytes nor migrates live connections. The proxy does not interpret VPN authentication or infer VPN success from server bytes. Windscribe still owns handshake validation and decides when to reconnect.
+
+The live feed labels these events **TCP established; VPN handshake not verified**, without a green success mark or inclusion in the answered-connection count. `9 of 9 ready` only means nine local processes/listeners started, not that nine methods passed a VPN handshake.
 
 ### Important security / routing limits
 
@@ -78,6 +82,7 @@ curl.exe -v -x http://127.0.0.1:10801 https://www.cloudflare.com/cdn-cgi/trace -
 
 - **502 from localhost:** no eligible local anti-DPI path could establish the TCP destination; this is an expected honest failure, not a reason to run Psiphon.
 - **HTTP CONNECT 200 then Windscribe WAIT/reset:** only TCP was accepted; the Windscribe handshake still failed. Distinguish server-IP blocking, TLS/protocol fingerprints and other network interference from a mere proxy handshake.
+- **Only the normally reachable country connects:** check `windscribe-cli status` for the protocol. WireGuard (including Windscribe's own AmneziaWG tweaks) bypasses this HTTP VPN transport. Compare the same failing location using OpenVPN TCP/443; new attempts rotate local methods, but local packet manipulation cannot guarantee access to an IP/protocol blocked by the network.
 - **Windscribe Connected but browsing fails:** consult Windscribe's own logs and firewall/split-tunnel rules; do not launch additional ktest exit paths.
 
 Official source: [Windscribe Desktop CLI](https://github.com/Windscribe/Desktop-App/blob/master/skills/windscribe-cli/SKILL.md).

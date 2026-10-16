@@ -80,6 +80,16 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 	return state, true
 }
 
+func parseWindscribeProtocol(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if ok && strings.EqualFold(field, "Protocol") {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func windscribeCLIPath(override string) (string, error) {
 	if override != "" {
 		if !filepath.IsAbs(override) {
@@ -112,6 +122,7 @@ type windscribeMonitor struct {
 	autoReconnect       bool
 	mu                  sync.RWMutex
 	state               windscribeState
+	protocol            string
 	connectedOnce       bool
 	proxy               *smartproxy.Proxy
 	nextReconnect       time.Time
@@ -175,13 +186,15 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	m.mu.Lock()
 	previous := m.state
 	m.state = state
+	protocolChanged := false
+	if err == nil && loggedIn {
+		protocol := parseWindscribeProtocol(string(out))
+		protocolChanged = protocol != m.protocol
+		m.protocol = protocol
+	}
+	protocol := m.protocol
 	p := m.proxy
 	changed := state != previous
-	if changed && state == windscribeDisconnected && p != nil {
-		// Reconnect is a new Windscribe session. Re-evaluate the best available
-		// foreign bootstrap rather than carrying over a dead upstream pin.
-		p.ResetBootstrapPin()
-	}
 	if state == windscribeConnected {
 		m.connectedOnce = true
 	}
@@ -211,6 +224,10 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		default:
 			m.t.Note("Windscribe state unavailable; cannot safely auto-reconnect (check CLI/login)")
 		}
+	}
+	if (changed || protocolChanged) && (state == windscribeConnecting || state == windscribeConnected) &&
+		protocol != "" && !strings.HasPrefix(strings.ToLower(protocol), "tcp:") {
+		m.t.Note("Windscribe protocol %s: this VPN tunnel is not carried by ktest's HTTP bootstrap; use OpenVPN TCP to test local anti-DPI", protocol)
 	}
 	if shouldReconnect {
 		m.t.Note("Local anti-DPI TCP proxy ready; requesting last Windscribe location (cooldown 3min, no IP-changing ktest exits)")

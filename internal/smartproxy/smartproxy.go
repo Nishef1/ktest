@@ -121,12 +121,12 @@ type Config struct {
 	Resolve6 Resolver
 	// Logf receives one line per decision; nil is silent.
 	Logf func(format string, args ...any)
-	// OnEvent is called once per raced connection with its outcome; it must
-	// not block.
+	// OnEvent reports raced outcomes and unverified local TCP establishment;
+	// it must not block.
 	OnEvent func(Event)
 }
 
-// Event is the outcome of one raced TLS connection.
+// Event reports a connection outcome, or unverified TCP establishment.
 type Event struct {
 	Host string
 	Site string // host reduced to the name the memory is keyed by
@@ -134,6 +134,9 @@ type Event struct {
 	Took time.Duration
 	OK   bool
 	Err  string // last failure reason when no path answered
+	// TCPOnly means only the upstream TCP/SOCKS handshake succeeded. It must
+	// not be counted as an answered application connection or a working VPN.
+	TCPOnly bool
 	// Rejected marks a connection that a takeover path prepared but the
 	// application then refused (it does not trust the certificate presented).
 	Rejected bool
@@ -178,9 +181,9 @@ type Proxy struct {
 	mu              sync.Mutex
 	ups             []*upstreamState
 	mem             map[string]memo
-	aiPinned        string // first working AI exit stays selected until this session ends
-	bootstrapPinned string // Windscribe TCP bootstrap uses one local bypass per session
-	bootstrapSkip   string // avoid retrying the same failed DPI strategy next attempt
+	aiPinned        string          // first working AI exit stays selected until this session ends
+	bootstrapPinned string          // legacy verified foreign-exit dialer; never used for local bypass
+	localAttempts   map[string]memo // last local method attempted per exact host:port
 }
 
 func allowedLocalOnly(u Upstream) bool {
@@ -377,36 +380,51 @@ func (p *Proxy) HasLocalBypass() bool {
 // fronting. The core must be a ktest-managed local TCP DPI bypass. A successful
 // SOCKS reply only confirms upstream TCP connectivity, not a VPN handshake.
 func (p *Proxy) DialLocalBypass(ctx context.Context, host, port string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	p.mu.Lock()
-	pinned, skip := p.bootstrapPinned, p.bootstrapSkip
-	p.mu.Unlock()
 	var candidates []*upstreamState
-	for _, u := range p.order(host) {
-		if !u.LocalBypass || u.Exit || u.Takeover != nil || u.Addr == "" {
-			continue
-		}
-		address, err := net.ResolveTCPAddr("tcp", u.Addr)
-		if err != nil || address.IP == nil || !address.IP.IsLoopback() {
-			continue
-		}
-		if pinned != "" && u.Name != pinned {
+	for _, u := range p.ups {
+		if !u.LocalBypass || !allowedLocalOnly(u.Upstream) || u.Addr == "" || (u.Match != nil && !u.Match(host)) {
 			continue
 		}
 		candidates = append(candidates, u)
 	}
 	if len(candidates) == 0 {
+		p.mu.Unlock()
 		return nil, errors.New("Windscribe: no local IP-preserving anti-DPI TCP path; no foreign exit will be used")
 	}
-	if pinned == "" && skip != "" && len(candidates) > 1 {
+	// Use stable candidate order, not scores from incidental TLS/API traffic.
+	// Each new CONNECT is an independent attempt: a SOCKS acknowledgement
+	// cannot tell us whether the opaque VPN protocol will subsequently work.
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].Rank < candidates[j].Rank })
+	key := net.JoinHostPort(strings.ToLower(strings.TrimSuffix(host, ".")), port)
+	if last, ok := p.localAttempts[key]; ok && time.Since(last.at) < p.cfg.MemoryTTL {
 		for i, u := range candidates {
-			if u.Name == skip {
+			if u.Name == last.name {
 				candidates = append(candidates[i+1:], candidates[:i+1]...)
 				break
 			}
 		}
 	}
+	if p.localAttempts == nil {
+		p.localAttempts = make(map[string]memo)
+	}
+	// Reserve before dialing so simultaneous CONNECTs do not all pick the
+	// first method. A failed TCP dial advances to the remaining candidates.
+	p.localAttempts[key] = memo{name: candidates[0].Name, at: time.Now()}
+	p.mu.Unlock()
 	var lastErr error
-	for _, u := range candidates {
+	for i, u := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			p.mu.Lock()
+			p.localAttempts[key] = memo{name: u.Name, at: time.Now()}
+			p.mu.Unlock()
+		}
 		began := time.Now()
 		conn, err := p.dial(ctx, u.Upstream, host, port)
 		if err != nil {
@@ -414,46 +432,26 @@ func (p *Proxy) DialLocalBypass(ctx context.Context, host, port string) (net.Con
 			lastErr = err
 			continue
 		}
-		p.mu.Lock()
-		if p.bootstrapPinned == "" {
-			p.bootstrapPinned = u.Name
-		}
-		accepted := p.bootstrapPinned == u.Name
-		p.mu.Unlock()
-		if !accepted {
-			_ = conn.Close()
-			continue
-		}
-		p.record(u, host, true, time.Since(began))
 		p.logf("Windscribe TCP %s:%s via local anti-DPI %s (VPN negotiation not yet verified)", host, port, u.Name)
-		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
+		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
 		return conn, nil
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("all local Windscribe DPI bypass paths failed TCP CONNECT: %w", lastErr)
 	}
-	return nil, errors.New("Windscribe local bypass path changed during connection")
-}
-
-// ResetBootstrapPin is allowed only when the authoritative Windscribe CLI
-// reports a disconnected session. Live TCP streams are not touched.
-func (p *Proxy) ResetBootstrapPin() {
-	p.mu.Lock()
-	p.bootstrapSkip = p.bootstrapPinned
-	p.bootstrapPinned = ""
-	p.mu.Unlock()
+	return nil, errors.New("all local Windscribe DPI bypass paths failed TCP CONNECT")
 }
 
 // DialWindscribeLocal is retained as a compatibility alias for existing
-// callers and tests. All policy checks and recovery rotation live in one
+// callers and tests. All policy checks and per-destination rotation live in one
 // strict, loopback-only local anti-DPI implementation.
 func (p *Proxy) DialWindscribeLocal(ctx context.Context, host, port string) (net.Conn, error) {
 	return p.DialLocalBypass(ctx, host, port)
 }
 
-// DialVerifiedExit is for raw TCP carried by Windscribe's local HTTP proxy.
-// It must NOT report CONNECT success until the foreign SOCKS upstream has
-// acknowledged a connection to the actual Windscribe destination. No direct,
+// DialVerifiedExit is a separate verified foreign TCP transport. Windscribe's
+// local-only HTTP proxy never calls it. It waits until the foreign SOCKS
+// upstream acknowledges a connection to the destination. No direct,
 // ByeDPI, Xray-fragment or fronting fallback is allowed for this transport.
 // After the first real TCP connection, the chosen exit stays pinned for this
 // session to prevent accidental mid-session route/identity switching.
