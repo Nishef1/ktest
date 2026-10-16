@@ -420,7 +420,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			t.Note("External SOCKS exit is not permitted for protected AI sites: %v", checked)
 		}
 		ups = append(ups, smartproxy.Upstream{
-			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: o.mode != ModeVPN && o.mode != ModeTor, Rank: 3,
+			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: o.mode != ModeFast && o.mode != ModeVPN && o.mode != ModeTor, Rank: 3,
 		})
 	}
 	if len(ups) == 0 && o.mode != ModeVPN && o.mode != ModeTor && !o.forceFront {
