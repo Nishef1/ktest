@@ -1,54 +1,83 @@
-# Windscribe mode: local anti-DPI only (no foreign proxy exits)
+# Windscribe bootstrap: local-only and no extra public-IP exits
 
-**Security rule (strict):** `ktest connect -mode windscribe` MUST NOT start or route through Psiphon, Aether, WARP, Tor, external SOCKS5 relays, subscription Xray profiles with unknown outbounds, or any other foreign-IP-changing tunnel. It also forbids `-exit-socks`, plain/direct fallbacks for its Windscribe HTTP CONNECT, full-PC TUN, and CDN fronting takeovers. None of these prohibitions can be overridden using the usual Connect settings. Other connection modes retain their own policies.
+The **Windscribe** mode is deliberately different from **Fast**, **Balanced** and **VPN** modes. It helps the **installed Windscribe Windows client** reach its TCP endpoint using local packet-level anti-DPI methods. **ktest must never launch Psiphon, Aether, WARP, Tor or an external SOCKS/Worker exit in Windscribe mode**, even when those cores are installed or enabled under Setup. ktest does not select or change a public VPN egress IP: **only Windscribe itself can do so after its own tunnel connects**.
 
-This mode uses only locally launched ByeDPI/ciadpi anti-DPI SOCKS cores, which attempt to connect to the **original Windscribe server** over the user's ISP. Splitting/faking packets or altering their timing does not create a foreign VPN egress. The client retains its own public IP **until Windscribe itself connects**, at which point Windscribe manages the full-system VPN and resulting public IP. A local anti-DPI method cannot necessarily solve server IP-level blocking; failure must be reported rather than falling back to Psiphon.
-
-## Windows setup
+## Run
 
 ```powershell
+cd D:\Data\ktest
 git pull --ff-only origin main
 go run ./cmd/ktest connect -mode windscribe -v
 ```
 
-In the Windscribe desktop app, open **Preferences → Connection → Proxy Settings**. Select HTTP, address `127.0.0.1`, port `10801`, with blank username/password. This is Windscribe's *upstream LAN proxy*, **not** Proxy Gateway. Test **OpenVPN TCP/443** first; test Stealth or WStunnel/443 separately only if logs confirm that the installed Windscribe version actually honors the HTTP proxy for that protocol. WireGuard/IKEv2 use UDP and do **not** pass through this HTTP proxy. HTTP proxy port 10801 does NOT mean the actual Windscribe server port must be 80.
+Menu option **8** launches the same mode. Windscribe **Proxy Settings** (not Proxy Gateway):
 
-Only the local HTTP CONNECT listener supplies a Windscribe bootstrap connection. A `HTTP/1.1 200 Connection Established` means a local anti-DPI core acknowledged the TCP CONNECT to a server; it does **not** prove that OpenVPN authenticated, responded or delivered VPN packets. A `502` means no permitted local anti-DPI TCP route was available. An external tunnel is never used as a fallback.
+| Setting | Value |
+| --- | --- |
+| Type | HTTP |
+| Address | `127.0.0.1` |
+| Port | `10801` |
+| Username/password | leave empty |
 
-**Do not combine Windscribe mode with `ktest -tun` or an old active `sing-tun` adapter.** If ktest is started with Windscribe already connected, it stands by for the CLI to report a true disconnection. Normal applications should use Windscribe's tunnel and firewall, not ktest's SOCKS proxy when the VPN is connected.
+The local HTTP proxy is just a loopback bridge. **HTTP does NOT mean Windscribe's VPN destination port must be 80**. Start with **OpenVPN TCP port 443**. Try WStunnel/443 or Stealth/443 separately if Windscribe's own logs confirm that protocol respects its LAN HTTP proxy. WireGuard/IKEv2 use UDP and cannot travel through this TCP-only HTTP proxy. Do not combine ktest **whole-PC TUN** with Windscribe.
 
-## Official Windscribe CLI watchdog
+## Allowed versus forbidden in Windscribe mode
 
-`ktest` uses Windscribe's own `windscribe-cli status` on Windows, typically found at:
+**Allowed:** local ByeDPI/ciadpi SOCKS TCP handling and built-in TLS ClientHello packet cutting, which transmit over the user's existing network rather than a foreign exit. ktest may use a trusted encrypted DNS resolver to resolve poisoned domain names. The `127.0.0.1:10800` SOCKS listener remains available; its non-TLS traffic may use only a local ByeDPI path. Windscribe's HTTP CONNECT on `127.0.0.1:10801` only uses local ByeDPI and returns **502** if none is usable.
+
+**Forbidden by code policy:** Aether (any profile), Psiphon (including CDN Fronting), WARP, Tor, remote/externally operated SOCKS5 and Workers, Xray subscription profiles with unknown external outbounds, **plain/no-method** paths, general CDN Fronting/HTTP takeover and the optional whole-PC TUN. A `-exit-socks` argument is rejected. The core router also refuses initial or dynamically added foreign exits and unapproved routes. The Windscribe mode does not prompt to install a MITM certificate.
+
+This conservative design intentionally avoids claiming an unchanged public identity when a third-party CDN relay might change the IP observed by the destination. Anti-DPI packet-shaping itself does not provide an external IP. Consequently it **cannot promise to reach a Windscribe server whose address is blocked independently of SNI/protocol**, and it cannot turn a failed raw OpenVPN TCP tunnel into a successful VPN on its own.
+
+A local SOCKS CONNECT acknowledgement proves TCP establishment, not OpenVPN handshake or sustained VPN data transfer. The final Windscribe state is always owned by Windscribe.
+
+## Monitor and automatic recovery
+
+On Windows, ktest uses the official installed command-line tool:
 
 ```powershell
 & "C:\Program Files\Windscribe\windscribe-cli.exe" status
 ```
 
-The CLI is the authority for Connected, Disconnected, Connecting and pending tests (marked `*Connected`). An unknown/temporarily failing CLI does not trigger a speculative reconnection.
+It polls around every three seconds. If Windscribe reports **Connected** (and no pending tunnel-test marker or network interference), ktest leaves the existing tunnel, country, public IP and firewall under Windscribe control. If ktest starts while Windscribe is already connected, it waits in standby until Windscribe reports a confirmed disconnect. It does not start Aether/Psiphon while waiting.
 
-- **Connected:** Windscribe controls its tunnel, selected server, external IP, default route and firewall. ktest does not launch any foreign exit. Already established local ByeDPI sockets must remain available if Windscribe's own TCP upstream depends on them.
-- **Disconnected:** ktest keeps its local ByeDPI bypass available, and may ask the official Windscribe CLI to reconnect the **last location** via `windscribe-cli connect -n`, only after several confirmed disconnected samples. Reconnect attempts are rate-limited (at least three minutes apart).
-- **Connecting / pending / unknown:** no duplicate reconnect action is taken.
-
-To turn off CLI auto-reconnect (without disabling manual Windscribe startup):
+On a confirmed **Disconnected** state, ktest makes only local anti-DPI paths available. If local ByeDPI is registered and three consecutive checks still say Disconnected, ktest can ask the Windscribe CLI to retry the **last selected location** (not a random country):
 
 ```powershell
-go run ./cmd/ktest connect -mode windscribe -windscribe-auto-reconnect=false -v
+& "C:\Program Files\Windscribe\windscribe-cli.exe" connect -n
 ```
 
-If the CLI is installed elsewhere, use `-windscribe-cli "C:\absolute\path\windscribe-cli.exe"`.
+The automatic retry interval is at least **three minutes**. ktest never calls `disconnect`, `firewall off`, `ip rotate` or changes locations. It does not reconnect while the CLI says Connecting or Unknown. To disable automatic reconnect without disabling the local HTTP bootstrap or status watcher:
 
-ktest does **not** change the selected country, rotate Windscribe IPs, disable its firewall, log into the user's account, or capture the whole Windows network. Windscribe's own Firewall must be configured for the user's safety requirements; ktest's proxy is not a persistent system-wide kill switch. An Always On firewall could also prevent the initial anti-DPI bootstrap from reaching the physical network, so test the actual firewall behavior instead of permanently disabling it.
+```powershell
+go run ./cmd/ktest connect -mode windscribe -windscribe-auto-reconnect=false
+```
 
-## Troubleshooting the logged failure
+The first selected local ByeDPI transport is pinned for the Windscribe session to avoid changing it mid-tunnel. A new transport can be considered after Windscribe reports Disconnected.
 
-The recorded Windscribe attempts on several countries/ports previously returned `HTTP CONNECT 200`, then stalled in OpenVPN `WAIT` and reset. Earlier builds sometimes gave a false HTTP 200 after opening a raw filtered TCP socket, or redirected the connection through a foreign Psiphon IP. Both behaviors violate the current Windscribe policy and are removed. On this network Google/YouTube fronting success says nothing about carrying an arbitrary raw OpenVPN stream to a Windscribe IP.
+### Important security / routing limits
 
-New logs should be checked in order: whether a permitted **local ByeDPI** SOCKS listener starts; whether its TCP CONNECT to the actual Windscribe IP:port succeeds; whether the remote server sends VPN negotiation bytes; and whether Windscribe CLI reaches real `Connected`. If TCP succeeds but the VPN times out, local fragmentation alone might not bypass the blocking; **do not silently switch to a foreign proxy**.
+- Windscribe's own Firewall (and an appropriate kill-switch policy) is responsible for protecting **other** applications on disconnect. ktest's Windscribe mode is **not** a Windows-wide firewall.
+- Windscribe's Firewall **Always On** may prevent any anti-DPI bootstrap while the VPN is disconnected; test this explicitly. Do not silently disable Windscribe Firewall in code.
+- If Windscribe routes the ktest/ByeDPI helper's own outbound packets **back through Windscribe**, a routing loop is possible. Use Windscribe **Exclude** split tunneling for a stable compiled `ktest.exe` and `ciadpi.exe` if necessary; `go run` creates temporary executable paths. Verify behavior on your actual Windows build.
+- A momentary Windscribe CLI error is not a confirmed disconnect; ambiguity cannot justify leaking sensitive application traffic or toggling other VPNs.
+- No real-ISP or installed Windscribe end-to-end test has been performed in CI. Successful Go builds/tests alone do not mean Windscribe's VPN completed authentication and data transfer.
 
-## Scope and verification
+## Troubleshooting
 
-This is a code-level policy and loopback TCP integration. CI can prove the forbidden paths do not register, the bridge cannot pick foreign exits, and builds are healthy. CI cannot prove that a particular ISP permits Windscribe OpenVPN traffic, that the external IP stays constant across VPN reconnects, or that every Windscribe protocol obeys Proxy Settings. For a truly stable exit IP, select a consistent Windscribe endpoint, or its separately offered Static IP feature.
+```powershell
+go run ./cmd/ktest connect -mode windscribe -v
+```
 
-Reference: [Windscribe Desktop-App official CLI documentation](https://github.com/Windscribe/Desktop-App/blob/master/skills/windscribe-cli/SKILL.md).
+On a separate terminal:
+
+```powershell
+& "C:\Program Files\Windscribe\windscribe-cli.exe" status
+curl.exe -v -x http://127.0.0.1:10801 https://www.cloudflare.com/cdn-cgi/trace --max-time 15
+```
+
+- **502 from localhost:** no eligible local anti-DPI path could establish the TCP destination; this is an expected honest failure, not a reason to run Psiphon.
+- **HTTP CONNECT 200 then Windscribe WAIT/reset:** only TCP was accepted; the Windscribe handshake still failed. Distinguish server-IP blocking, TLS/protocol fingerprints and other network interference from a mere proxy handshake.
+- **Windscribe Connected but browsing fails:** consult Windscribe's own logs and firewall/split-tunnel rules; do not launch additional ktest exit paths.
+
+Official source: [Windscribe Desktop CLI](https://github.com/Windscribe/Desktop-App/blob/master/skills/windscribe-cli/SKILL.md).
