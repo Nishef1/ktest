@@ -305,6 +305,14 @@ func (p *Proxy) HasVerifiedExit() bool {
 	return false
 }
 
+// ResetBootstrapPin is allowed only when the authoritative Windscribe CLI
+// reports a disconnected session. Live TCP streams are not touched.
+func (p *Proxy) ResetBootstrapPin() {
+	p.mu.Lock()
+	p.bootstrapPinned = ""
+	p.mu.Unlock()
+}
+
 // DialVerifiedExit is for raw TCP carried by Windscribe's local HTTP proxy.
 // It must NOT report CONNECT success until the foreign SOCKS upstream has
 // acknowledged a connection to the actual Windscribe destination. No direct,
