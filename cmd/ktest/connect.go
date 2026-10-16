@@ -210,6 +210,15 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		t.Line(toneFail, "Windscribe bootstrap cannot share ktest's system-wide TUN; run without -tun")
 		return 2
 	}
+	if o.mode == ModeWindscribe && runtime.GOOS == "windows" {
+		ifaces, _ := net.Interfaces()
+		for _, iface := range ifaces {
+			if strings.Contains(strings.ToLower(iface.Name), "sing-tun") && iface.Flags&net.FlagUp != 0 {
+				t.Line(toneFail, "The previous ktest sing-tun is still active (%s). Stop whole-PC mode and restore Windows routes before connecting Windscribe.", iface.Name)
+				return 2
+			}
+		}
+	}
 	aiRules, aiErr := smartproxy.NewAIDomainRules(o.aiExtra)
 	if aiErr != nil {
 		t.Line(toneFail, "%v", aiErr)
