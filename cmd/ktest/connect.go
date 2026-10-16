@@ -497,7 +497,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	httpAddr := ""
 	if !o.noHTTP {
 		var stopHTTP func()
-		httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String())
+		if o.mode == ModeWindscribe {
+			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String(), proxy.DialVerifiedExit)
+		} else {
+			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String())
+		}
 		if err != nil {
 			t.Note("Windscribe HTTP proxy unavailable: %v (normal SOCKS5 still works)", err)
 		} else {
@@ -549,12 +553,21 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// 5. The result.
 	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
+	if o.mode == ModeWindscribe {
+		title = "WEBSITES READY; VPN EXIT NOT YET VERIFIED"
+		if proxy.HasVerifiedExit() {
+			title = "VPN BOOTSTRAP EXIT READY (VPN HANDSHAKE UNTESTED)"
+		}
+	}
 	lines := []string{
 		t.Bold("Proxy   ") + "  socks5://" + l.Addr().String() + t.Dim("   (turn on \"proxy DNS\" / remote DNS in the app)"),
 		t.Bold("Paths   ") + fmt.Sprintf("  %d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)) + frontSuffix(fronter),
 	}
 	if httpAddr != "" {
 		lines = append(lines, t.Bold("HTTP    ")+"  http://"+httpAddr+t.Dim("   (Windscribe Proxy Settings; TCP only)"))
+		if o.mode == ModeWindscribe {
+			lines = append(lines, t.Bold("VPN TCP ")+"  "+t.Yellow("HTTP CONNECT is blocked with 502 until a checked foreign exit works. HTTP 200 never proves OpenVPN handshake."))
+		}
 	}
 	if frontNote != "" {
 		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))
