@@ -395,7 +395,7 @@ func (p *Proxy) DialLocalBypass(ctx context.Context, host, port string) (net.Con
 		candidates = append(candidates, u)
 	}
 	if len(candidates) == 0 {
-		return nil, errors.New("Windscribe local anti-DPI bootstrap unavailable; no foreign exit will be used")
+		return nil, errors.New("Windscribe: no local IP-preserving anti-DPI TCP path; no foreign exit will be used")
 	}
 	if pinned == "" && skip != "" && len(candidates) > 1 {
 		for i, u := range candidates {
