@@ -37,3 +37,15 @@ Menu #5 scans up to 300 diverse official Cloudflare IPv4 candidates, six concurr
 - The menu waits up to 45 s for a core's port instead of a fixed 7 s, and no longer repeats the DNS preflight. The preflight runs in the background, so a network that drops 8.8.8.8 no longer freezes the menu or Ctrl+C. UDP and TCP DNS probes run in parallel.
 - `ktest path -connect` runs its DNS lookup concurrently with TCP/TLS. A hanging resolver can no longer consume the whole timeout and report a working pinned address as `tcp_unavailable`.
 - CDN candidate IPs no longer end in `.0` or `.255`.
+
+### Editable ByeDPI strategies
+
+`ktest auto` now tries `1,2,s` by default. `s` expands to every line of `profiles/byedpi-strategies.txt` (`label | ciadpi arguments`; `#` comments). Without that file the built-in list is used. `ktest strategies` prints the effective list and `ktest strategies -write` creates the editable file (the portable package ships it). ktest always supplies `-i 127.0.0.1 -p 10809`; lines that set `-i/--ip/-p/--port/-D/--daemon/-w/--pidfile` are rejected. The shipped candidates come from the ByeDPI documentation and are not measured on any ISP; only a strategy that passes the real HTTPS checks on the current network is kept. Each failing strategy can cost up to about 16 s, so trim the list for faster runs.
+
+## 2026-10-16: `ktest smart` (path racing)
+
+Hypothesis, not a field-validated result: censorship differs per site and per network, and any single anti-DPI method drifts out of date, so one global choice is fragile. `ktest smart` starts Xray Fragment B (port 10808), Fragment A (10811) and the first N ByeDPI strategies (10812+, `-strategies 3`) side by side, and puts one loopback SOCKS5 listener in front of them (`127.0.0.1:10800`, `-listen`).
+
+For every TLS connection the proxy reads the ClientHello, sends it over the paths in learned order (the path that last worked for that host first, then by wins and latency), starts the next path after `-stagger` (300 ms) or immediately when the previous one failed, and accepts the first path that answers with a TLS handshake record. Nothing has been sent to the application before that, so a failed or silently dropped attempt is replayed on another path without the application noticing. The TLS session stays end-to-end: the application verifies the certificate; no CA is installed. Non-TLS connections use the best-ranked path without racing. `-direct` adds the ordinary system route as one more racer (it uses local DNS).
+
+Scope and limits: it can only choose among paths that already work for some sites; it does not repair IP-level blocking or allowlisting. A ClientHello for the same site may be sent over several paths at once, which the local ISP already sees. UDP/QUIC is not supported (SOCKS5 CONNECT only). Which path last worked per host is kept in memory only and printed on exit. Applications must use the SOCKS5 address with remote/proxy DNS enabled. Verified locally against the real cores on a network without filtering (selftest passes, different paths win different sites); not yet verified on a filtered network.

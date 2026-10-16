@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -92,5 +94,61 @@ func TestUsageMentionsNewCommands(t *testing.T) {
 		if !strings.Contains(usageText, want) {
 			t.Fatalf("usage lacks %q", want)
 		}
+	}
+}
+
+func TestParseStrategiesLabelsCommentsAndDuplicates(t *testing.T) {
+	list, err := parseStrategies(strings.NewReader("# note\n\nsplit | --split 1+s --disorder 3+s\n--oob 3+s\nsplit again | --split 1+s --disorder 3+s\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || list[0].Label != "split" || strings.Join(list[0].Args, " ") != "--split 1+s --disorder 3+s" || list[1].Label != "--oob 3+s" {
+		t.Fatalf("%+v", list)
+	}
+}
+
+func TestParseStrategiesRejectsListenerFlags(t *testing.T) {
+	for _, line := range []string{"x | -p 1080 --split 1", "x | --port=80", "x | --ip 0.0.0.0 --split 1", "x | -D --split 1", "x |"} {
+		if _, err := parseStrategies(strings.NewReader(line)); err == nil {
+			t.Fatalf("accepted %q", line)
+		}
+	}
+	if _, err := parseStrategies(strings.NewReader("# only comments\n")); err == nil {
+		t.Fatal("empty list accepted")
+	}
+}
+
+func TestBuiltInStrategiesParseAndLoadPrefersEditableFile(t *testing.T) {
+	list, source, err := loadStrategies(t.TempDir())
+	if err != nil || len(list) < 5 || source != "built-in list" {
+		t.Fatalf("built-in: %d %q %v", len(list), source, err)
+	}
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "profiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(strategiesFile(base), []byte("mine | --split 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, source, err = loadStrategies(base)
+	if err != nil || len(list) != 1 || list[0].Label != "mine" || source != strategiesFile(base) {
+		t.Fatalf("file: %+v %q %v", list, source, err)
+	}
+}
+
+func TestStrategiesWriteDoesNotOverwrite(t *testing.T) {
+	base := t.TempDir()
+	if code := runStrategies([]string{"-base", base, "-write"}); code != 0 {
+		t.Fatal(code)
+	}
+	if err := os.WriteFile(strategiesFile(base), []byte("keep | --split 9\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runStrategies([]string{"-base", base, "-write"}); code != 0 {
+		t.Fatal(code)
+	}
+	got, _ := os.ReadFile(strategiesFile(base))
+	if string(got) != "keep | --split 9\n" {
+		t.Fatalf("user file overwritten: %q", got)
 	}
 }

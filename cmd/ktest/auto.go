@@ -47,6 +47,28 @@ func (b *tailBuffer) lastLine() string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
+// switchWriter lets methods built once write to a fresh per-attempt buffer.
+type switchWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *switchWriter) set(w io.Writer) {
+	s.mu.Lock()
+	s.w = w
+	s.mu.Unlock()
+}
+
+func (s *switchWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	w := s.w
+	s.mu.Unlock()
+	if w == nil {
+		return len(p), nil
+	}
+	return w.Write(p)
+}
+
 // runningCore is one proxy core started by `ktest auto`.
 type runningCore struct {
 	cancel context.CancelFunc
@@ -54,21 +76,20 @@ type runningCore struct {
 	err    error
 }
 
-func startCore(parent context.Context, choice, base string, dns *dnscheck.Result, out io.Writer) (*runningCore, int, string, error) {
-	launch, port, label, err := terminalMode(choice, base, out)
-	if err != nil {
-		return nil, 0, "", err
+func startCore(parent context.Context, m method, dns *dnscheck.Result) (*runningCore, error) {
+	if m.err != nil {
+		return nil, m.err
 	}
-	if err := portFree(port); err != nil {
-		return nil, 0, label, err
+	if err := portFree(m.port); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
 	c := &runningCore{cancel: cancel, done: make(chan struct{})}
 	go func() {
-		c.err = launch(ctx, dns)
+		c.err = m.launch(ctx, dns)
 		close(c.done)
 	}()
-	return c, port, label, nil
+	return c, nil
 }
 
 // stop asks the core to end and waits until its port is released.
@@ -97,22 +118,22 @@ func runAuto(args []string) int {
 	fs := flag.NewFlagSet("auto", flag.ContinueOnError)
 	exe, _ := os.Executable()
 	base := fs.String("base", filepath.Dir(exe), "portable folder holding cores/ and profiles/")
-	methods := fs.String("methods", "1,2,3,4", "order to try: 1 Xray B, 2 Xray A, 3 ByeDPI adaptive, 4 ByeDPI TLS slicing")
+	methods := fs.String("methods", "1,2,s", "order to try: 1 Xray B, 2 Xray A, 3 ByeDPI adaptive, 4 ByeDPI TLS slicing, s every ByeDPI strategy in profiles/byedpi-strategies.txt")
 	hold := fs.Bool("hold", true, "keep the first working method running until Ctrl+C")
 	verbose := fs.Bool("v", false, "show core logs while trying")
 	ready := fs.Duration("ready", coreReadyLimit, "how long to wait for each core's local port")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: ktest auto [-methods 1,2,3,4] [-hold=false] [-v] [-base DIR]")
+		fmt.Fprintln(os.Stderr, "usage: ktest auto [-methods 1,2,s] [-hold=false] [-v] [-base DIR]")
 		return 2
 	}
-	var order []string
+	var tokens []string
 	for _, m := range strings.Split(*methods, ",") {
 		m = strings.TrimSpace(m)
-		if m != "1" && m != "2" && m != "3" && m != "4" {
-			fmt.Fprintf(os.Stderr, "unknown method %q; use 1, 2, 3 or 4\n", m)
+		if m != "1" && m != "2" && m != "3" && m != "4" && m != "s" {
+			fmt.Fprintf(os.Stderr, "unknown method %q; use 1, 2, 3, 4 or s\n", m)
 			return 2
 		}
-		order = append(order, m)
+		tokens = append(tokens, m)
 	}
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -120,10 +141,15 @@ func runAuto(args []string) int {
 	dns := dnscheck.CheckGoogleDNS(ctx)
 	fmt.Println("DNS preflight:", dns.Format())
 
+	coreOut := &switchWriter{}
+	var order []method
+	for _, token := range tokens {
+		order = append(order, expandMethod(token, *base, coreOut)...)
+	}
 	var attempts []autoAttempt
 	var best *autoAttempt
-	bestChoice := ""
-	for _, choice := range order {
+	var bestMethod method
+	for i, m := range order {
 		if ctx.Err() != nil {
 			break
 		}
@@ -131,17 +157,16 @@ func runAuto(args []string) int {
 		if *verbose {
 			logs.tee = os.Stderr
 		}
-		core, port, label, err := startCore(ctx, choice, *base, &dns, logs)
+		// Cores write to the per-attempt buffer so a failure can explain itself.
+		coreOut.set(logs)
+		core, err := startCore(ctx, m, &dns)
 		if err != nil {
-			if label == "" {
-				label = "method " + choice
-			}
-			attempts = append(attempts, autoAttempt{label: label, note: err.Error()})
-			fmt.Printf("SKIP  %-26s %v\n", label, err)
+			attempts = append(attempts, autoAttempt{label: m.label, note: err.Error()})
+			fmt.Printf("SKIP  [%d/%d] %-34s %v\n", i+1, len(order), m.label, err)
 			continue
 		}
-		fmt.Printf("TRY   %-26s waiting for 127.0.0.1:%d ...\n", label, port)
-		if !waitForPort(ctx, core.done, port, *ready) {
+		fmt.Printf("TRY   [%d/%d] %-34s waiting for 127.0.0.1:%d ...\n", i+1, len(order), m.label, m.port)
+		if !waitForPort(ctx, core.done, m.port, *ready) {
 			note := "proxy port did not open"
 			select {
 			case <-core.done:
@@ -157,29 +182,29 @@ func runAuto(args []string) int {
 			if ctx.Err() != nil {
 				break
 			}
-			attempts = append(attempts, autoAttempt{label: label, note: note})
-			fmt.Printf("FAIL  %-26s %s\n", label, note)
+			attempts = append(attempts, autoAttempt{label: m.label, note: note})
+			fmt.Printf("FAIL  %-34s %s\n", m.label, note)
 			continue
 		}
-		proxied, compared := measure(ctx, port)
+		proxied, compared := measure(ctx, m.port)
 		if ctx.Err() != nil {
 			core.stop()
 			break
 		}
-		a := autoAttempt{label: label, passed: proxiedPassCount(proxied), total: len(proxied)}
+		a := autoAttempt{label: m.label, passed: proxiedPassCount(proxied), total: len(proxied)}
 		for _, c := range compared {
 			fmt.Printf("      %-8s %s\n", c.Target, describeAssessment(c))
 		}
 		attempts = append(attempts, a)
 		if a.full() {
-			fmt.Printf("READY %-26s %d/%d targets verified through the proxy\n", label, a.passed, a.total)
-			return holdCore(ctx, core, label, port, *hold)
+			fmt.Printf("READY %-34s %d/%d targets verified through the proxy\n", m.label, a.passed, a.total)
+			return holdCore(ctx, core, m.label, m.port, *hold)
 		}
-		fmt.Printf("PART  %-26s %d/%d targets verified; trying the next method\n", label, a.passed, a.total)
+		fmt.Printf("PART  %-34s %d/%d targets verified; trying the next method\n", m.label, a.passed, a.total)
 		core.stop()
 		if best == nil || a.passed > best.passed {
 			cp := a
-			best, bestChoice = &cp, choice
+			best, bestMethod = &cp, m
 		}
 	}
 	if ctx.Err() != nil {
@@ -188,10 +213,10 @@ func runAuto(args []string) int {
 	}
 	if best != nil && best.passed > 0 {
 		fmt.Printf("\nNo method passed every target; restarting the best partial result: %s (%d/%d).\n", best.label, best.passed, best.total)
-		logs := &tailBuffer{max: 4096}
-		core, port, label, err := startCore(ctx, bestChoice, *base, &dns, logs)
-		if err == nil && waitForPort(ctx, core.done, port, *ready) {
-			return holdCore(ctx, core, label, port, *hold)
+		coreOut.set(&tailBuffer{max: 4096})
+		core, err := startCore(ctx, bestMethod, &dns)
+		if err == nil && waitForPort(ctx, core.done, bestMethod.port, *ready) {
+			return holdCore(ctx, core, bestMethod.label, bestMethod.port, *hold)
 		}
 		if core != nil {
 			core.stop()
@@ -201,9 +226,9 @@ func runAuto(args []string) int {
 	for _, a := range attempts {
 		switch {
 		case a.note != "":
-			fmt.Printf("  - %-26s %s\n", a.label, a.note)
+			fmt.Printf("  - %-34s %s\n", a.label, a.note)
 		default:
-			fmt.Printf("  - %-26s %d/%d targets\n", a.label, a.passed, a.total)
+			fmt.Printf("  - %-34s %d/%d targets\n", a.label, a.passed, a.total)
 		}
 	}
 	fmt.Println("A failed run is evidence, not a reason to retry in a loop. Run `ktest doctor`, check that no other VPN is changing the comparison, or try another access network.")

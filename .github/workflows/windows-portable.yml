@@ -94,6 +94,8 @@ jobs:
               (@($profile | Where-Object { $_.remarks -like '*fragB' })).Count -ne 1) {
             throw "Unexpected serverless profile structure"
           }
+          & ./portable/ktest/ktest.exe strategies -write
+          if ($LASTEXITCODE -ne 0) { throw "Could not write the editable ByeDPI strategy list" }
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/XTLS/Xray-core/v26.10.10/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Xray-MPL-2.0.txt
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/hufrea/byedpi/v0.17.3/LICENSE" -OutFile portable/ktest/THIRD_PARTY/ByeDPI-MIT.txt
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/patterniha/Serverless-for-Iran/$rev/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Serverless-GPL-3.0.txt

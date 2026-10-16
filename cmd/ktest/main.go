@@ -34,6 +34,8 @@ const usageText = `ktest: diagnostics and local proxy launcher
 Everyday use (from the extracted portable folder):
   ktest               interactive menu
   ktest auto          try Xray B, Xray A, ByeDPI in turn; keep the first that passes real HTTPS checks
+  ktest smart         run several methods at once behind one SOCKS5 port that races them per connection
+  ktest strategies    list the editable ByeDPI strategies (-write creates profiles/byedpi-strategies.txt)
   ktest doctor        check the package, ports, DNS and direct reachability; changes nothing
 
 Other commands:
@@ -89,6 +91,10 @@ func run(args []string) int {
 		return runAuto(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
+	case "smart":
+		return runSmart(args[1:])
+	case "strategies":
+		return runStrategies(args[1:])
 	case "menu":
 		return interactiveMenu()
 	case "help", "-h", "-help", "--help":

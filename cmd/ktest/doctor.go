@@ -108,6 +108,12 @@ func runDoctor(args []string) int {
 		}
 	}
 
+	if list, source, err := loadStrategies(*base); err != nil {
+		d.line("FAIL", "ByeDPI strategies", err.Error())
+	} else {
+		d.line("OK", "ByeDPI strategies", fmt.Sprintf("%d from %s", len(list), source))
+	}
+
 	// 3. Local ports.
 	for _, p := range []struct {
 		port int

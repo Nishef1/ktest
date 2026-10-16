@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
@@ -26,6 +27,18 @@ func SelectProfile(data []byte, variant string) ([]byte, error) {
 }
 
 func SelectProfileWithDNS(data []byte, variant, verifiedTransport string) ([]byte, error) {
+	return SelectProfileOnPort(data, variant, verifiedTransport, DefaultPort)
+}
+
+// DefaultPort is the loopback port the upstream profile is forced onto.
+const DefaultPort = 10808
+
+// SelectProfileOnPort is SelectProfileWithDNS with a chosen loopback port, so
+// several cores can run side by side.
+func SelectProfileOnPort(data []byte, variant, verifiedTransport string, port int) ([]byte, error) {
+	if port < 1 || port > 65535 {
+		return nil, errors.New("invalid local port")
+	}
 	variant = strings.ToUpper(strings.TrimSpace(variant))
 	if variant != "A" && variant != "B" {
 		return nil, errors.New("variant must be A or B")
@@ -67,7 +80,7 @@ func SelectProfileWithDNS(data []byte, variant, verifiedTransport string) ([]byt
 		}
 		// Force loopback even if upstream changes defaults in a future profile.
 		inbound[0]["listen"] = json.RawMessage(`"127.0.0.1"`)
-		inbound[0]["port"] = json.RawMessage("10808")
+		inbound[0]["port"] = json.RawMessage(strconv.Itoa(port))
 		inbytes, err := json.Marshal(inbound)
 		if err != nil {
 			return nil, err
@@ -91,10 +104,18 @@ type Config struct {
 	Profile    string
 	Variant    string
 	AssetDir   string
+	Port       int // loopback port; 0 means DefaultPort
 	Output     io.Writer
 	// DNS is an optional, already measured Google DNS preflight. When nil, Run
 	// measures it itself; callers that did so (the menu) avoid a second wait.
 	DNS *dnscheck.Result
+}
+
+func (c Config) port() int {
+	if c.Port == 0 {
+		return DefaultPort
+	}
+	return c.Port
 }
 
 var versionPattern = regexp.MustCompile(`(?m)\bXray\s+(\d+)\.(\d+)\.(\d+)\b`)
@@ -146,7 +167,7 @@ func Run(ctx context.Context, c Config) error {
 	} else if google.TCP {
 		transport = "tcp"
 	}
-	profile, err := SelectProfileWithDNS(content, c.Variant, transport)
+	profile, err := SelectProfileOnPort(content, c.Variant, transport, c.port())
 	if err != nil {
 		return err
 	}
@@ -192,7 +213,7 @@ func Run(ctx context.Context, c Config) error {
 	if output == nil {
 		output = os.Stderr
 	}
-	fmt.Fprintf(output, "Local HTTPS/SOCKS5 mixed proxy: 127.0.0.1:10808 (Fragment %s)\n", strings.ToUpper(c.Variant))
+	fmt.Fprintf(output, "Local HTTPS/SOCKS5 mixed proxy: 127.0.0.1:%d (Fragment %s)\n", c.port(), strings.ToUpper(c.Variant))
 	fmt.Fprintln(output, "Use an application that explicitly supports this proxy. Other traffic, including Windscribe WireGuard, is unchanged.")
 	cmd := exec.CommandContext(ctx, c.XrayBinary, "run", "-c", f.Name())
 	cmd.Env = env

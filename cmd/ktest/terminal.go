@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -135,33 +134,17 @@ func terminalMode(choice string, base string, output io.Writer) (launcher, int, 
 		}, xrayPort, "Xray Fragment " + variant, nil
 	}
 	if choice == "3" || choice == "4" {
-		bin := filepath.Join(core, "ciadpi")
-		if runtime.GOOS == "windows" {
-			bin += ".exe"
-		}
+		bin := byeDPIBinary(base)
 		if info, err := os.Stat(bin); err != nil || info.IsDir() {
 			return nil, 0, "", fmt.Errorf("missing %s; download the complete portable ZIP", bin)
 		}
-		args := []string{"-i", "127.0.0.1", "-p", fmt.Sprint(byeDPIPort)}
+		strategy := []string{"--tlsrec", "3+s"}
 		label := "ByeDPI TLS record slicing"
 		if choice == "3" {
-			args = append(args, "--auto=torst", "--timeout", "3", "--tlsrec", "3+s")
+			strategy = []string{"--auto=torst", "--timeout", "3", "--tlsrec", "3+s"}
 			label = "ByeDPI adaptive"
-		} else {
-			args = append(args, "--tlsrec", "3+s")
 		}
-		return func(ctx context.Context, _ *dnscheck.Result) error {
-			cmd := exec.CommandContext(ctx, bin, args...)
-			cmd.Stdout, cmd.Stderr = output, output
-			err := cmd.Run()
-			if ctx.Err() != nil {
-				return nil
-			}
-			if err != nil {
-				return fmt.Errorf("ByeDPI exited: %w", err)
-			}
-			return fmt.Errorf("ByeDPI exited unexpectedly")
-		}, byeDPIPort, label, nil
+		return byeDPILauncher(bin, byeDPIPort, strategy, output), byeDPIPort, label, nil
 	}
 	return nil, 0, "", fmt.Errorf("unknown option %q", choice)
 }
