@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Nishef1/ktest/internal/front"
+	"github.com/Nishef1/ktest/internal/systemtun"
 )
 
 // caDir is where the fronting CA lives (per user, never inside the portable
@@ -230,4 +231,53 @@ func (t *terminal) frontSetup(readLine func() (string, bool)) {
 			u.Line(toneInfo, "Cancelled; nothing was changed.")
 		}
 	}
+}
+
+// certState says whether the fronting certificate needs attention: "ok",
+// "missing", "outdated" (made before this ktest knew more sites) or
+// "untrusted" (not accepted by the system store yet).
+func certState() string {
+	ca, trusted := loadFrontCA()
+	switch {
+	case ca == nil:
+		return "missing"
+	case len(caMissing(ca)) > 0:
+		return "outdated"
+	case !trusted:
+		return "untrusted"
+	}
+	return "ok"
+}
+
+// ensureCert leaves a trusted, up-to-date certificate behind, creating or
+// renewing it as needed. Windows asks the user to confirm the trust step.
+func ensureCert(u *term) bool {
+	switch certState() {
+	case "ok":
+		u.Line(toneOK, "The ktest certificate is set up.")
+		return true
+	case "outdated":
+		u.Line(toneInfo, "The certificate predates sites this ktest can front; renewing it.")
+		if caRemove(u, true) != 0 {
+			return false
+		}
+	}
+	return caInstall(u) == 0
+}
+
+// relaunchElevated reopens this command in an Administrator window; Windows
+// shows its own permission prompt, so nothing is elevated without a decision.
+func relaunchElevated(u *term, o connectOptions) int {
+	args := []string{"connect", "-tun", "-base", o.base, "-listen", o.listen}
+	if o.verbose {
+		args = append(args, "-v")
+	}
+	u.Line(toneInfo, "The system-wide tunnel needs Administrator. Windows will ask for permission and open a new window.")
+	if err := systemtun.Elevate(args); err != nil {
+		u.Line(toneFail, "%v", err)
+		u.Note("Open the terminal as Administrator and run the same command again.")
+		return 1
+	}
+	u.Line(toneOK, "Continue in the new window. This one can be closed.")
+	return 0
 }

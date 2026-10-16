@@ -381,20 +381,7 @@ func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, p
 	if err != nil {
 		return nil, fmt.Errorf("address of %s: %w", dialName, err)
 	}
-	connect := func() (net.Conn, error) {
-		var last error
-		for i, ip := range ips {
-			if i == 2 {
-				break
-			}
-			raw, err := f.cfg.dial(ctx, net.JoinHostPort(ip, "443"))
-			if err == nil {
-				return raw, nil
-			}
-			last = err
-		}
-		return nil, last
-	}
+	connect := func() (net.Conn, error) { return f.dialAny(ctx, ips) }
 	if fr.ECH != "" {
 		return f.tryECH(ctx, fr, name, protos, connect)
 	}
@@ -649,4 +636,64 @@ func httpStatus(c net.Conn, host, path string) (int, error) {
 		}
 	}
 	return code, nil
+}
+
+// dialAny connects to the first of up to four addresses that answers. The
+// addresses are started 250 ms apart, so one dead or filtered address costs a
+// quarter of a second instead of a whole timeout.
+func (f *Fronter) dialAny(ctx context.Context, ips []string) (net.Conn, error) {
+	if len(ips) > 4 {
+		ips = ips[:4]
+	}
+	dctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type res struct {
+		c   net.Conn
+		err error
+	}
+	ch := make(chan res, len(ips))
+	launch := func(ip string) {
+		go func() {
+			c, err := f.cfg.dial(dctx, net.JoinHostPort(ip, "443"))
+			ch <- res{c, err}
+		}()
+	}
+	launched := 1
+	launch(ips[0])
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
+	var last error
+	for pending := 1; pending > 0; {
+		select {
+		case <-timer.C:
+			if launched < len(ips) {
+				launch(ips[launched])
+				launched++
+				pending++
+				timer.Reset(250 * time.Millisecond)
+			}
+		case r := <-ch:
+			pending--
+			if r.err == nil {
+				cancel()
+				go func(left int) {
+					for ; left > 0; left-- {
+						if x := <-ch; x.c != nil {
+							_ = x.c.Close()
+						}
+					}
+				}(pending)
+				return r.c, nil
+			}
+			last = r.err
+			if launched < len(ips) {
+				launch(ips[launched])
+				launched++
+				pending++
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, fmt.Errorf("tcp connect: %w", last)
 }

@@ -3,9 +3,11 @@
 The everyday path needs no options and no knowledge of the methods behind it.
 
 ```
-.\ktest.exe            menu: Connect, Diagnose, Advanced
-.\ktest.exe connect    connect now
-.\ktest.exe doctor     diagnose; changes nothing
+.\ktest.exe                 menu: Connect, Connect whole PC, Diagnose, Certificate, Advanced
+.\ktest.exe connect         connect now
+.\ktest.exe connect -cert   set up or renew the fronting certificate, then connect
+.\ktest.exe connect -tun    the same for every application on the PC (asks for Administrator)
+.\ktest.exe doctor          diagnose; changes nothing
 ```
 
 From source: `go run ./cmd/ktest` (see "Where ktest looks for its files").
@@ -83,11 +85,28 @@ When no trusted address for a site exists at all (system DNS poisoned and encryp
 
 Limits: only HTTPS on port 443 for the listed families; applications that pin certificates refuse it; Google may still refuse sanctioned content for an Iranian address, and fronting does not change your IP.
 
-## 6. Advanced
+## 6. Whole PC (system-wide tunnel)
+
+`ktest connect -tun` (menu 2) makes every application on the PC use ktest, with no proxy settings. A Wintun adapter driven by sing-box takes the TCP connections and hands each one, **by host name**, to the Connect proxy, so the same race (fronting, ECH, Xray, ByeDPI, cuts) decides per connection. Names are answered locally with fake addresses and mapped back when the connection arrives, so the poisoned system DNS is never used by applications; ktest then resolves the real address itself with its trusted chain.
+
+What it does to be safe:
+
+* It starts only after the proxy verified at least one site.
+* It needs Administrator and asks Windows for it (UAC) instead of failing late.
+* ktest and its cores (`xray.exe`, `ciadpi.exe`) are exempt from the tunnel and use the real interface; otherwise their own connections would loop. ktest also resolves names through the real network's DNS servers while the tunnel is up.
+* The block-page range (`10.10.34.0/24`) goes to the proxy instead of the LAN; the proxy recovers the real name from the TLS SNI.
+* Once the adapter is up it fetches real sites through the system route and stops by itself if none works.
+* Ctrl+C or Enter stops it and Windows restores its routes. UDP other than DNS is dropped, so applications fall back to TCP (browsers fall back from QUIC).
+
+Telegram and other non-HTTPS protocols are carried like any TCP connection, but nothing here unblocks an address that is blocked by IP: that needs an exit outside the country, which no path in ktest provides yet.
+
+Not verified on a real network: this mode changes Windows routes. It was checked for configuration validity (`sing-box check`) and by unit tests only.
+
+## 7. Advanced
 
 Single methods (Xray fragment B/A on `127.0.0.1:10808`, ByeDPI on `127.0.0.1:10809`), the Cloudflare IP candidate scan and the experimental system-wide TCP TUN (Windows, Administrator, explicit `YES`). Connect makes these unnecessary for everyday use. The research commands (`probe`, `compare`, `edges`, `path`, `echo`, `access`, `revive`) are unchanged; see `ktest help`.
 
-## 7. What is, and is not, possible
+## 8. What is, and is not, possible
 
 * Every path connects straight to the destination site. ktest needs no server of yours, and it does not change your public IP.
 * Changing a byte of the ClientHello (rewriting the SNI, changing its case) is not possible for a transparent relay: the TLS handshake transcript would no longer match and the handshake fails. ktest cuts the ClientHello, it does not edit it.
@@ -96,11 +115,11 @@ Single methods (Xray fragment B/A on `127.0.0.1:10808`, ByeDPI on `127.0.0.1:108
 * A site whose IP address itself is blocked cannot be reached by any of these methods.
 * No result in this repository comes from a measured Iranian ISP. `Diagnose` and the result box tell you what happens on **your** network, right now.
 
-## 8. Where ktest looks for its files
+## 9. Where ktest looks for its files
 
 `cores/` and `profiles/` are searched next to the executable, then in the working directory, `./dist/ktest-portable` and `./ktest-portable`. `KTEST_BASE` or `-base DIR` overrides it. `ktest strategies -write` creates the editable `profiles/byedpi-strategies.txt` (the packaged build ships it).
 
-## 9. Output
+## 10. Output
 
 Colors, box drawing and the in-place progress line are used only on an interactive terminal. In a pipe, a file, CI, with `NO_COLOR` or `TERM=dumb`, output is plain ASCII. Set `KTEST_ASCII=1` to force ASCII on a terminal that cannot show the glyphs.
 

@@ -89,3 +89,15 @@ func TestMainMenuListsTheThreeActionsOnly(t *testing.T) {
 		t.Fatalf("single methods belong in Advanced:\n%s", text)
 	}
 }
+
+func TestMainMenuOffersWholePCAndCertificate(t *testing.T) {
+	var out bytes.Buffer
+	if code := runInteractive(strings.NewReader("0\n"), &out, t.TempDir()); code != 0 {
+		t.Fatal(code)
+	}
+	for _, want := range []string{"Connect, whole PC", "Certificate", "Diagnose", "Advanced"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("menu lacks %q:\n%s", want, out.String())
+		}
+	}
+}

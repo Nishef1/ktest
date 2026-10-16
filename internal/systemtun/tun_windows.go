@@ -13,34 +13,102 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 )
+
+// IsAdmin reports whether the process may install the tunnel (fltmc succeeds
+// only for an elevated token).
+func IsAdmin() bool { return exec.Command("fltmc.exe").Run() == nil }
+
+// PhysicalNetwork finds the real default network interface and the DNS servers
+// configured on it. It must run BEFORE the tunnel installs its routes and DNS,
+// and it rejects VPN and virtual interfaces rather than guessing through them.
+func PhysicalNetwork(ctx context.Context) (nic string, dns []string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	ps := "$n = (Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.NextHop -ne '0.0.0.0' -and $_.InterfaceAlias -notmatch '(tun|tap|wintun|vpn|wireguard|loopback)' } | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1 -ExpandProperty InterfaceAlias); " +
+		"if ($n) { $n; (Get-DnsClientServerAddress -InterfaceAlias $n -AddressFamily IPv4).ServerAddresses }"
+	out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).CombinedOutput()
+	if err != nil {
+		return "", nil, errors.New("cannot safely identify a physical default network interface")
+	}
+	// Interface aliases may contain spaces, so the first line is taken whole.
+	text := strings.Split(strings.ReplaceAll(strings.TrimSpace(string(out)), "\r", ""), "\n")
+	if len(text) == 0 || strings.TrimSpace(text[0]) == "" {
+		return "", nil, errors.New("cannot safely identify a physical default network interface")
+	}
+	nic = strings.TrimSpace(text[0])
+	for _, l := range text[1:] {
+		if l = strings.TrimSpace(l); l != "" {
+			dns = append(dns, l)
+		}
+	}
+	return nic, dns, nil
+}
+
+// Elevate starts this program again with the given arguments in a new window,
+// asking Windows for Administrator rights (the user sees the UAC prompt and
+// decides). It returns once the request was handed to Windows.
+func Elevate(args []string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	dir, _ := os.Getwd()
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = syscall.EscapeArg(a)
+	}
+	shell := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+	verb, _ := syscall.UTF16PtrFromString("runas")
+	file, _ := syscall.UTF16PtrFromString(exe)
+	params, _ := syscall.UTF16PtrFromString(strings.Join(quoted, " "))
+	wd, _ := syscall.UTF16PtrFromString(dir)
+	ret, _, callErr := shell.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), uintptr(unsafe.Pointer(params)), uintptr(unsafe.Pointer(wd)), 1)
+	if ret <= 32 {
+		return fmt.Errorf("Windows did not start the elevated window (%v)", callErr)
+	}
+	return nil
+}
 
 // Start requires an already functioning SOCKS5 proxy. It never silently
 // enables Windows route changes, DNS interception, or administrator elevation.
 func Start(ctx context.Context, coreDir string, port int, output io.Writer) error {
+	if !IsAdmin() {
+		return errors.New("TUN requires Administrator; reopen Windows Terminal as Administrator before enabling it")
+	}
+	nic, _, err := PhysicalNetwork(ctx)
+	if err != nil {
+		return fmt.Errorf("%w; TUN was not started", err)
+	}
+	payload, err := BuildConfig(port, nic)
+	if err != nil {
+		return err
+	}
+	return launch(ctx, coreDir, payload, nic, "TCP only; DNS over HTTPS via SOCKS", output)
+}
+
+// StartSystem runs the system-wide tunnel described by o until ctx ends.
+// o.PhysicalNIC must come from PhysicalNetwork.
+func StartSystem(ctx context.Context, coreDir string, o Options, output io.Writer) error {
+	if !IsAdmin() {
+		return errors.New("the system-wide tunnel requires Administrator")
+	}
+	o.DirectProcesses = append(append([]string(nil), o.DirectProcesses...), "sing-box.exe")
+	payload, err := BuildSystemConfig(o)
+	if err != nil {
+		return err
+	}
+	return launch(ctx, coreDir, payload, o.PhysicalNIC, "TCP only; names are answered locally", output)
+}
+
+func launch(ctx context.Context, coreDir string, payload []byte, nic, what string, output io.Writer) error {
 	binary := filepath.Join(coreDir, "sing-box.exe")
 	driver := filepath.Join(coreDir, "wintun.dll")
 	for _, p := range []string{binary, driver} {
 		if f, err := os.Stat(p); err != nil || f.IsDir() {
 			return fmt.Errorf("missing bundled TUN component %s", p)
 		}
-	}
-	if err := exec.Command("fltmc.exe").Run(); err != nil {
-		return errors.New("TUN requires Administrator; reopen Windows Terminal as Administrator before enabling it")
-	}
-	discoverCtx, cancelDiscover := context.WithTimeout(ctx, 4*time.Second)
-	defer cancelDiscover()
-	// Resolve the physical NIC BEFORE installing TUN routes. Reject VPN and
-	// virtual interfaces rather than guessing through them.
-	ps := "(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.NextHop -ne '0.0.0.0' -and $_.InterfaceAlias -notmatch '(tun|tap|wintun|vpn|wireguard|loopback)' } | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1 -ExpandProperty InterfaceAlias)"
-	found, err := exec.CommandContext(discoverCtx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).CombinedOutput()
-	if err != nil || strings.TrimSpace(string(found)) == "" {
-		return errors.New("cannot safely identify a physical default network interface; TUN was not started")
-	}
-	nic := strings.TrimSpace(string(found))
-	payload, err := BuildConfig(port, nic)
-	if err != nil {
-		return err
 	}
 	file, err := os.CreateTemp("", "ktest-tun-*.json")
 	if err != nil {
@@ -67,7 +135,7 @@ func Start(ctx context.Context, coreDir string, port int, output io.Writer) erro
 	if err != nil {
 		return fmt.Errorf("sing-box rejected the TUN config: %w: %s", err, strings.TrimSpace(string(result)))
 	}
-	fmt.Fprintf(output, "TUN starting through %s (TCP only; DNS over HTTPS via SOCKS). Windows routes change while active.\n", nic)
+	fmt.Fprintf(output, "TUN starting through %s (%s). Windows routes change while active.\n", nic, what)
 	cmd := exec.Command(binary, "run", "-c", path)
 	cmd.Dir = coreDir
 	cmd.Stdout, cmd.Stderr = output, output

@@ -21,6 +21,7 @@ import (
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/revive"
 	"github.com/Nishef1/ktest/internal/smartproxy"
+	"github.com/Nishef1/ktest/internal/systemtun"
 )
 
 const (
@@ -70,6 +71,8 @@ type connectOptions struct {
 	noDoH      bool
 	noDirect   bool
 	noFront    bool
+	tun        bool
+	cert       bool
 	forceFront bool
 	stagger    time.Duration
 	firstByte  time.Duration
@@ -98,6 +101,8 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.noDoH, "no-doh", false, "never use encrypted DNS (system DNS only)")
 	fs.BoolVar(&o.noDirect, "no-direct", false, "do not race the plain, uncut connection")
 	fs.BoolVar(&o.noFront, "no-front", false, "do not use domain fronting even if the ktest CA is trusted")
+	fs.BoolVar(&o.tun, "tun", false, "route the whole system through ktest (Windows; asks for Administrator)")
+	fs.BoolVar(&o.cert, "cert", false, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", false, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
 	fs.DurationVar(&o.stagger, "stagger", o.stagger, "head start of the first path before all others join")
 	fs.DurationVar(&o.firstByte, "first-byte", o.firstByte, "how long a path may take to answer the TLS ClientHello")
@@ -116,9 +121,16 @@ func runConnect(args []string) int {
 		fmt.Fprintln(os.Stderr, "-strategies must be 0..12")
 		return 2
 	}
+	u := newTerm(os.Stdout)
+	if o.cert && !ensureCert(u) {
+		return 1
+	}
+	if o.tun && !systemtun.IsAdmin() {
+		return relaunchElevated(u, o)
+	}
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-	return connectSession(ctx, o, nil, newTerm(os.Stdout))
+	return connectSession(ctx, o, nil, u)
 }
 
 // siteEvents prints the live feed: one line per site when its winning path is
@@ -467,6 +479,19 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Box(title, verdict, lines)
 	t.Println("")
 	t.Println("  " + t.Dim("Live connections (a site is listed when its winning path is known or changes)"))
+
+	// 5b. The system-wide tunnel, once the proxy has proven itself.
+	if o.tun && verdict != toneFail {
+		t.Println("")
+		tn := startTunnel(ctx, o.base, lport, o.verbose, t)
+		defer tn.stop(t)
+		if tn != nil {
+			t.Line(toneOK, "System-wide: every application on this PC now goes through ktest %s", t.Dim("(TCP; UDP is dropped so applications fall back to TCP)"))
+		}
+		t.Println("")
+	} else if o.tun {
+		t.Line(toneWarn, "The proxy did not verify, so the system-wide tunnel was not started.")
+	}
 
 	// 6. Live feed until the user disconnects.
 	for len(events) > 0 { // self-test traffic is already reported above

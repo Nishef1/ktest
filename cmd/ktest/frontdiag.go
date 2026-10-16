@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,7 +78,7 @@ func printFronts(u *term, checks []frontCheck) {
 			if r.Err == nil {
 				u.Note("%s  HTTP %d  %s", r.Front, r.Status, shortDur(r.Took))
 			} else {
-				u.Note("%s  %s", r.Front, shortErr(r.Err))
+				u.Note("%s  %s", r.Front, frontErr(r.Err))
 			}
 		}
 	}
@@ -92,4 +93,20 @@ func printFronts(u *term, checks []frontCheck) {
 	default:
 		u.Line(toneInfo, "%-26s not created (no front answered, so it would not help on this network)", "ktest CA")
 	}
+}
+
+// frontErr names the stage that failed, which is what tells a blocked address
+// (tcp), a filtered server name (handshake) and poisoned DNS (address) apart.
+func frontErr(err error) string {
+	msg := err.Error()
+	stage := ""
+	switch {
+	case strings.HasPrefix(msg, "tcp connect"):
+		stage = "tcp: "
+	case strings.HasPrefix(msg, "handshake"):
+		stage = "TLS handshake: "
+	case strings.HasPrefix(msg, "address"):
+		stage = "address: "
+	}
+	return stage + shortErr(err)
 }

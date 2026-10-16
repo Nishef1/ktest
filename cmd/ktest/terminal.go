@@ -44,6 +44,8 @@ type terminal struct {
 	assessments []quickcheck.Assessment
 	scanCancel  context.CancelFunc
 	connect     context.CancelFunc // set while the connect view runs
+
+	certDeclined bool // the user skipped the certificate offer this session
 }
 
 func (t *terminal) print(format string, args ...any) {
@@ -266,11 +268,13 @@ func (t *terminal) mainMenu() {
 		state = u.Green(status)
 	}
 	u.Printf("  Status: %s\n\n", state)
-	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("1")), u.Bold("Connect   "), u.Dim("try every method, keep what works (recommended)"))
-	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("2")), u.Bold("Diagnose  "), u.Dim("what is this network doing? DNS, SNI, packet cutting"))
-	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("3")), u.Bold("Advanced  "), u.Dim("single methods, CDN scan, system-wide TUN"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("1")), u.Bold("Connect          "), u.Dim("try every method, keep what works (recommended)"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("2")), u.Bold("Connect, whole PC"), u.Dim("the same, for every application (Windows, Administrator)"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("3")), u.Bold("Diagnose         "), u.Dim("what is this network doing? DNS, SNI, packet cutting"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("4")), u.Bold("Certificate      "), u.Dim("domain fronting: set up, renew or remove the local certificate"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("5")), u.Bold("Advanced         "), u.Dim("single methods, CDN scan"))
 	if t.current() != nil {
-		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("4")), u.Bold("Stop      "), u.Dim("stop the running method"))
+		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("6")), u.Bold("Stop             "), u.Dim("stop the running method"))
 	}
 	u.Printf("  %s  %s\n\n", u.Bold(u.Cyan("0")), u.Bold("Exit      "))
 	u.Printf("  Select > ")
@@ -284,7 +288,6 @@ func (t *terminal) advancedMenu() {
 		{"3", "ByeDPI adaptive"}, {"4", "ByeDPI TLS record slicing"},
 		{"5", "CDN IP candidates (Cloudflare scan)"}, {"6", "System-wide TUN (Windows, Administrator, beta)"},
 		{"7", "Stop the running method"}, {"8", "Re-test YouTube and Google"},
-		{"9", "Domain fronting: local CA (status, trust, remove)"},
 		{"0", "Back"},
 	} {
 		u.Printf("  %s  %s\n", u.Bold(u.Cyan(r[0])), r[1])
@@ -347,20 +350,22 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			// Asynchronous output can visually displace the prompt; an empty
 			// Enter is never an invalid choice.
 			continue
-		case "1":
+		case "1", "2":
 			if t.current() != nil && !t.stop() {
 				continue
 			}
-			if !t.runConnect(base, lines) {
+			if !t.connectFromMenu(base, lines, readLine, line == "2") {
 				return 0
 			}
-		case "2":
-			runDoctorView(t.ui, base, false)
 		case "3":
+			runDoctorView(t.ui, base, false)
+		case "4":
+			t.frontSetup(readLine)
+		case "5":
 			if !t.advanced(base, readLine) {
 				return 0
 			}
-		case "4", "s", "S":
+		case "6", "s", "S":
 			t.stop()
 		case "0", "q", "Q":
 			if !t.stopIfActive() {
@@ -368,20 +373,61 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			}
 			return 0
 		default:
-			t.ui.Line(toneWarn, "Unknown option. Select 1-3, or 0 to exit.")
+			t.ui.Line(toneWarn, "Unknown option. Select 1-5, or 0 to exit.")
 		}
 	}
 }
 
+// connectFromMenu is Connect (or Connect for the whole PC) with the certificate
+// offered first when domain fronting would need it. It reports false when stdin
+// closed.
+func (t *terminal) connectFromMenu(base string, lines <-chan string, readLine func() (string, bool), tun bool) bool {
+	if state := certState(); state != "ok" && !t.certDeclined {
+		why := map[string]string{
+			"missing":   "Domain fronting (YouTube, X, Instagram, Reddit ...) needs a local certificate that is not set up.",
+			"outdated":  "The local certificate predates sites this ktest can front.",
+			"untrusted": "The local certificate exists but this system does not trust it yet.",
+		}[state]
+		t.ui.Line(toneInfo, "%s", why)
+		t.print("  Type YES to set it up now (Windows asks you to confirm), or press Enter to skip > ")
+		ans, ok := readLine()
+		if !ok {
+			return false
+		}
+		if ans == "YES" {
+			ensureCert(t.ui)
+		} else {
+			t.certDeclined = true
+		}
+	}
+	if tun && !systemtun.IsAdmin() {
+		t.ui.Line(toneInfo, "The whole-PC mode needs Administrator.")
+		t.print("  Type YES to open an Administrator window (Windows asks you to confirm) > ")
+		ans, ok := readLine()
+		if !ok {
+			return false
+		}
+		if ans != "YES" {
+			t.ui.Line(toneInfo, "Cancelled.")
+			return true
+		}
+		o := defaultConnectOptions(base)
+		relaunchElevated(t.ui, o)
+		return true
+	}
+	return t.runConnect(base, lines, tun)
+}
+
 // runConnect shows the connect view until the session ends or the user presses
 // Enter / Ctrl+C. It reports false when stdin closed.
-func (t *terminal) runConnect(base string, lines <-chan string) bool {
+func (t *terminal) runConnect(base string, lines <-chan string, tun bool) bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.mu.Lock()
 	t.connect = cancel
 	t.mu.Unlock()
 	o := defaultConnectOptions(base)
 	o.stopHint = "Press Enter or Ctrl+C to disconnect"
+	o.tun = tun
 	done := make(chan int, 1)
 	go func() { done <- connectSession(ctx, o, nil, t.ui) }()
 	alive := true
@@ -437,12 +483,10 @@ func (t *terminal) advanced(base string, readLine func() (string, bool)) bool {
 			} else {
 				go t.check(s.ctx, s)
 			}
-		case "9":
-			t.frontSetup(readLine)
 		case "0", "b", "B":
 			return true
 		default:
-			t.ui.Line(toneWarn, "Unknown option. Select 1-9, or 0 to go back.")
+			t.ui.Line(toneWarn, "Unknown option. Select 1-8, or 0 to go back.")
 		}
 	}
 }
