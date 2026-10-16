@@ -65,31 +65,31 @@ func xrayLauncher(base, variant string, port int, out io.Writer) (launcher, erro
 // connectOptions configures one connect session (CLI or menu). The defaults are
 // the product; every field is for experiments.
 type connectOptions struct {
-	base       string
-	mode       ConnectionMode
-	listen     string
-	strategies int
-	noXray     bool
-	noSelf     bool
-	noDoH      bool
-	noDirect   bool
-	noFront    bool
-	noWarp     bool
-	noHTTP     bool
-	httpListen string
-	exitSocks  string
-	aiExtra    string
-	aiDirect   bool
-	windscribeCLI string
+	base                string
+	mode                ConnectionMode
+	listen              string
+	strategies          int
+	noXray              bool
+	noSelf              bool
+	noDoH               bool
+	noDirect            bool
+	noFront             bool
+	noWarp              bool
+	noHTTP              bool
+	httpListen          string
+	exitSocks           string
+	aiExtra             string
+	aiDirect            bool
+	windscribeCLI       string
 	windscribeReconnect bool
-	tun        bool
-	cert       bool
-	forceFront bool
-	stagger    time.Duration
-	firstByte  time.Duration
-	ready      time.Duration
-	verbose    bool
-	stopHint   string
+	tun                 bool
+	cert                bool
+	forceFront          bool
+	stagger             time.Duration
+	firstByte           time.Duration
+	ready               time.Duration
+	verbose             bool
+	stopHint            string
 }
 
 func defaultConnectOptions(base string) connectOptions {
@@ -540,12 +540,16 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		vctx, vcancel := context.WithTimeout(ctx, 30*time.Second)
 		proxied, compared = measure(vctx, lport)
 		vcancel()
-		if ctx.Err() != nil { return 0 }
+		if ctx.Err() != nil {
+			return 0
+		}
 		passedNow := proxiedPassCount(proxied)
 		verdict = toneOK
 		switch {
-		case passedNow == 0: verdict = toneFail
-		case passedNow < len(proxied): verdict = toneWarn
+		case passedNow == 0:
+			verdict = toneFail
+		case passedNow < len(proxied):
+			verdict = toneWarn
 		}
 		vstep.Finish(verdict, fmt.Sprintf("%d of %d reachable through ktest", passedNow, len(proxied)))
 	} else {
