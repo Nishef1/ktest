@@ -609,9 +609,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}
 	}
+	pathsDesc := fmt.Sprintf("%d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)) + frontSuffix(fronter)
+	if o.mode == ModeWindscribe {
+		pathsDesc = fmt.Sprintf("%d local-only anti-DPI paths; NO plain or foreign exits", len(ups))
+	}
 	lines := []string{
 		t.Bold("Proxy   ") + "  socks5://" + l.Addr().String() + t.Dim("   (turn on \"proxy DNS\" / remote DNS in the app)"),
-		t.Bold("Paths   ") + fmt.Sprintf("  %d configured: local anti-DPI only in Windscribe mode", len(ups)) + frontSuffix(fronter),
+		t.Bold("Paths   ") + "  " + pathsDesc,
 	}
 	if httpAddr != "" {
 		lines = append(lines, t.Bold("HTTP    ")+"  http://"+httpAddr+t.Dim("   (Windscribe Proxy Settings; TCP only)"))
