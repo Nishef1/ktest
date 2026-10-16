@@ -10,7 +10,7 @@ git pull --ff-only origin main
 go run ./cmd/ktest connect -mode windscribe -v
 ```
 
-Menu option **8** launches the same mode. Windscribe **Proxy Settings** (not Proxy Gateway):
+Menu option **5** launches the same mode. Windscribe **Proxy Settings** (not Proxy Gateway):
 
 | Setting | Value |
 | --- | --- |
@@ -31,7 +31,9 @@ Shir-o-Khorshid, Se7en Pro and MahsaNG all run Psiphon: they scan CDN IPs and re
 
 For each new OpenVPN connection ktest sends the client stream over **every** carrier, launched 250 ms apart, and keeps the first one that **returns a complete TCP-framed OpenVPN server control packet**. It checks the length and server opcode, buffering fragmented replies until the first packet is complete. HTTP error pages, client-only/data opcodes and truncated packets cannot win. This is a framing check, not authentication. Windscribe's **Protocol Tweaks / J - Iran Junk Packets** can stay enabled: junk and subsequent handshake bytes are forwarded in order while the race runs, and a carrier that opens later receives the entire buffered prefix before new bytes. A silent or blocked carrier does not stall the others. The losers are closed and new client data continues only on the winner. Windscribe itself authenticates the OpenVPN response and completes login; ktest does not check tls-auth or claim that the VPN is connected merely because a correctly shaped packet arrived.
 
-The race lasts at most 25 seconds and retains at most 1 MiB before any carrier answers. Exceeding that pre-answer limit fails the connection rather than dropping bytes. After selection, sent bytes are released and normal flow control bounds the pending buffer, so the limit does not cap VPN data transfer. Closing the client cancels pending carrier dials and blocked writes. Internal Xray/ByeDPI carrier attempts remain available in verbose diagnostics but do not produce separate site-feed events; ordinary Windscribe API connections still do.
+The race lasts at most 25 seconds and retains at most 1 MiB before any carrier answers. Exceeding that pre-answer limit fails the connection rather than dropping bytes. After selection, sent bytes are released and normal flow control bounds the pending buffer, so the limit does not cap VPN data transfer. Closing the client cancels pending carrier dials and blocked writes. WStunnel close also bounds its wait for a stalled frame writer. Stopping either proxy listener or its session cancels active HTTP CONNECT and SOCKS tunnels, rather than leaving sockets behind. Internal Xray/ByeDPI carrier attempts remain available in verbose diagnostics but do not produce separate site-feed events; ordinary Windscribe API connections still do.
+
+API classification tolerates TLS/HTTP signatures split across TCP reads, including a one-byte first write. The SOCKS selector likewise waits for a complete TLS record header before classifying the ClientHello, within its existing first-flight deadline. Splitting the header must not accidentally choose raw OpenVPN or non-TLS forwarding.
 
 | Carrier | Where it goes | TLS SNI |
 | --- | --- | --- |
@@ -105,9 +107,9 @@ The automatic retry interval is at least **three minutes**. ktest never calls `d
 go run ./cmd/ktest connect -mode windscribe -windscribe-auto-reconnect=false
 ```
 
-Each **new HTTP CONNECT** rotates to the next eligible local Xray/ByeDPI method for that exact **host:port**, in stable configured rank/order. If TCP/SOCKS establishment fails, the remaining local methods are tried within the same request; if all fail, the proxy returns 502. If TCP establishment succeeds but the VPN later resets or stalls, Windscribe's next connection to that destination tries the next method. Retry history expires after the configured memory TTL (30 minutes by default).
+For raw OpenVPN forwarding without WStunnel/Stealth (`-windscribe-wstunnel=false`), each **new HTTP CONNECT** rotates to the next eligible local Xray/ByeDPI method for that exact **host:port**, in stable configured rank/order. If TCP/SOCKS establishment fails, the remaining local methods are tried within the same request; if all fail, the proxy returns 502. If TCP establishment succeeds but the VPN later resets or stalls, Windscribe's next connection to that destination tries the next method. Retry history expires after the configured memory TTL (30 minutes by default). The WStunnel/Stealth race described above instead chooses a carrier after an OpenVPN-shaped server reply.
 
-API/DNS requests and other destinations have independent retry histories. TCP acceptance never pins the whole Windscribe session or trains the verified-answer scores. Existing streams keep their original transport; ktest neither replays opaque VPN bytes nor migrates live connections. The proxy does not interpret VPN authentication or infer VPN success from server bytes. Windscribe still owns handshake validation and decides when to reconnect.
+API/DNS requests and other destinations have independent retry histories. TCP acceptance never pins the whole Windscribe session or trains the verified-answer scores. Existing streams keep their original transport; replay is limited to the initial carrier race, and ktest does not migrate established streams. The proxy does not interpret VPN authentication or infer VPN success from server bytes. Windscribe still owns handshake validation and decides when to reconnect.
 
 The live feed labels these events **TCP proxy accepted; VPN handshake not verified**, without a green success mark or inclusion in the answered-connection count. `11 of 11 ready` only means eleven local processes/listeners started, not that eleven methods passed a VPN handshake.
 

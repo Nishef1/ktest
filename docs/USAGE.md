@@ -87,7 +87,7 @@ Limits: only HTTPS on port 443 for the listed families; applications that pin ce
 
 ## 6. Whole PC (system-wide tunnel)
 
-`ktest connect -tun` (menu 2) makes every application on the PC use ktest, with no proxy settings. A Wintun adapter driven by sing-box takes the TCP connections and hands each one, **by host name**, to the Connect proxy, so the same race (fronting, ECH, Xray, ByeDPI, cuts) decides per connection. Names are answered locally with fake addresses and mapped back when the connection arrives, so the poisoned system DNS is never used by applications; ktest then resolves the real address itself with its trusted chain.
+`ktest connect -tun` (menu 6) makes every application on the PC use ktest, with no proxy settings. A Wintun adapter driven by sing-box takes the TCP connections and hands each one, **by host name**, to the Connect proxy, so the same race (fronting, ECH, Xray, ByeDPI, cuts) decides per connection. Names are answered locally with fake addresses and mapped back when the connection arrives, so the poisoned system DNS is never used by applications; ktest then resolves the real address itself with its trusted chain.
 
 What it does to be safe:
 

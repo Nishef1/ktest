@@ -7,6 +7,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -364,6 +365,55 @@ func TestBridgeSendsOnlyOpenVPNToTheRace(t *testing.T) {
 		t.Fatalf("OpenVPN went to %q", got)
 	}
 	c.Close()
+}
+
+func TestBridgeRecognisesFragmentedAPIWithoutChangingBytes(t *testing.T) {
+	for _, payload := range [][]byte{
+		{0x16, 0x03, 0x01, 0, 3, 1, 2, 3},
+		[]byte("GET / HTTP/1.1\r\n\r\n"),
+		[]byte("POST / HTTP/1.1\r\n\r\n"),
+		[]byte("OPTIONS / HTTP/1.1\r\n\r\n"),
+		[]byte("PATCH / HTTP/1.1\r\n\r\n"),
+	} {
+		t.Run(fmt.Sprintf("prefix_%x", payload[:2]), func(t *testing.T) {
+			b := testBridge(&dialLog{}) // no OpenVPN candidates: misrouting must fail
+			b.local = func(context.Context, string, string) (net.Conn, error) {
+				a, z := net.Pipe()
+				go func() {
+					defer z.Close()
+					got := make([]byte, len(payload))
+					if _, err := io.ReadFull(z, got); err == nil {
+						_, _ = z.Write(got)
+					}
+					_, _ = io.Copy(io.Discard, z)
+				}()
+				return a, nil
+			}
+			c, err := b.Dial(context.Background(), "203.0.113.9", "443")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+			written := make(chan error, 1)
+			go func() {
+				for _, v := range payload {
+					if _, err := c.Write([]byte{v}); err != nil {
+						written <- err
+						return
+					}
+				}
+				written <- nil
+			}()
+			got := make([]byte, len(payload))
+			if _, err := io.ReadFull(c, got); err != nil {
+				t.Fatalf("fragmented API was not carried: %v", err)
+			}
+			if err := <-written; err != nil || !bytes.Equal(got, payload) {
+				t.Fatalf("API stream changed: got %x, write error %v", got, err)
+			}
+		})
+	}
 }
 
 func TestRaceTakesFirstAnswerNotFirstSocket(t *testing.T) {

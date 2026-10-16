@@ -279,6 +279,26 @@ func (b *wsBridge) Dial(ctx context.Context, host, port string) (net.Conn, error
 		return b.local(ctx, host, port)
 	}
 	return newSniffConn(ctx, func(ctx context.Context, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
+		// TCP reads can split even the two-byte TLS signature. Read only an
+		// ambiguous prefix before deciding; ordinary OpenVPN/junk starts racing
+		// immediately, and all bytes remain part of the forwarded stream.
+		for !looksTLSorHTTP(first) {
+			pending := false
+			for _, prefix := range bridgeAPIPrefixes {
+				if strings.HasPrefix(prefix, string(first)) {
+					pending = true
+					break
+				}
+			}
+			if !pending {
+				break
+			}
+			var next [1]byte
+			if _, err := io.ReadFull(input, next[:]); err != nil {
+				return nil, nil, err
+			}
+			first = append(first, next[0])
+		}
 		if looksTLSorHTTP(first) {
 			c, err := b.local(ctx, host, port)
 			if err == nil {
@@ -296,13 +316,12 @@ func (b *wsBridge) Dial(ctx context.Context, host, port string) (net.Conn, error
 	}), nil
 }
 
+var bridgeAPIPrefixes = [...]string{"\x16\x03", "GET ", "POST", "HEAD", "PUT ", "CONN", "DELETE ", "OPTIONS ", "PATCH ", "TRACE "}
+
 // looksTLSorHTTP tells Windscribe's API/HTTPS traffic from OpenVPN TCP,
 // whose first bytes are a 2-byte length and a control opcode.
 func looksTLSorHTTP(b []byte) bool {
-	if len(b) >= 2 && b[0] == 0x16 && b[1] == 0x03 {
-		return true
-	}
-	for _, m := range []string{"GET ", "POST", "HEAD", "PUT ", "CONN"} {
+	for _, m := range bridgeAPIPrefixes {
 		if strings.HasPrefix(string(b), m) {
 			return true
 		}

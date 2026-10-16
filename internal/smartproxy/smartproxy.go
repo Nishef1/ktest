@@ -512,7 +512,10 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 
 // Serve accepts SOCKS5 clients until ctx ends.
 func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
-	go func() { <-ctx.Done(); _ = l.Close() }()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(ctx, func() { _ = l.Close() })
+	defer stop()
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -531,6 +534,8 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 
 func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	defer client.Close()
+	stopClient := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stopClient()
 	host, port, err := socksRequest(client)
 	if err != nil {
 		return
@@ -552,6 +557,8 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 		p.logf("%s:%s no path answered: %v", host, port, err)
 		return
 	}
+	stopWinner := context.AfterFunc(ctx, win.release)
+	defer stopWinner()
 	if win.sess != nil {
 		if err := win.sess.Serve(client, flight); err != nil {
 			p.logf("%s:%s %s: %v", host, port, win.path, err)
@@ -1102,7 +1109,12 @@ func readFirstFlight(c net.Conn) []byte {
 		if err != nil {
 			return buf
 		}
-		if len(buf) >= 5 && buf[0] == 0x16 && buf[1] == 3 {
+		if len(buf) > 0 && buf[0] == 0x16 && (len(buf) < 2 || buf[1] == 3) {
+			// TCP may split the record header itself. A partial header must
+			// not route TLS through the non-TLS paths before SNI can be read.
+			if len(buf) < 5 {
+				continue
+			}
 			if len(buf) >= 5+int(binary.BigEndian.Uint16(buf[3:5])) {
 				return buf
 			}

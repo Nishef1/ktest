@@ -22,6 +22,106 @@ func clientHello() []byte {
 // serverHello answers with a TLS handshake record header plus payload.
 var serverHello = []byte{0x16, 3, 3, 0, 4, 2, 0, 0, 0}
 
+func TestFirstFlightReadsTLSHeaderSplitAcrossWrites(t *testing.T) {
+	for split := 1; split < 5; split++ {
+		t.Run(fmt.Sprint(split), func(t *testing.T) {
+			a, z := net.Pipe()
+			defer a.Close()
+			defer z.Close()
+			want := clientHello()
+			written := make(chan error, 1)
+			go func() {
+				_ = z.SetWriteDeadline(time.Now().Add(time.Second))
+				if _, err := z.Write(want[:split]); err != nil {
+					written <- err
+					return
+				}
+				_, err := z.Write(want[split:])
+				written <- err
+			}()
+			got := readFirstFlight(a)
+			if !bytes.Equal(got, want) || !isTLSFlight(got) {
+				t.Fatalf("partial TLS record escaped classification: got %x, want %x", got, want)
+			}
+			if err := <-written; err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestStoppingProxyClosesActiveSOCKSTunnel(t *testing.T) {
+	for _, shutdown := range []string{"context", "listener"} {
+		t.Run(shutdown, func(t *testing.T) {
+			dest, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer dest.Close()
+			remoteClosed := make(chan struct{})
+			go func() {
+				defer close(remoteClosed)
+				c, err := dest.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				_, _ = io.Copy(c, c)
+			}()
+			p, err := New(Config{Upstreams: PlainUpstreams()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer l.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			finished := make(chan error, 1)
+			go func() { finished <- p.Serve(ctx, l) }()
+			c, err := net.Dial("tcp", l.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+			host, port, _ := net.SplitHostPort(dest.Addr().String())
+			if err := socksConnect(c, host, port); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = c.Write([]byte{1, 2})
+			if _, err := io.ReadFull(c, make([]byte, 2)); err != nil {
+				t.Fatal(err)
+			}
+			if shutdown == "context" {
+				cancel()
+			} else {
+				_ = l.Close()
+			}
+			select {
+			case <-finished:
+			case <-time.After(time.Second):
+				t.Fatal("SOCKS listener did not stop")
+			}
+			_ = c.SetReadDeadline(time.Now().Add(time.Second))
+			_, err = c.Read(make([]byte, 1))
+			if err == nil {
+				t.Fatal("tunnel remained readable after shutdown")
+			}
+			if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+				t.Fatal("SOCKS tunnel remained open after shutdown")
+			}
+			select {
+			case <-remoteClosed:
+			case <-time.After(time.Second):
+				t.Fatal("upstream remained open after shutdown")
+			}
+		})
+	}
+}
+
 // destination replies to any first bytes with a ServerHello-looking record.
 func destination(t *testing.T) string {
 	t.Helper()

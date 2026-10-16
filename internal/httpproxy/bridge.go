@@ -42,8 +42,15 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	if listener.Addr().String() == up.String() {
 		return errors.New("HTTP bridge cannot proxy through itself")
 	}
-	server := &http.Server{Handler: http.HandlerFunc(s.handle), ReadHeaderTimeout: 8 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
-	go func() { <-ctx.Done(); _ = server.Close() }()
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	server := &http.Server{
+		Handler: http.HandlerFunc(s.handle), ReadHeaderTimeout: 8 * time.Second,
+		IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10,
+		BaseContext: func(net.Listener) context.Context { return serveCtx },
+	}
+	stop := context.AfterFunc(serveCtx, func() { _ = server.Close() })
+	defer stop()
 	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) || (ctx.Err() != nil && errors.Is(err, net.ErrClosed)) {
 		return nil
@@ -196,6 +203,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			upstream.Close()
 			return
 		}
+		// net/http no longer owns hijacked CONNECT sockets. Tie both legs to
+		// the serving context so leaving a mode also stops its active tunnels.
+		stop := context.AfterFunc(r.Context(), func() { _ = client.Close(); _ = upstream.Close() })
+		defer stop()
 		if _, err = buffered.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err == nil {
 			err = buffered.Flush()
 		}

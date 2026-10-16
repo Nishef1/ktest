@@ -382,12 +382,14 @@ func (w *Conn) nextFrame() error {
 
 // Close sends a close frame (best effort) and closes the TCP leg.
 func (w *Conn) Close() error {
+	// Bound the wait before acquiring wmu: a stalled frame writer holds it.
+	// Setting the deadline afterwards would leave cancellation stuck forever.
+	_ = w.c.SetWriteDeadline(time.Now().Add(time.Second))
 	w.wmu.Lock()
 	already := w.closed
 	w.closed = true
 	w.wmu.Unlock()
 	if !already {
-		_ = w.c.SetWriteDeadline(time.Now().Add(time.Second))
 		_ = w.writeFrame(opClose, []byte{0x03, 0xE8})
 	}
 	return w.c.Close()

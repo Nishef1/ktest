@@ -14,9 +14,47 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type writeStartedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *writeStartedConn) Write(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Write(p)
+}
+
+func TestCloseUnblocksStalledWriter(t *testing.T) {
+	a, z := net.Pipe()
+	defer z.Close()
+	defer a.Close()
+	leg := &writeStartedConn{Conn: a, started: make(chan struct{})}
+	c := &Conn{c: leg, r: bufio.NewReader(leg)}
+	written := make(chan error, 1)
+	go func() { _, err := c.Write([]byte("blocked")); written <- err }()
+	<-leg.started // writer holds wmu and the peer will never read
+	closed := make(chan struct{})
+	go func() { _ = c.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close waited indefinitely for a blocked WebSocket writer")
+	}
+	select {
+	case err := <-written:
+		if err == nil {
+			t.Fatal("stalled write unexpectedly succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close left the writer blocked")
+	}
+}
 
 func TestDialReportsTCPFailureWithoutLosingCause(t *testing.T) {
 	blocked := errors.New("destination blocked")

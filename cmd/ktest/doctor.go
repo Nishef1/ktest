@@ -40,7 +40,11 @@ func runDoctor(args []string) int {
 // a blocking problem was found.
 func runDoctorView(u *term, base string, noNet bool) (failed bool) {
 	ctx := context.Background()
-	u.Heading("diagnose", "Reads the package and measures this network. Changes nothing.")
+	description := "Reads the package and measures this network. Changes nothing."
+	if noNet {
+		description = "Reads the package and checks local ports. Network tests are disabled."
+	}
+	u.Heading("diagnose", description)
 	warns := 0
 	line := func(k tone, name, detail string) {
 		switch k {
@@ -136,29 +140,27 @@ func runDoctorView(u *term, base string, noNet bool) (failed bool) {
 	}
 
 	// 3. The network, measured without any proxy.
-	section("Network")
-	dns := dnscheck.CheckGoogleDNS(ctx)
-	switch {
-	case dns.UDP && dns.TCP:
-		line(toneOK, "Google DNS 8.8.8.8", "UDP and TCP answer a real query")
-	case dns.UDP || dns.TCP:
-		line(toneWarn, "Google DNS 8.8.8.8", fmt.Sprintf("UDP=%t TCP=%t; only one transport answers", dns.UDP, dns.TCP))
-	default:
-		line(toneWarn, "Google DNS 8.8.8.8", "no answer (UDP and TCP); plain public DNS is filtered here")
-	}
-	directCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	direct := quickcheck.RunDirect(directCtx, 8*time.Second)
-	cancel()
-	open := 0
-	for _, r := range direct {
-		if r.Success {
-			open++
-			line(toneOK, "Direct "+r.Target, "reachable without any proxy")
-		} else {
-			line(toneInfo, "Direct "+r.Target, "not reachable without a proxy "+u.Dim(trimDetail(r.Detail)))
-		}
-	}
 	if !noNet {
+		section("Network")
+		dns := dnscheck.CheckGoogleDNS(ctx)
+		switch {
+		case dns.UDP && dns.TCP:
+			line(toneOK, "Google DNS 8.8.8.8", "UDP and TCP answer a real query")
+		case dns.UDP || dns.TCP:
+			line(toneWarn, "Google DNS 8.8.8.8", fmt.Sprintf("UDP=%t TCP=%t; only one transport answers", dns.UDP, dns.TCP))
+		default:
+			line(toneWarn, "Google DNS 8.8.8.8", "no answer (UDP and TCP); plain public DNS is filtered here")
+		}
+		directCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		direct := quickcheck.RunDirect(directCtx, 8*time.Second)
+		cancel()
+		for _, r := range direct {
+			if r.Success {
+				line(toneOK, "Direct "+r.Target, "reachable without any proxy")
+			} else {
+				line(toneInfo, "Direct "+r.Target, "not reachable without a proxy "+u.Dim(trimDetail(r.Detail)))
+			}
+		}
 		prog := u.Progress("Probing DNS, encrypted DNS, packet shapes", 3)
 		pctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 		rep := probeNetwork(pctx, func(done int) { prog.Set(done, "") })
@@ -182,8 +184,8 @@ func runDoctorView(u *term, base string, noNet bool) (failed bool) {
 			}
 		}
 		u.Box("VERDICT", rep.verdict, verdict)
-	} else if open == len(direct) && open > 0 {
-		u.Note("Everything tested already works directly: no filtering is visible on this path (or another VPN carries it).")
+	} else {
+		u.Note("Network checks skipped (-no-net).")
 	}
 
 	// Result.
@@ -193,6 +195,8 @@ func runDoctorView(u *term, base string, noNet bool) (failed bool) {
 		u.Box("FIX FIRST", toneFail, []string{"Resolve the lines marked with a cross; nothing else is meaningful until they pass."})
 	case warns > 0:
 		u.Box("OK WITH NOTES", toneWarn, []string{fmt.Sprintf("%d note(s) above. Connect (menu 1, or `ktest connect`) can run now.", warns)})
+	case noNet:
+		u.Box("PACKAGE CHECKS PASSED", toneOK, []string{"Network access was not tested. Run `ktest doctor` for network diagnostics."})
 	default:
 		u.Box("ALL GOOD", toneOK, []string{"Nothing blocks ktest. Run Connect (menu 1, or `ktest connect`)."})
 	}
