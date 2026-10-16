@@ -154,8 +154,9 @@ func TestStrategiesWriteDoesNotOverwrite(t *testing.T) {
 }
 
 func TestDefaultBaseHonoursEnvAndFindsCoresInWorkingDirectory(t *testing.T) {
-	t.Setenv("KTEST_BASE", "X:\custom")
-	if got := defaultBase(); got != "X:\custom" {
+	custom := filepath.Join(t.TempDir(), "custom")
+	t.Setenv("KTEST_BASE", custom)
+	if got := defaultBase(); got != custom {
 		t.Fatalf("env override ignored: %q", got)
 	}
 	t.Setenv("KTEST_BASE", "")
