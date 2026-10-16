@@ -333,6 +333,38 @@ func TestWindscribeNoLocalBypassReturnsErrorWithoutDial(t *testing.T) {
 	}
 }
 
+func TestWindscribeCarrierSuppressesOnlyItsOwnFeedEvents(t *testing.T) {
+	var hits atomic.Int32
+	var events []Event
+	p, err := New(Config{OnEvent: func(e Event) { events = append(events, e) }, Upstreams: []Upstream{
+		{Name: "local ByeDPI", LocalBypass: true, Addr: fakeSocks(t, destination(t), true, &hits)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for _, dial := range []func(context.Context, string, string) (net.Conn, error){p.DialWindscribeCarrier, p.DialWindscribeLocal} {
+		c, err := dial(ctx, "198.51.100.23", "443")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = c.Close()
+	}
+	if len(events) != 1 || events[0].Host != "198.51.100.23" || !events[0].TCPOnly {
+		t.Fatalf("internal carrier dials must be silent, ordinary CONNECTs still reported: %+v", events)
+	}
+	// The quiet path must retain the same fail-closed policy.
+	unsafe, err := New(Config{Upstreams: []Upstream{{Name: "direct"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := unsafe.DialWindscribeCarrier(ctx, "198.51.100.23", "443"); err == nil {
+		_ = c.Close()
+		t.Fatal("internal carrier bypassed local-only policy")
+	}
+}
+
 func TestWindscribeLocalOnlyRejectsPlainAndUnknownProxiesAtStartup(t *testing.T) {
 	for _, u := range []Upstream{
 		{Name: "plain", Addr: ""},

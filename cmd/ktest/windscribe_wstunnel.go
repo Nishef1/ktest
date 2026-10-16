@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -124,15 +123,16 @@ type wsCarrier struct {
 // (Windscribe API/DNS calls) keep the existing local anti-DPI dialer. An IP
 // target is held until Windscribe's first bytes arrive: TLS/HTTP keeps the
 // local dialer; OpenVPN is raced over every carrier and the first one whose
-// Windscribe server answers that very packet carries the stream.
+// server returns data carries the stream, including later client writes.
 type wsBridge struct {
-	opts    wsOptions
-	path    string
-	local   func(ctx context.Context, host, port string) (net.Conn, error)
-	report  func(smartproxy.Event)
-	logf    func(string, ...any)
-	note    func(string, ...any) // always shown (edge scan progress)
-	stagger time.Duration
+	opts         wsOptions
+	path         string
+	local        func(ctx context.Context, host, port string) (net.Conn, error)
+	carrierLocal func(ctx context.Context, host, port string) (net.Conn, error)
+	report       func(smartproxy.Event)
+	logf         func(string, ...any)
+	note         func(string, ...any) // always shown (edge scan progress)
+	stagger      time.Duration
 	// candidates overrides the carrier list (tests).
 	candidates func(host string) []wsCarrier
 
@@ -186,7 +186,7 @@ func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.C
 	if path == "" {
 		path = wstunnel.DefaultPath
 	}
-	b := &wsBridge{opts: o, path: path, local: local, report: report, logf: logf, note: logf, stagger: 250 * time.Millisecond,
+	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 250 * time.Millisecond,
 		good: map[string]string{}, bad: map[string]map[string]time.Time{}}
 	for _, e := range splitList(o.cdnEdges) {
 		if _, _, err := net.SplitHostPort(e); err != nil {
@@ -213,7 +213,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		if err != nil {
 			return nil, err
 		}
-		return b.local(ctx, h, p)
+		return b.carrierLocal(ctx, h, p)
 	}
 	legs := []struct {
 		suffix string
@@ -271,7 +271,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 			}
 		}
 	}
-	return append(out, wsCarrier{name: "raw OpenVPN +anti-DPI", open: b.local})
+	return append(out, wsCarrier{name: "raw OpenVPN +anti-DPI", open: b.carrierLocal})
 }
 
 // isWindscribeCarrier tells the live feed that a path name is a carrier.
@@ -289,17 +289,21 @@ func (b *wsBridge) Dial(ctx context.Context, host, port string) (net.Conn, error
 	if net.ParseIP(host) == nil {
 		return b.local(ctx, host, port)
 	}
-	return newSniffConn(ctx, func(ctx context.Context, first []byte) (net.Conn, func(time.Duration, int64), error) {
+	return newSniffConn(ctx, func(ctx context.Context, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
 		if looksTLSorHTTP(first) {
 			c, err := b.local(ctx, host, port)
 			if err == nil {
+				stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 				if _, err = c.Write(first); err != nil {
+					stop()
 					_ = c.Close()
+				} else {
+					go func() { defer stop(); _, _ = io.Copy(c, input); _ = c.Close() }()
 				}
 			}
 			return c, nil, err
 		}
-		return b.race(ctx, host, port, first)
+		return b.race(ctx, host, port, first, input)
 	}), nil
 }
 
@@ -344,15 +348,35 @@ type raceResult struct {
 	took  time.Duration
 }
 
-// race sends Windscribe's first OpenVPN packet over every carrier, launched
-// stagger apart, and keeps the first one the OpenVPN server answers. That
-// answer (a tls-auth checked P_CONTROL_HARD_RESET_SERVER) proves the whole
-// path works on this network right now, not only that a socket opened.
-func (b *wsBridge) race(ctx context.Context, host, port string, first []byte) (net.Conn, func(time.Duration, int64), error) {
+// race replays the client stream (including junk and later handshake writes)
+// over every carrier and keeps the first one that returns data. Windscribe,
+// rather than this bridge, authenticates the server's OpenVPN response.
+func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
 	key := net.JoinHostPort(host, port)
 	cs := b.ordered(key, b.carriersFor(host))
-	rctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	live, stopLive := context.WithCancel(ctx)
+	rctx, cancel := context.WithTimeout(live, 25*time.Second)
 	defer cancel()
+	replay := newCarrierReplay(first)
+	if input != nil {
+		go func() {
+			buf := make([]byte, 32<<10)
+			for {
+				n, err := input.Read(buf)
+				if n > 0 {
+					if err := replay.append(live, buf[:n]); err != nil {
+						b.logf("Windscribe %s: %v", key, err)
+						stopLive()
+						return
+					}
+				}
+				if err != nil {
+					stopLive()
+					return
+				}
+			}
+		}()
+	}
 	began := time.Now()
 	var won sync.Once
 	winner := make(chan raceResult, 1)
@@ -382,12 +406,22 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte) (n
 				return
 			}
 			stop := context.AfterFunc(rctx, func() { _ = conn.Close() })
-			_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+			wctx, stopWrite := context.WithCancel(live)
+			keep := false
+			defer func() {
+				if !keep {
+					stopWrite()
+					_ = conn.Close()
+				}
+			}()
+			// A silent reader must not prevent a writer from forwarding the
+			// client's later junk/handshake bytes. The race deadline bounds both.
+			go func() {
+				_ = replay.send(wctx, conn)
+				_ = conn.Close()
+			}()
 			buf := make([]byte, 2048)
-			n := 0
-			if _, err = conn.Write(first); err == nil {
-				n, err = conn.Read(buf)
-			}
+			n, err := conn.Read(buf)
 			if n == 0 || !stop() {
 				_ = conn.Close()
 				if err == nil {
@@ -398,10 +432,11 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte) (n
 				}
 				return
 			}
-			_ = conn.SetDeadline(time.Time{})
 			taken := false
 			won.Do(func() {
 				taken = true
+				keep = true
+				replay.selectWinner(conn)
 				winner <- raceResult{conn: conn, reply: buf[:n], c: c, took: time.Since(began)}
 			})
 			if !taken {
@@ -411,13 +446,18 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte) (n
 	}
 	go func() { wg.Wait(); close(winner) }()
 	r, ok := <-winner
+	raceErr := rctx.Err()
 	cancel() // stops the losers
 	if !ok {
+		stopLive()
 		errMu.Lock()
 		err := lastErr
 		errMu.Unlock()
 		if err == nil {
-			err = errors.New("no carrier")
+			err = raceErr
+			if err == nil {
+				err = errors.New("no carrier")
+			}
 		}
 		return nil, nil, fmt.Errorf("no Windscribe carrier answered: %w", err)
 	}
@@ -444,7 +484,20 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte) (n
 			b.bad[key][r.c.name] = time.Now().Add(10 * time.Minute)
 		}
 	}
-	return &prefixConn{Conn: r.conn, pending: r.reply}, done, nil
+	stopClose := context.AfterFunc(live, func() { _ = r.conn.Close() })
+	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose}, done, nil
+}
+
+type carrierConn struct {
+	net.Conn
+	cancel    context.CancelFunc
+	stopClose func() bool
+}
+
+func (c *carrierConn) Close() error {
+	c.cancel()
+	c.stopClose()
+	return c.Conn.Close()
 }
 
 // prefixConn returns already-read bytes before reading the connection.
@@ -533,155 +586,72 @@ func (b *wsBridge) scanCDNEdges(ctx context.Context, candidates []string) {
 	}
 }
 
-// sniffConn defers the real dial until the client's first write, so the
-// carrier can be chosen from the protocol Windscribe actually speaks. open
-// receives those first bytes and must send them itself.
+// sniffConn uses a full-duplex pipe so client writes keep flowing while open
+// waits for a carrier response. The pipe owns deadlines and unblocks on Close.
+// open must send first and continue consuming input for the connection lifetime.
 type sniffConn struct {
-	ctx   context.Context
-	open  func(context.Context, []byte) (net.Conn, func(time.Duration, int64), error)
-	ready chan struct{}
-	once  sync.Once
-	conn  net.Conn
-	done  func(time.Duration, int64)
-	err   error
-	began time.Time
-	read  int64
-
-	mu        sync.Mutex
-	deadlines [2]time.Time // read, write before the dial
-	closed    bool
+	net.Conn
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	err    error
 }
 
-func newSniffConn(ctx context.Context, open func(context.Context, []byte) (net.Conn, func(time.Duration, int64), error)) *sniffConn {
-	return &sniffConn{ctx: ctx, open: open, ready: make(chan struct{})}
-}
-
-// connect dials with first; it reports whether this call consumed first.
-func (s *sniffConn) connect(first []byte) (used bool) {
-	s.once.Do(func() {
-		used = true
-		defer close(s.ready)
-		s.mu.Lock()
-		closed := s.closed
-		s.mu.Unlock()
-		if closed {
-			s.err = net.ErrClosed
-			return
-		}
-		conn, done, err := s.open(s.ctx, first)
+func newSniffConn(ctx context.Context, open func(context.Context, []byte, io.Reader) (net.Conn, func(time.Duration, int64), error)) *sniffConn {
+	ctx, cancel := context.WithCancel(ctx)
+	client, peer := net.Pipe()
+	s := &sniffConn{Conn: client, cancel: cancel}
+	stop := context.AfterFunc(ctx, func() { _ = peer.Close(); _ = client.Close() })
+	go func() {
+		defer cancel()
+		defer stop()
+		defer peer.Close()
+		first := make([]byte, 32<<10)
+		n, err := peer.Read(first)
 		if err != nil {
+			return
+		}
+		conn, done, err := open(ctx, first[:n], peer)
+		if err != nil {
+			s.mu.Lock()
 			s.err = err
-			return
-		}
-		s.mu.Lock()
-		if s.closed {
 			s.mu.Unlock()
-			_ = conn.Close()
-			s.err = net.ErrClosed
 			return
 		}
-		s.conn, s.done, s.began = conn, done, time.Now()
-		if !s.deadlines[0].IsZero() {
-			_ = conn.SetReadDeadline(s.deadlines[0])
+		defer conn.Close()
+		began := time.Now()
+		received, _ := io.Copy(peer, conn)
+		if done != nil {
+			done(time.Since(began), received)
 		}
-		if !s.deadlines[1].IsZero() {
-			_ = conn.SetWriteDeadline(s.deadlines[1])
+	}()
+	return s
+}
+
+func (s *sniffConn) result(n int, err error) (int, error) {
+	if err != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.err != nil {
+			err = s.err
 		}
-		s.mu.Unlock()
-	})
-	return used
+	}
+	return n, err
+}
+
+func (s *sniffConn) Read(p []byte) (int, error) {
+	n, err := s.Conn.Read(p)
+	return s.result(n, err)
 }
 
 func (s *sniffConn) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	used := s.connect(p)
-	if s.err != nil {
-		return 0, s.err
-	}
-	if used {
-		return len(p), nil
-	}
-	return s.conn.Write(p)
-}
-
-func (s *sniffConn) Read(p []byte) (int, error) {
-	<-s.ready
-	if s.err != nil {
-		return 0, s.err
-	}
-	n, err := s.conn.Read(p)
-	s.mu.Lock()
-	s.read += int64(n)
-	s.mu.Unlock()
-	return n, err
+	n, err := s.Conn.Write(p)
+	return s.result(n, err)
 }
 
 func (s *sniffConn) Close() error {
-	s.mu.Lock()
-	s.closed = true
-	conn, done, began, read := s.conn, s.done, s.began, s.read
-	s.done = nil
-	s.mu.Unlock()
-	// Unblock a Read waiting for a write that will never come.
-	s.once.Do(func() { s.err = net.ErrClosed; close(s.ready) })
-	if conn == nil {
-		return nil
-	}
-	if done != nil {
-		done(time.Since(began), read)
-	}
-	return conn.Close()
+	s.cancel()
+	return s.Conn.Close()
 }
-
-func (s *sniffConn) setDeadline(i int, t time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.conn == nil {
-		s.deadlines[i] = t
-		if i == 0 && !t.IsZero() {
-			// A Read still waiting for the first write must end too.
-			time.AfterFunc(time.Until(t), func() {
-				s.once.Do(func() { s.err = os.ErrDeadlineExceeded; close(s.ready) })
-			})
-		}
-		return nil
-	}
-	if i == 0 {
-		return s.conn.SetReadDeadline(t)
-	}
-	return s.conn.SetWriteDeadline(t)
-}
-
-func (s *sniffConn) SetReadDeadline(t time.Time) error  { return s.setDeadline(0, t) }
-func (s *sniffConn) SetWriteDeadline(t time.Time) error { return s.setDeadline(1, t) }
-func (s *sniffConn) SetDeadline(t time.Time) error {
-	_ = s.setDeadline(0, t)
-	return s.setDeadline(1, t)
-}
-
-type pendingAddr struct{}
-
-func (pendingAddr) Network() string { return "tcp" }
-func (pendingAddr) String() string  { return "pending" }
-
-func (s *sniffConn) LocalAddr() net.Addr {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.conn != nil {
-		return s.conn.LocalAddr()
-	}
-	return pendingAddr{}
-}
-
-func (s *sniffConn) RemoteAddr() net.Addr {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.conn != nil {
-		return s.conn.RemoteAddr()
-	}
-	return pendingAddr{}
-}
-
-var _ io.ReadWriteCloser = (*sniffConn)(nil)

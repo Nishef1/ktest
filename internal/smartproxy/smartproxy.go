@@ -380,6 +380,16 @@ func (p *Proxy) HasLocalBypass() bool {
 // fronting. The core must be a ktest-managed local TCP DPI bypass. A successful
 // SOCKS reply only confirms upstream TCP connectivity, not a VPN handshake.
 func (p *Proxy) DialLocalBypass(ctx context.Context, host, port string) (net.Conn, error) {
+	return p.dialLocalBypass(ctx, host, port, true)
+}
+
+// DialWindscribeCarrier uses the same local-only policy and retry rotation,
+// but leaves feed reporting to the outer WStunnel/Stealth race.
+func (p *Proxy) DialWindscribeCarrier(ctx context.Context, host, port string) (net.Conn, error) {
+	return p.dialLocalBypass(ctx, host, port, false)
+}
+
+func (p *Proxy) dialLocalBypass(ctx context.Context, host, port string, report bool) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -433,7 +443,9 @@ func (p *Proxy) DialLocalBypass(ctx context.Context, host, port string) (net.Con
 			continue
 		}
 		p.logf("Windscribe CONNECT %s:%s accepted via local anti-DPI %s (destination/VPN negotiation not yet verified)", host, port, u.Name)
-		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
+		if report {
+			p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
+		}
 		return conn, nil
 	}
 	if lastErr != nil {

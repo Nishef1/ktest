@@ -598,6 +598,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 					logf = func(string, ...any) {}
 				}
 				bridge := newWSBridge(o.ws, proxy.DialWindscribeLocal, cfg.OnEvent, logf)
+				bridge.carrierLocal = proxy.DialWindscribeCarrier
 				bridge.note = func(f string, a ...any) { t.Line(toneInfo, f, a...) }
 				if o.ws.cdnHost != "" && o.ws.cdnEdges == "" {
 					if ips, err := edges.CloudflareCandidates(300); err == nil {

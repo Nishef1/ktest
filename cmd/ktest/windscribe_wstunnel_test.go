@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -167,11 +169,173 @@ func roundTrip(t *testing.T, b *wsBridge, host string, first []byte) (string, ne
 	}
 	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
 	buf := make([]byte, 64)
-	n, _ := c.Read(buf)
+	n, err := c.Read(buf)
+	if n == 0 && err != nil {
+		c.Close()
+		return "error: " + err.Error(), nil
+	}
 	return string(buf[:n]), c
 }
 
 var openvpnReset = []byte{0x00, 0x0e, 0x38, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0}
+
+func TestRaceReplaysJunkAndLaterWritesToLateCarrier(t *testing.T) {
+	b := testBridge(&dialLog{})
+	junk := bytes.Repeat([]byte{0x55}, 88)
+	want := append(bytes.Repeat(junk, 5), openvpnReset...)
+	firstReceived := make(chan struct{})
+	releaseLate := make(chan struct{})
+	b.candidates = func(string) []wsCarrier {
+		return []wsCarrier{
+			{name: "silent", open: func(context.Context, string, string) (net.Conn, error) {
+				a, z := net.Pipe()
+				go func() {
+					defer z.Close()
+					buf := make([]byte, len(want))
+					if _, err := io.ReadFull(z, buf); err == nil {
+						close(firstReceived)
+					}
+					_, _ = io.Copy(io.Discard, z)
+				}()
+				return a, nil
+			}},
+			{name: "WStunnel late", open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				select {
+				case <-releaseLate:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				a, z := net.Pipe()
+				go func() {
+					defer z.Close()
+					buf := make([]byte, len(want))
+					if _, err := io.ReadFull(z, buf); err != nil || !bytes.Equal(buf, want) {
+						return
+					}
+					if _, err := z.Write([]byte("answered")); err == nil {
+						_, _ = io.Copy(z, z) // verify the stream continues after selection
+					}
+				}()
+				return a, nil
+			}},
+		}
+	}
+	c, err := b.Dial(context.Background(), "68.67.118.163", "443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	writeDone := make(chan error, 1)
+	go func() {
+		for range 5 {
+			if _, err := c.Write(junk); err != nil {
+				writeDone <- err
+				return
+			}
+		}
+		_, err := c.Write(openvpnReset)
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("client writes blocked before the handshake: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("client writes blocked waiting for a reply to junk")
+	}
+	select {
+	case <-firstReceived:
+	case <-time.After(time.Second):
+		t.Fatal("active carrier did not receive the complete client stream")
+	}
+	close(releaseLate)
+	reply := make([]byte, 8)
+	if _, err := io.ReadFull(c, reply); err != nil || string(reply) != "answered" {
+		t.Fatalf("late carrier did not replay junk and handshake: %q, %v", reply, err)
+	}
+	if _, err := c.Write([]byte("after selection")); err != nil {
+		t.Fatal(err)
+	}
+	reply = make([]byte, len("after selection"))
+	if _, err := io.ReadFull(c, reply); err != nil || string(reply) != "after selection" {
+		t.Fatalf("winner lost or duplicated data: %q, %v", reply, err)
+	}
+	// A connected VPN can transfer more than the pre-answer replay limit.
+	payload := bytes.Repeat([]byte("ongoing VPN traffic"), 150000)
+	go func() { _, err := c.Write(payload); writeDone <- err }()
+	reply = make([]byte, len(payload))
+	if _, err := io.ReadFull(c, reply); err != nil || !bytes.Equal(reply, payload) {
+		t.Fatalf("sustained stream corrupted: %v", err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClosingPendingRaceCancelsBlockedCarrier(t *testing.T) {
+	b := testBridge(&dialLog{})
+	closed := make(chan struct{})
+	opened := make(chan struct{})
+	b.candidates = func(string) []wsCarrier {
+		return []wsCarrier{{name: "never reads or answers", open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			a, z := net.Pipe()
+			close(opened)
+			go func() { <-ctx.Done(); _ = z.Close(); close(closed) }()
+			return a, nil
+		}}}
+	}
+	c, err := b.Dial(context.Background(), "68.67.118.163", "443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write(openvpnReset); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-opened:
+	case <-time.After(time.Second):
+		_ = c.Close()
+		t.Fatal("carrier did not open")
+	}
+	readDone := make(chan error, 1)
+	go func() { _, err := c.Read(make([]byte, 1)); readDone <- err }()
+	closeDone := make(chan struct{})
+	go func() { _ = c.Close(); close(closeDone) }()
+	for _, done := range []<-chan struct{}{closeDone, closed} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Close did not cancel the pending race")
+		}
+	}
+	select {
+	case err := <-readDone:
+		if err == nil {
+			t.Fatal("Read succeeded on a closed connection")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Read stayed blocked after Close")
+	}
+}
+
+func TestUnansweredRaceBoundsReplayWithoutDroppingBytes(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "silent", silent: true})
+	c, err := b.Dial(context.Background(), "68.67.118.163", "443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	payload := bytes.Repeat([]byte{0x55}, 2<<20)
+	if n, err := c.Write(payload); err == nil || n == len(payload) {
+		t.Fatalf("unanswered race accepted an unbounded prefix: n=%d, err=%v", n, err)
+	}
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("replay overflow did not fail the connection")
+	}
+}
 
 func TestBridgeSendsOnlyOpenVPNToTheRace(t *testing.T) {
 	log := &dialLog{}
@@ -232,10 +396,11 @@ func TestRaceFailsWhenNothingAnswers(t *testing.T) {
 func TestRaceOrderLearnsFromStreamLifetime(t *testing.T) {
 	b := testBridge(&dialLog{}, carrierSpec{name: "a"}, carrierSpec{name: "b"}, carrierSpec{name: "c"})
 	key := "68.67.118.163:443"
-	_, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset)
+	c, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.Close()
 	done(2*time.Second, 100) // answered but died at once
 	order := b.ordered(key, b.carriersFor("68.67.118.163"))
 	if order[len(order)-1].name != "a" {
@@ -282,7 +447,7 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 }
 
 func TestSniffConnCloseBeforeWriteDoesNotHang(t *testing.T) {
-	s := newSniffConn(context.Background(), func(context.Context, []byte) (net.Conn, func(time.Duration, int64), error) {
+	s := newSniffConn(context.Background(), func(context.Context, []byte, io.Reader) (net.Conn, func(time.Duration, int64), error) {
 		t.Fatal("dialed without data")
 		return nil, nil, nil
 	})
