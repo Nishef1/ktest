@@ -35,7 +35,11 @@ const usageText = `ktest: free access toolkit
 
 Everyday use (from the extracted portable folder):
   ktest               menu: Connect, Diagnose, Advanced
-  ktest connect       connect now: races every method and keeps what works
+  ktest connect       connect now: balanced routes; AI hostnames require foreign exit
+  ktest connect -mode fast        fastest reachable route; IP can vary
+  ktest connect -mode windscribe  Windscribe TCP bootstrap; no ktest TUN
+  ktest connect -mode vpn         verified foreign exit only, sticky per session
+  ktest connect -mode tor         only Tor via bundled Aether, or -exit-socks
   ktest doctor        diagnose this network and the package; changes nothing
 
 Other commands:
