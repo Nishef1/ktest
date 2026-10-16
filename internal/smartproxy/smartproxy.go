@@ -94,6 +94,9 @@ type Config struct {
 	// ExitOnly forces matched names to use only verified foreign exits.
 	// If none is present, fail closed instead of silently revealing the ISP IP.
 	ExitOnly func(string) bool
+	// PreferVerifiedExit is useful for bootstrapping TCP VPN protocols: try an
+	// already checked foreign proxy before a misleading raw TCP/IP connection.
+	PreferVerifiedExit bool
 	// Stagger is how long the best path gets alone before the next one joins.
 	Stagger time.Duration
 	// ConnectTimeout bounds dial plus SOCKS handshake; FirstByteTimeout bounds
@@ -169,7 +172,7 @@ type Proxy struct {
 }
 
 func New(cfg Config) (*Proxy, error) {
-	if len(cfg.Upstreams) == 0 {
+	if len(cfg.Upstreams) == 0 && cfg.ExitOnly == nil {
 		return nil, errors.New("at least one upstream is required")
 	}
 	cfg.defaults()
@@ -244,6 +247,9 @@ func (p *Proxy) order(host string) []*upstreamState {
 	}
 	sort.SliceStable(list, func(i, j int) bool {
 		a, b := list[i], list[j]
+		if p.cfg.PreferVerifiedExit && (a.Exit && a.AIEligible) != (b.Exit && b.AIEligible) {
+			return a.Exit && a.AIEligible
+		}
 		if (a.Name == remembered) != (b.Name == remembered) {
 			return a.Name == remembered
 		}
@@ -405,7 +411,7 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	remembered := p.rememberedName(host)
 	var ordered, late []*upstreamState
 	for _, u := range order {
-		if u.Late && u.Name != remembered {
+		if u.Late && u.Name != remembered && !(p.cfg.PreferVerifiedExit && u.Exit && u.AIEligible) {
 			late = append(late, u)
 		} else {
 			ordered = append(ordered, u)
