@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -73,5 +74,18 @@ func TestCloudflareFamilyCoversXAndKnowsItsOwnDomainsAreConstrained(t *testing.T
 	}
 	if len(Uncovered(fams, PermittedDomains(fams))) != 0 {
 		t.Fatal("a fresh CA must cover everything")
+	}
+}
+
+func TestClientAbortIsNotARefusal(t *testing.T) {
+	for _, err := range []error{io.EOF, io.ErrUnexpectedEOF, errors.New("read tcp 127.0.0.1:1: wsarecv: forcibly closed (reset)"), errors.New("i/o timeout")} {
+		if !clientAborted(err) {
+			t.Errorf("%v should count as the application going away", err)
+		}
+	}
+	for _, err := range []error{errors.New("remote error: tls: unknown certificate authority"), errors.New("remote error: tls: bad certificate"), errors.New("tls: client offered only unsupported versions")} {
+		if clientAborted(err) {
+			t.Errorf("%v is a refusal", err)
+		}
 	}
 }

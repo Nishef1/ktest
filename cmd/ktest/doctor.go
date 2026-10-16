@@ -171,6 +171,7 @@ func runDoctorView(u *term, base string, noNet bool) (failed bool) {
 		fcancel()
 		fprog.Finish(toneOK, "")
 		printFronts(u, checks)
+		printECHDoH(ctx, u)
 		u.Println("")
 		verdict := wrapText(rep.verdictText, 76)
 		for _, c := range checks {

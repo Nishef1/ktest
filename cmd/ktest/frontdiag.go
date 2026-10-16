@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,7 @@ func (c frontCheck) working() int {
 // probeFronts asks every family, through each of its fronts, for one page. It
 // needs no certificate on this machine: the probe speaks to the edge directly.
 func probeFronts(ctx context.Context) []frontCheck {
-	resolve := smartproxy.NewTrusted(smartproxy.TrustedOptions{})
+	resolve := smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: smartproxy.NewDoH([]smartproxy.DoHEndpoint{echDoHEndpoint()}, nil, nil)})
 	f := front.New(front.Config{Resolve: resolve, DialTimeout: 6 * time.Second})
 	sites := []struct{ site, path string }{
 		{"www.youtube.com", "/generate_204"},
@@ -109,4 +110,30 @@ func frontErr(err error) string {
 		stage = "address: "
 	}
 	return stage + shortErr(err)
+}
+
+// echDoHEndpoint is Cloudflare's DNS-over-HTTPS service reached through
+// Encrypted Client Hello from ktest itself.
+func echDoHEndpoint() smartproxy.DoHEndpoint {
+	f := front.New(front.Config{})
+	return smartproxy.DoHEndpoint{
+		URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json",
+		DialTLS: func(ctx context.Context) (net.Conn, error) {
+			return f.DialECH(ctx, "cloudflare-dns.com", []string{"http/1.1"})
+		},
+	}
+}
+
+// printECHDoH shows whether encrypted DNS works through ECH where the plain
+// resolvers are filtered, which is what gives every path real addresses.
+func printECHDoH(ctx context.Context, u *term) {
+	cctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	began := time.Now()
+	ips, err := smartproxy.NewDoH([]smartproxy.DoHEndpoint{echDoHEndpoint()}, nil, nil)(cctx, "www.youtube.com")
+	if err != nil {
+		u.Line(toneWarn, "%-26s no answer (%s)", "Encrypted DNS over ECH", frontErr(err))
+		return
+	}
+	u.Line(toneOK, "%-26s www.youtube.com -> %s  %s", "Encrypted DNS over ECH", ips[0], shortDur(time.Since(began)))
 }

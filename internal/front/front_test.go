@@ -448,3 +448,36 @@ func byName(fams []Family, name string) Family {
 	}
 	panic("no family " + name)
 }
+
+func TestEdgeDefaultCertificateOfTheFamilyIsAccepted(t *testing.T) {
+	ca := testCA(t)
+	// A cache that answers www.google.com with its own default certificate.
+	e := startEdge(t, "*.c.docs.google.com")
+	f := New(Config{
+		CA: ca, Roots: e.roots, HedgeDelay: 30 * time.Millisecond,
+		Resolve: publicResolver,
+		dial: func(ctx context.Context, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", e.ln.Addr().String())
+		},
+	})
+	proxy := startProxy(t, f, make(chan smartproxy.Event, 8))
+	conn, err := socksVia(t, proxy, "rr1---sn-x.googlevideo.com", ca.Pool())
+	if err != nil {
+		t.Fatalf("a family-owned default certificate must be accepted: %v", err)
+	}
+	conn.Close()
+
+	// A valid certificate for somebody else's name is still refused.
+	other := startEdge(t, "*.attacker.example")
+	f2 := New(Config{
+		CA: ca, Roots: other.roots, HedgeDelay: 30 * time.Millisecond, Resolve: publicResolver,
+		dial: func(ctx context.Context, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", other.ln.Addr().String())
+		},
+	})
+	proxy2 := startProxy(t, f2, make(chan smartproxy.Event, 8))
+	if c, err := socksVia(t, proxy2, "rr1---sn-x.googlevideo.com", ca.Pool()); err == nil {
+		c.Close()
+		t.Fatal("a certificate for another owner was accepted")
+	}
+}

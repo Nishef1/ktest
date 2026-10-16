@@ -36,6 +36,9 @@ type DoHEndpoint struct {
 	// ServerName and VerifyNames. The service routes by the HTTP Host, not by SNI.
 	FrontSNI    string
 	VerifyNames []string
+	// DialTLS, when set, opens the finished TLS connection itself (for example
+	// through Encrypted Client Hello); URL and Accept are still used for the request.
+	DialTLS func(ctx context.Context) (net.Conn, error)
 }
 
 // DefaultDoH lists two independent public resolvers, each reachable by several
@@ -162,6 +165,7 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 				return dial(ctx, network, addr)
 			},
 			TLSClientConfig:     cfg,
+			DialTLSContext:      dialTLS(ep),
 			ForceAttemptHTTP2:   true,
 			TLSHandshakeTimeout: 6 * time.Second,
 			DisableKeepAlives:   true,
@@ -281,4 +285,13 @@ func verifyAnyName(raw [][]byte, names []string, roots *x509.CertPool) error {
 		}
 	}
 	return first
+}
+
+// dialTLS adapts an endpoint's own TLS dialer to http.Transport; nil keeps the
+// transport's ordinary dial and handshake.
+func dialTLS(ep DoHEndpoint) func(context.Context, string, string) (net.Conn, error) {
+	if ep.DialTLS == nil {
+		return nil
+	}
+	return func(ctx context.Context, _, _ string) (net.Conn, error) { return ep.DialTLS(ctx) }
 }

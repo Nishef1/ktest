@@ -82,15 +82,17 @@ type aetherProfile struct {
 }
 
 // aetherProfiles lists the profiles. ech is the ECH configuration to hand to
-// Aether (base64), or "auto" to let it look the key up by DNS, which is what a
-// network that filters DNS denies it.
-func aetherProfiles(ech string) []aetherProfile {
-	if ech == "" {
-		ech = "auto"
+// Aether (base64) and ip an edge address that was reached, so that neither a DNS
+// lookup nor the WARP API's own name is needed; without them Aether is left to
+// look the key up by DNS, which is what a filtering network denies it.
+func aetherProfiles(ech, ip string) []aetherProfile {
+	echo := []string{"--masque", "--h2", "--no-fragment", "--ech", "auto"}
+	if ech != "" && ip != "" {
+		echo = []string{"--masque", "--h2", "--no-fragment", "--ech", ech, "--enroll-address", ip}
 	}
 	return []aetherProfile{
-		{"WARP exit, MASQUE over HTTP/2", []string{"--masque", "--h2"}},
-		{"WARP exit, MASQUE over HTTP/2 with ECH", []string{"--masque", "--h2", "--no-fragment", "--ech", ech}},
+		{"WARP exit, MASQUE over HTTP/2 with ECH", echo},
+		{"WARP exit, MASQUE over HTTP/2, fragmented", []string{"--masque", "--h2", "--api-fragment"}},
 	}
 }
 
@@ -322,19 +324,29 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 		return "off - optional: `ktest warp -enable` lets Telegram and sites blocked by address open", func() {}
 	}
 	var started []*runningCore
-	ech := ""
-	if cfg, _, err := front.FetchCloudflareECH(ctx); err == nil {
-		ech = base64.StdEncoding.EncodeToString(cfg)
+	var files []*os.File
+	ech, echIP := "", ""
+	if cfg, addr, err := front.FetchCloudflareECH(ctx); err == nil {
+		ech, echIP = base64.StdEncoding.EncodeToString(cfg), addr
 	}
-	for i, p := range aetherProfiles(ech) {
+	for i, p := range aetherProfiles(ech, echIP) {
 		port := aetherBasePort + i
 		if err := portFree(port); err != nil {
 			t.Note("skipped %s: %v", p.Label, err)
 			continue
 		}
-		logs := &tailBuffer{max: 4096}
+		logs := &tailBuffer{max: 8192}
+		logPath := filepath.Join(warpDir(), fmt.Sprintf("aether-%d.log", i+1))
+		if lf, err := os.Create(logPath); err == nil {
+			files = append(files, lf)
+			logs.tee = lf
+		}
 		if o.verbose {
-			logs.tee = os.Stderr
+			if logs.tee != nil {
+				logs.tee = io.MultiWriter(logs.tee, os.Stderr)
+			} else {
+				logs.tee = os.Stderr
+			}
 		}
 		cctx, cancel := context.WithCancel(ctx)
 		rc := &runningCore{cancel: cancel, done: make(chan struct{})}
@@ -344,14 +356,17 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 			close(rc.done)
 		}()
 		started = append(started, rc)
-		go func(p aetherProfile, port int) {
+		go func(p aetherProfile, port int, logs *tailBuffer, logPath string) {
 			if !waitForPort(ctx, rc.done, port, 90*time.Second) {
 				if ctx.Err() == nil {
-					note := logs.lastLine()
+					t.Line(toneWarn, "%s did not come up", p.Label)
 					if rc.err != nil {
-						note = rc.err.Error()
+						t.Note("%v", rc.err)
 					}
-					t.Line(toneWarn, "%s did not come up %s", p.Label, t.Dim(trimDetail(note)))
+					for _, l := range logs.lastLines(3) {
+						t.Note("%s", wrapOne(l, 150))
+					}
+					t.Note("full log: %s", logPath)
 				}
 				return
 			}
@@ -359,7 +374,7 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 			if err == nil && ctx.Err() == nil {
 				t.Line(toneOK, "%s is ready: Telegram and sites blocked by address can open now", p.Label)
 			}
-		}(p, port)
+		}(p, port, logs, logPath)
 	}
 	stop := func() {
 		for _, rc := range started {
@@ -367,6 +382,9 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 		}
 		for _, rc := range started {
 			rc.stop()
+		}
+		for _, f := range files {
+			_ = f.Close()
 		}
 	}
 	return "starting in the background (a scan comes first, up to a minute)", stop
@@ -421,4 +439,13 @@ func (t *terminal) warpSetup(base string, readLine func() (string, bool)) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	warpEnable(ctx, u, base)
+}
+
+// wrapOne shortens a log line to n runes.
+func wrapOne(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n]) + "..."
+	}
+	return s
 }

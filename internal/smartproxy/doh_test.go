@@ -113,3 +113,29 @@ func TestDoHDecoySNIIsSentButTheCertificateIsStillVerified(t *testing.T) {
 		t.Fatal("certificate for another name accepted")
 	}
 }
+
+func TestDoHCanUseTheEndpointsOwnTLSDialer(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"Status":0,"Answer":[{"type":1,"TTL":60,"data":"142.250.1.1"}]}`))
+	}))
+	defer srv.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	var dialed atomic.Int32
+	ep := DoHEndpoint{URL: "https://example.com/resolve", DialTLS: func(ctx context.Context) (net.Conn, error) {
+		dialed.Add(1)
+		raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", srv.Listener.Addr().String())
+		if err != nil {
+			return nil, err
+		}
+		c := tls.Client(raw, &tls.Config{ServerName: "example.com", RootCAs: pool, NextProtos: []string{"http/1.1"}})
+		return c, c.HandshakeContext(ctx)
+	}}
+	ips, err := NewDoH([]DoHEndpoint{ep}, nil, nil)(context.Background(), "youtube.com")
+	if err != nil || len(ips) != 1 || ips[0] != "142.250.1.1" {
+		t.Fatalf("ips=%v err=%v", ips, err)
+	}
+	if dialed.Load() != 1 {
+		t.Fatalf("own dialer used %d times", dialed.Load())
+	}
+}

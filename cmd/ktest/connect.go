@@ -149,7 +149,11 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	if e.Rejected {
 		if time.Since(s.failedAt[e.Site]) >= 20*time.Second {
 			s.failedAt[e.Site] = time.Now()
-			t.Line(toneWarn, "%-26s %s", e.Host, t.Yellow("the application refused the ktest certificate")+t.Dim("  (is the CA trusted in that application?)"))
+			reason := e.Err
+			if i := strings.LastIndex(reason, "): "); i >= 0 {
+				reason = reason[i+3:]
+			}
+			t.Line(toneWarn, "%-26s %s", e.Host, t.Yellow("the application refused the ktest certificate")+t.Dim("  "+trimDetail(reason)))
 		}
 		return
 	}
@@ -380,8 +384,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 		}
 		dial := func(ctx context.Context, _, addr string) (net.Conn, error) { return raceDial(ctx, carriers, addr) }
-		dohA = smartproxy.NewDoH(smartproxy.DefaultDoH, dial, nil)
-		dohAAAA = smartproxy.NewDoHType(smartproxy.DefaultDoH, dial, nil, "AAAA")
+		// The public resolvers are filtered by address on many networks; the ECH
+		// route to Cloudflare's resolver is not, and needs neither DNS nor a path.
+		endpoints := append(append([]smartproxy.DoHEndpoint(nil), smartproxy.DefaultDoH...), echDoHEndpoint())
+		dohA = smartproxy.NewDoH(endpoints, dial, nil)
+		dohAAAA = smartproxy.NewDoHType(endpoints, dial, nil, "AAAA")
 	}
 	cfg.Resolve = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohA, Logf: logDNS})
 	cfg.Resolve6 = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohAAAA, IPv6: true, Logf: logDNS})

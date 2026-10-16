@@ -480,6 +480,13 @@ func (f *Fronter) verifier(fam *Family, name string, fr Front) func([][]byte, []
 				firstErr = err
 			}
 		}
+		// An edge answers with its default certificate when the SNI is not one it
+		// serves (a googlevideo cache returns *.c.docs.google.com for www.google.com).
+		// That is still the family's own: a certificate from a public CA whose every
+		// name lies inside the family's domains.
+		if _, err := certs[0].Verify(x509.VerifyOptions{Roots: f.cfg.Roots, Intermediates: inter}); err == nil && namesWithin(certs[0], fam.Domains) {
+			return nil
+		}
 		return fmt.Errorf("certificate not valid for the site or its family: %w", firstErr)
 	}
 }
@@ -547,6 +554,11 @@ func (s *session) Serve(client net.Conn, flight []byte) error {
 	srv := tls.Server(&replayConn{Conn: client, pre: flight}, conf)
 	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := srv.Handshake(); err != nil {
+		if clientAborted(err) {
+			// Browsers open speculative connections and drop them unused; that is
+			// not a refusal of the certificate.
+			return nil
+		}
 		s.f.refusedOne()
 		return fmt.Errorf("the application did not accept the ktest certificate (is the ktest CA trusted?): %w", err)
 	}
@@ -554,6 +566,25 @@ func (s *session) Serve(client net.Conn, flight []byte) error {
 	s.f.acceptedOne()
 	relay(srv, s.up)
 	return nil
+}
+
+// clientAborted reports a handshake that ended because the application went
+// away (closed, reset, timed out) rather than because it sent an alert about
+// the certificate.
+func clientAborted(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "remote error") {
+		return false // an alert: the application said why
+	}
+	for _, s := range []string{"EOF", "reset", "closed", "timeout", "broken pipe", "aborted"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 type closeWriter interface{ CloseWrite() error }
@@ -696,4 +727,26 @@ func (f *Fronter) dialAny(ctx context.Context, ips []string) (net.Conn, error) {
 		}
 	}
 	return nil, fmt.Errorf("tcp connect: %w", last)
+}
+
+// namesWithin reports whether the certificate has names and all of them (a
+// wildcard counted by its suffix) are one of domains or below one.
+func namesWithin(c *x509.Certificate, domains []string) bool {
+	if len(c.DNSNames) == 0 {
+		return false
+	}
+	for _, n := range c.DNSNames {
+		n = strings.TrimPrefix(strings.ToLower(n), "*.")
+		ok := false
+		for _, d := range domains {
+			if n == d || strings.HasSuffix(n, "."+d) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

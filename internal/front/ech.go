@@ -165,3 +165,20 @@ func FetchCloudflareECH(ctx context.Context) ([]byte, string, error) {
 	}
 	return nil, "", last
 }
+
+// DialECH opens a verified TLS connection to name through Cloudflare's ECH, from
+// ktest itself (no certificate on anyone's side, no proxy): the way to reach a
+// Cloudflare-hosted service such as cloudflare-dns.com without DNS.
+func (f *Fronter) DialECH(ctx context.Context, name string, protos []string) (net.Conn, error) {
+	var hints []string
+	for _, fam := range f.cfg.Families {
+		if fam.Name == "cloudflare" {
+			hints = shuffled(fam.Hints)
+		}
+	}
+	if len(hints) == 0 {
+		return nil, errors.New("no Cloudflare addresses configured")
+	}
+	connect := func() (net.Conn, error) { return f.dialAny(ctx, hints) }
+	return f.tryECH(ctx, Front{ECH: CloudflareECH}, name, protos, connect)
+}

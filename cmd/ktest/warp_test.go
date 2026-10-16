@@ -67,7 +67,7 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyTheCore(t *testing.T) {
 
 func TestAetherRunArgsNeverPromptAndStayOnLoopback(t *testing.T) {
 	t.Setenv("KTEST_WARP_DIR", t.TempDir())
-	for i, p := range aetherProfiles("") {
+	for i, p := range aetherProfiles("CFG", "1.2.3.4") {
 		args := strings.Join(aetherRunArgs(i, p, aetherBasePort+i), " ")
 		// Protocol, scan mode, IP version and the reconnect question each have a flag.
 		for _, want := range []string{"--masque", "--h2", "--turbo", "-4", "--quick-reconnect", "--masque-config"} {
@@ -79,9 +79,15 @@ func TestAetherRunArgsNeverPromptAndStayOnLoopback(t *testing.T) {
 			t.Errorf("profile %d must bind to loopback: %s", i, args)
 		}
 	}
-	ps := aetherProfiles("")
-	if len(ps) < 2 || !strings.Contains(strings.Join(ps[1].Args, " "), "--ech") || !strings.Contains(strings.Join(ps[1].Args, " "), "--no-fragment") {
-		t.Fatalf("the second profile must be the ECH one for firewalls that close fragmentation: %+v", ps)
+	echo := false
+	for _, p := range aetherProfiles("CFG", "1.2.3.4") {
+		joined := strings.Join(p.Args, " ")
+		if strings.Contains(joined, "--ech CFG") && strings.Contains(joined, "--no-fragment") && strings.Contains(joined, "--enroll-address 1.2.3.4") {
+			echo = true
+		}
+	}
+	if !echo {
+		t.Fatal("an ECH profile with a fetched configuration and a known address is required for firewalls that close fragmentation and filter the API")
 	}
 }
 
