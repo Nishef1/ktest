@@ -70,35 +70,67 @@ func shortErr(err error) string {
 	return s
 }
 
-// networkProbe characterizes the current network without any proxy: what the
+// systemDNS asks the operating system's resolver and says whether the answer is
+// a private block-page address, which is what a poisoning resolver returns.
+func systemDNS(ctx context.Context, host string) (ip string, poisoned bool, err error) {
+	rctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(rctx, "ip4", host)
+	if err != nil || len(ips) == 0 {
+		if err == nil {
+			err = fmt.Errorf("no address")
+		}
+		return "", false, err
+	}
+	return ips[0].String(), smartproxy.Bogus(ips[0]), nil
+}
+
+// netReport is what the network characterization measured.
+type netReport struct {
+	dns         []dnsRow
+	doh         []string
+	dohOK       int
+	googleIP    string
+	families    []string
+	snis        []string
+	cells       [][]error // [sni][family]
+	verdict     tone
+	verdictText string
+}
+
+type dnsRow struct {
+	host, ip string
+	state    string // ok, poisoned, none
+	err      string
+}
+
+// probeNetwork characterizes the current network without any proxy: what the
 // resolver returns, whether the usual DoH endpoints are reachable, and which
 // ClientHello shapes get through to Google for an unblocked and a blocked SNI.
-// It uses one connection per cell and sends no HTTP.
-func networkProbe(ctx context.Context, out io.Writer, line func(level, name, detail string)) {
+// It uses one connection per cell and sends no HTTP. step is told when each of
+// the three stages is done.
+func probeNetwork(ctx context.Context, step func(done int)) netReport {
+	var r netReport
 	// 1. What the system resolver says.
-	var googleIP string
 	for _, host := range []string{"www.google.com", "www.youtube.com", "example.org"} {
-		rctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		ips, err := net.DefaultResolver.LookupIP(rctx, "ip4", host)
-		cancel()
+		ip, poisoned, err := systemDNS(ctx, host)
 		switch {
 		case err != nil:
-			line("WARN", "dns "+host, "no answer: "+shortErr(err))
-		case smartproxy.Bogus(ips[0]):
-			line("WARN", "dns "+host, fmt.Sprintf("POISONED: system DNS answers %s (a private block-page address)", ips[0]))
+			r.dns = append(r.dns, dnsRow{host: host, state: "none", err: shortErr(err)})
+		case poisoned:
+			r.dns = append(r.dns, dnsRow{host: host, ip: ip, state: "poisoned"})
 		default:
-			line("OK", "dns "+host, ips[0].String())
+			r.dns = append(r.dns, dnsRow{host: host, ip: ip, state: "ok"})
 			if host == "www.google.com" {
-				googleIP = ips[0].String()
+				r.googleIP = ip
 			}
 		}
 	}
+	step(1)
 
 	// 2. Encrypted DNS by IP literal: reachable at all, no DNS needed.
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	dohOK := 0
-	rows := make([]string, 0, len(smartproxy.DefaultDoH))
 	for _, ep := range smartproxy.DefaultDoH {
 		if ep.Addr == "" {
 			continue
@@ -111,26 +143,20 @@ func networkProbe(ctx context.Context, out io.Writer, line func(level, name, det
 			mu.Lock()
 			defer mu.Unlock()
 			if err == nil {
-				dohOK++
+				r.dohOK++
 			}
-			rows = append(rows, fmt.Sprintf("%s via %s: %s", ep.ServerName, ep.Addr, shortErr(err)))
+			r.doh = append(r.doh, fmt.Sprintf("%s via %s: %s", ep.ServerName, ep.Addr, shortErr(err)))
 		}(ep)
 	}
 	wg.Wait()
-	sort.Strings(rows)
-	level := "OK"
-	if dohOK == 0 {
-		level = "WARN"
-	}
-	line(level, "encrypted DNS", fmt.Sprintf("%d of %d resolver addresses complete a TLS handshake", dohOK, len(rows)))
-	for _, r := range rows {
-		fmt.Fprintf(out, "      %s\n", r)
-	}
+	sort.Strings(r.doh)
+	step(2)
 
 	// 3. ClientHello shapes to Google, unblocked vs blocked SNI.
-	if googleIP == "" {
-		line("WARN", "tls matrix", "skipped: no usable address for www.google.com")
-		return
+	if r.googleIP == "" {
+		r.verdict, r.verdictText = toneWarn, "No usable address for www.google.com, so ClientHello shapes could not be compared."
+		step(3)
+		return r
 	}
 	type family struct {
 		name string
@@ -142,27 +168,25 @@ func networkProbe(ctx context.Context, out io.Writer, line func(level, name, det
 			families = append(families, family{strings.TrimPrefix(u.Name, "self: "), u.Send})
 		}
 	}
-	snis := []string{"www.google.com", "www.youtube.com"}
-	cells := make([][]error, len(snis))
-	for i := range cells {
-		cells[i] = make([]error, len(families))
-		for j := range cells[i] {
+	r.snis = []string{"www.google.com", "www.youtube.com"}
+	r.cells = make([][]error, len(r.snis))
+	for i := range r.cells {
+		r.cells[i] = make([]error, len(families))
+		for j := range r.cells[i] {
 			wg.Add(1)
 			go func(i, j int) {
 				defer wg.Done()
-				cells[i][j] = handshake(ctx, googleIP, snis[i], families[j].send)
+				r.cells[i][j] = handshake(ctx, r.googleIP, r.snis[i], families[j].send)
 			}(i, j)
 		}
 	}
 	wg.Wait()
-	fmt.Fprintf(out, "      TLS handshakes to Google front end %s (certificate verified for the SNI shown):\n", googleIP)
-	fmt.Fprintf(out, "      %-34s %-18s %-18s\n", "ClientHello shape", snis[0], snis[1])
-	for j, f := range families {
-		fmt.Fprintf(out, "      %-34s %-18s %-18s\n", f.name, shortErr(cells[0][j]), shortErr(cells[1][j]))
+	for _, f := range families {
+		r.families = append(r.families, f.name)
 	}
+	step(3)
 
-	// 4. Interpretation.
-	okAt := func(i, j int) bool { return cells[i][j] == nil }
+	okAt := func(i, j int) bool { return r.cells[i][j] == nil }
 	anyCut := func(i int) bool {
 		for j := 1; j < len(families); j++ {
 			if okAt(i, j) {
@@ -173,14 +197,53 @@ func networkProbe(ctx context.Context, out io.Writer, line func(level, name, det
 	}
 	switch {
 	case !okAt(0, 0) && !anyCut(0):
-		line("FAIL", "verdict", "cannot complete any TLS handshake to a Google address here; check connectivity before blaming a method")
+		r.verdict, r.verdictText = toneFail, "No TLS handshake to a Google address completes here. Check connectivity before blaming a method."
 	case okAt(0, 0) && okAt(1, 0):
-		line("INFO", "verdict", "YouTube's SNI passes uncut: nothing to bypass on this path right now (another VPN carrying the traffic looks the same)")
+		r.verdict, r.verdictText = toneInfo, "YouTube's SNI passes uncut: nothing is being filtered on this path right now. Another VPN carrying the traffic looks the same."
 	case okAt(0, 0) && !okAt(1, 0) && anyCut(1):
-		line("OK", "verdict", "YouTube's SNI is filtered but a cut ClientHello gets through: the cutting paths in `ktest smart` can work here")
+		r.verdict, r.verdictText = toneOK, "YouTube's SNI is filtered but a cut ClientHello gets through: the cutting paths in Connect can work here."
 	case okAt(0, 0) && !okAt(1, 0) && !anyCut(1) && !anyCut(0):
-		line("WARN", "verdict", "YouTube's SNI is filtered AND every cut ClientHello fails even for the unblocked name: this network punishes cutting, so Xray fragment, ByeDPI split/tlsrec and the self: paths cannot work; only methods that do not cut (fake packets with a low TTL, IPv6, QUIC) remain")
+		r.verdict, r.verdictText = toneWarn, "YouTube's SNI is filtered AND every cut ClientHello fails even for the unblocked name: this network punishes cutting. Xray fragment, ByeDPI split/slice and the built-in cutting paths cannot work; only methods that do not cut (fake packets with a low TTL, IPv6, QUIC) remain."
 	default:
-		line("WARN", "verdict", "YouTube's SNI is filtered and cutting helps only partly; see the table")
+		r.verdict, r.verdictText = toneWarn, "YouTube's SNI is filtered and cutting helps only partly; see the table."
+	}
+	return r
+}
+
+// print renders the report.
+func (r netReport) print(u *term) {
+	for _, d := range r.dns {
+		switch d.state {
+		case "ok":
+			u.Line(toneOK, "%-26s %s", "DNS "+d.host, d.ip)
+		case "poisoned":
+			u.Line(toneWarn, "%-26s %s", "DNS "+d.host, u.Yellow("POISONED")+u.Dim(" → "+d.ip+" (private block-page address)"))
+		default:
+			u.Line(toneWarn, "%-26s no answer (%s)", "DNS "+d.host, d.err)
+		}
+	}
+	k := toneOK
+	if r.dohOK == 0 {
+		k = toneWarn
+	}
+	u.Line(k, "%-26s %d of %d resolver addresses complete a TLS handshake", "Encrypted DNS", r.dohOK, len(r.doh))
+	for _, row := range r.doh {
+		u.Note("%s", row)
+	}
+	if len(r.cells) == 0 {
+		return
+	}
+	u.Println("")
+	u.Println("  " + u.Bold("ClientHello shapes") + u.Dim(" → Google front end "+r.googleIP+", certificate verified for the SNI"))
+	pad := func(s string, n int) string { return s + strings.Repeat(" ", max(n-visibleLen(s), 0)) }
+	u.Printf("    %s %s %s\n", pad("", 34), pad(u.Dim(r.snis[0]), 18), u.Dim(r.snis[1]))
+	cell := func(err error) string {
+		if err == nil {
+			return u.Green(u.glyph(toneOK) + " ok")
+		}
+		return u.Red(u.glyph(toneFail) + " " + shortErr(err))
+	}
+	for j, name := range r.families {
+		u.Printf("    %s %s %s\n", pad(name, 34), pad(cell(r.cells[0][j]), 18), cell(r.cells[1][j]))
 	}
 }

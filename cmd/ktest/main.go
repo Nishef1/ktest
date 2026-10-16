@@ -28,16 +28,15 @@ import (
 
 func main() { os.Exit(run(os.Args[1:])) }
 
-const usageText = `ktest: diagnostics and local proxy launcher
+const usageText = `ktest: free access toolkit
 
 Everyday use (from the extracted portable folder):
-  ktest               interactive menu
-  ktest auto          try Xray B, Xray A, ByeDPI in turn; keep the first that passes real HTTPS checks
-  ktest smart         run several methods at once behind one SOCKS5 port that races them per connection
-  ktest strategies    list the editable ByeDPI strategies (-write creates profiles/byedpi-strategies.txt)
-  ktest doctor        check the package, ports, DNS and direct reachability; changes nothing
+  ktest               menu: Connect, Diagnose, Advanced
+  ktest connect       connect now: races every method and keeps what works
+  ktest doctor        diagnose this network and the package; changes nothing
 
 Other commands:
+  ktest strategies    list or write the editable ByeDPI strategy file
   ktest scan          bounded Cloudflare IP candidate check
   ktest revive        run one Xray profile:  -xray -profile -variant -assets
   ktest access        domain-scoped CONNECT proxy backed by SNI-Spoofing-Go
@@ -86,12 +85,10 @@ func run(args []string) int {
 		return interactiveMenu()
 	}
 	switch args[0] {
-	case "auto":
-		return runAuto(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
-	case "smart":
-		return runSmart(args[1:])
+	case "connect", "smart":
+		return runConnect(args[1:])
 	case "strategies":
 		return runStrategies(args[1:])
 	case "menu":

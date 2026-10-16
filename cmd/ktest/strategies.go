@@ -105,14 +105,6 @@ func loadStrategies(base string) (list []byeDPIStrategy, source string, err erro
 	return list, "built-in list", err
 }
 
-// method is one launchable way to get a local proxy.
-type method struct {
-	label  string
-	port   int
-	launch launcher
-	err    error // set when the method cannot even be prepared
-}
-
 func byeDPIBinary(base string) string {
 	bin := filepath.Join(base, "cores", "ciadpi")
 	if runtime.GOOS == "windows" {
@@ -136,34 +128,6 @@ func byeDPILauncher(bin string, port int, strategy []string, output io.Writer) l
 		}
 		return errors.New("ByeDPI exited unexpectedly")
 	}
-}
-
-// expandMethod turns an `auto -methods` token into launchable methods:
-// 1-4 are the menu entries, "s" is every strategy in the editable list.
-func expandMethod(token, base string, output io.Writer) []method {
-	if token != "s" {
-		launch, port, label, err := terminalMode(token, base, output)
-		if err != nil {
-			if label == "" {
-				label = "method " + token
-			}
-			return []method{{label: label, err: err}}
-		}
-		return []method{{label: label, port: port, launch: launch}}
-	}
-	bin := byeDPIBinary(base)
-	if info, err := os.Stat(bin); err != nil || info.IsDir() {
-		return []method{{label: "ByeDPI strategies", err: fmt.Errorf("missing %s; download the complete portable ZIP", bin)}}
-	}
-	list, _, err := loadStrategies(base)
-	if err != nil {
-		return []method{{label: "ByeDPI strategies", err: err}}
-	}
-	out := make([]method, 0, len(list))
-	for _, s := range list {
-		out = append(out, method{label: "ByeDPI: " + s.Label, port: byeDPIPort, launch: byeDPILauncher(bin, byeDPIPort, s.Args, output)})
-	}
-	return out
 }
 
 // runStrategies lists the effective ByeDPI strategies, or writes the editable

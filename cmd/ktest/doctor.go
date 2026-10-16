@@ -15,35 +15,45 @@ import (
 	"github.com/Nishef1/ktest/internal/revive"
 )
 
-type doctorReport struct {
-	failed bool
-}
-
-func (d *doctorReport) line(level, name, detail string) {
-	if level == "FAIL" {
-		d.failed = true
-	}
-	fmt.Printf("%-5s %-22s %s\n", level, name, detail)
-}
-
 func fileOK(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
 
-// runDoctor inspects the package and the network without starting a core or
-// changing anything, and says which layer to look at first.
+// runDoctor is `ktest doctor`: diagnose, change nothing.
 func runDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	base := fs.String("base", defaultBase(), "portable folder holding cores/ and profiles/")
-	noNet := fs.Bool("no-net", false, "skip the network characterization (DNS poisoning, encrypted DNS, ClientHello shapes)")
+	noNet := fs.Bool("no-net", false, "skip the network characterization")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: ktest doctor [-base DIR] [-no-net]")
+		fmt.Fprintln(os.Stderr, "usage: ktest doctor [-no-net]")
 		return 2
 	}
+	if runDoctorView(newTerm(os.Stdout), *base, *noNet) {
+		return 1
+	}
+	return 0
+}
+
+// runDoctorView inspects the package and the network without starting a core or
+// changing anything, and says which layer to look at first. It reports whether
+// a blocking problem was found.
+func runDoctorView(u *term, base string, noNet bool) (failed bool) {
 	ctx := context.Background()
-	d := &doctorReport{}
-	cores := filepath.Join(*base, "cores")
+	u.Heading("diagnose", "Reads the package and measures this network. Changes nothing.")
+	warns := 0
+	line := func(k tone, name, detail string) {
+		switch k {
+		case toneFail:
+			failed = true
+		case toneWarn:
+			warns++
+		}
+		u.Line(k, "%-24s %s", name, detail)
+	}
+	section := func(name string) { u.Println("\n  " + u.Bold(name)) }
+
+	cores := filepath.Join(base, "cores")
 	exeName := func(name string) string {
 		if runtime.GOOS == "windows" {
 			return name + ".exe"
@@ -52,89 +62,89 @@ func runDoctor(args []string) int {
 	}
 
 	// 1. Package contents.
+	section("Package")
 	xray := filepath.Join(cores, exeName("xray"))
-	profile := filepath.Join(*base, "profiles", "Serverless-for-Iran.json")
+	profile := filepath.Join(base, "profiles", "Serverless-for-Iran.json")
 	for _, need := range []struct{ name, path string }{
-		{"xray core", xray},
-		{"xray geoip.dat", filepath.Join(cores, "geoip.dat")},
-		{"xray geosite.dat", filepath.Join(cores, "geosite.dat")},
-		{"serverless profile", profile},
-		{"ByeDPI core", filepath.Join(cores, exeName("ciadpi"))},
+		{"Xray core", xray},
+		{"Xray geoip.dat", filepath.Join(cores, "geoip.dat")},
+		{"Xray geosite.dat", filepath.Join(cores, "geosite.dat")},
+		{"Serverless profile", profile},
+		{"ByeDPI core", byeDPIBinary(base)},
 	} {
 		if fileOK(need.path) {
-			d.line("OK", need.name, need.path)
+			line(toneOK, need.name, u.Dim(need.path))
 		} else {
-			d.line("FAIL", need.name, "missing: "+need.path+" (extract the complete portable ZIP, both layers)")
+			line(toneFail, need.name, "missing: "+need.path+" (extract the complete portable ZIP, both layers)")
 		}
 	}
 	if runtime.GOOS == "windows" {
 		for _, name := range []string{"sing-box.exe", "wintun.dll"} {
 			if fileOK(filepath.Join(cores, name)) {
-				d.line("OK", name, "needed only for the optional TUN")
+				line(toneOK, name, u.Dim("only for the optional TUN"))
 			} else {
-				d.line("WARN", name, "missing; menu item 6 (TUN) will be unavailable")
+				line(toneWarn, name, "missing; the TUN option will be unavailable")
 			}
 		}
 	}
-
-	// 2. Xray version and profile.
 	if fileOK(xray) {
 		vctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		out, err := exec.CommandContext(vctx, xray, "version").CombinedOutput()
 		cancel()
 		switch {
 		case err != nil:
-			d.line("FAIL", "xray version", fmt.Sprintf("cannot run %s: %v (antivirus quarantine or blocked download?)", xray, err))
+			line(toneFail, "Xray version", fmt.Sprintf("cannot run %s: %v (antivirus quarantine?)", xray, err))
 		default:
 			if err := revive.CheckVersion(string(out)); err != nil {
-				d.line("FAIL", "xray version", err.Error())
+				line(toneFail, "Xray version", err.Error())
 			} else {
-				d.line("OK", "xray version", "26.6.27 or newer")
+				line(toneOK, "Xray version", "26.6.27 or newer")
 			}
 		}
 	}
 	if fileOK(profile) {
 		data, err := os.ReadFile(profile)
 		if err != nil {
-			d.line("FAIL", "profile", err.Error())
+			line(toneFail, "Profile", err.Error())
 		} else {
 			for _, variant := range []string{"A", "B"} {
 				if _, err := revive.SelectProfile(data, variant); err != nil {
-					d.line("FAIL", "profile Fragment "+variant, err.Error())
+					line(toneFail, "Profile fragment "+variant, err.Error())
 				} else {
-					d.line("OK", "profile Fragment "+variant, "parses and has one loopback inbound")
+					line(toneOK, "Profile fragment "+variant, u.Dim("parses, one loopback inbound"))
 				}
 			}
 		}
 	}
-
-	if list, source, err := loadStrategies(*base); err != nil {
-		d.line("FAIL", "ByeDPI strategies", err.Error())
+	if list, source, err := loadStrategies(base); err != nil {
+		line(toneFail, "ByeDPI strategies", err.Error())
 	} else {
-		d.line("OK", "ByeDPI strategies", fmt.Sprintf("%d from %s", len(list), source))
+		line(toneOK, "ByeDPI strategies", fmt.Sprintf("%d from %s", len(list), u.Dim(source)))
 	}
 
-	// 3. Local ports.
+	// 2. Local ports.
+	section("Local ports")
 	for _, p := range []struct {
 		port int
 		name string
-	}{{xrayPort, "Xray"}, {byeDPIPort, "ByeDPI"}} {
+	}{{connectPort, "Connect"}, {xrayPort, "Xray"}, {byeDPIPort, "ByeDPI"}} {
 		if err := portFree(p.port); err != nil {
-			d.line("FAIL", fmt.Sprintf("port %d (%s)", p.port, p.name), err.Error())
+			line(toneWarn, fmt.Sprintf("Port %d (%s)", p.port, p.name), "in use: another ktest, v2rayN or a leftover core (netstat -ano | findstr :"+fmt.Sprint(p.port)+")")
 		} else {
-			d.line("OK", fmt.Sprintf("port %d (%s)", p.port, p.name), "free")
+			line(toneOK, fmt.Sprintf("Port %d (%s)", p.port, p.name), "free")
 		}
 	}
 
-	// 4. Network, measured without any proxy.
+	// 3. The network, measured without any proxy.
+	section("Network")
 	dns := dnscheck.CheckGoogleDNS(ctx)
 	switch {
 	case dns.UDP && dns.TCP:
-		d.line("OK", "Google DNS 8.8.8.8", "UDP and TCP answer a real TXT query")
+		line(toneOK, "Google DNS 8.8.8.8", "UDP and TCP answer a real query")
 	case dns.UDP || dns.TCP:
-		d.line("WARN", "Google DNS 8.8.8.8", fmt.Sprintf("UDP=%t TCP=%t; only one transport answers", dns.UDP, dns.TCP))
+		line(toneWarn, "Google DNS 8.8.8.8", fmt.Sprintf("UDP=%t TCP=%t; only one transport answers", dns.UDP, dns.TCP))
 	default:
-		d.line("WARN", "Google DNS 8.8.8.8", "no answer; encrypted DNS inside the profile may still work")
+		line(toneWarn, "Google DNS 8.8.8.8", "no answer (UDP and TCP); plain public DNS is filtered here")
 	}
 	directCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	direct := quickcheck.RunDirect(directCtx, 8*time.Second)
@@ -143,26 +153,74 @@ func runDoctor(args []string) int {
 	for _, r := range direct {
 		if r.Success {
 			open++
-			d.line("OK", "direct "+r.Target, "reachable without any proxy")
+			line(toneOK, "Direct "+r.Target, "reachable without any proxy")
 		} else {
-			d.line("INFO", "direct "+r.Target, "not reachable without a proxy: "+r.Detail)
+			line(toneInfo, "Direct "+r.Target, "not reachable without a proxy "+u.Dim(trimDetail(r.Detail)))
 		}
 	}
-	if open == len(direct) && open > 0 {
-		d.line("INFO", "interpretation", "every target already works directly, so ktest can only report BASELINE. If another VPN is connected, disconnect it to test a bypass; otherwise this network is not blocking them now.")
-	}
-
-	if !*noNet {
-		fmt.Println("\nNetwork characterization (no proxy, certificate-verified handshakes only):")
-		npctx, cancel := context.WithTimeout(ctx, 40*time.Second)
-		networkProbe(npctx, os.Stdout, d.line)
+	if !noNet {
+		prog := u.Progress("Probing DNS, encrypted DNS, packet shapes", 3)
+		pctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+		rep := probeNetwork(pctx, func(done int) { prog.Set(done, "") })
 		cancel()
+		prog.Finish(toneOK, "")
+		rep.print(u)
+		u.Println("")
+		u.Box("VERDICT", rep.verdict, wrapText(rep.verdictText, 76))
+	} else if open == len(direct) && open > 0 {
+		u.Note("Everything tested already works directly: no filtering is visible on this path (or another VPN carries it).")
 	}
 
-	if d.failed {
-		fmt.Println("\nFix the FAIL lines first; nothing else is meaningful until they pass.")
-		return 1
+	// Result.
+	u.Println("")
+	switch {
+	case failed:
+		u.Box("FIX FIRST", toneFail, []string{"Resolve the lines marked with a cross; nothing else is meaningful until they pass."})
+	case warns > 0:
+		u.Box("OK WITH NOTES", toneWarn, []string{fmt.Sprintf("%d note(s) above. Connect (menu 1, or `ktest connect`) can run now.", warns)})
+	default:
+		u.Box("ALL GOOD", toneOK, []string{"Nothing blocks ktest. Run Connect (menu 1, or `ktest connect`)."})
 	}
-	fmt.Println("\nNo blocking problems found. Run `ktest auto` to find a working method.")
-	return 0
+	return failed
+}
+
+// wrapText breaks s into lines of at most width runes at spaces.
+func wrapText(s string, width int) []string {
+	var lines []string
+	line := ""
+	for _, w := range splitWords(s) {
+		if line != "" && len(line)+1+len(w) > width {
+			lines = append(lines, line)
+			line = w
+			continue
+		}
+		if line == "" {
+			line = w
+		} else {
+			line += " " + w
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func splitWords(s string) []string {
+	var words []string
+	cur := ""
+	for _, r := range s {
+		if r == ' ' {
+			if cur != "" {
+				words = append(words, cur)
+				cur = ""
+			}
+			continue
+		}
+		cur += string(r)
+	}
+	if cur != "" {
+		words = append(words, cur)
+	}
+	return words
 }

@@ -175,21 +175,16 @@ func DesyncUpstreams() []Upstream {
 			}
 			return writeSegments(c, recs)
 		}},
-		{Name: "self: SNI in 3 records, 3 segments", LocalDNS: true, Send: func(c net.Conn, f []byte) error {
-			recs, err := splitRecords(f, cutsInSNI(f, 2))
-			if err != nil {
-				_, werr := c.Write(f)
-				return werr
-			}
-			return writeSegments(c, recs)
-		}},
 	}
 	// IPv6 twins of the record-splitting families: field reports show some
 	// networks treat the two address families differently.
 	out := append([]Upstream(nil), v4...)
+	for i := range out {
+		out[i].Rank = 3
+	}
 	for _, u := range v4[1:3] {
 		u.Name = "self6: " + u.Name[len("self: "):]
-		u.Network = "tcp6"
+		u.Network, u.Rank = "tcp6", 3
 		out = append(out, u)
 	}
 	return out
@@ -199,5 +194,8 @@ func DesyncUpstreams() []Upstream {
 // sent untouched. Some networks punish any cut ClientHello, even for sites
 // that are not blocked, so the uncut path must always take part in the race.
 func PlainUpstreams() []Upstream {
-	return []Upstream{{Name: "plain: no cutting", LocalDNS: true}}
+	return []Upstream{
+		{Name: "plain: no cutting", LocalDNS: true, Rank: 0},
+		{Name: "plain6: no cutting over IPv6", LocalDNS: true, Network: "tcp6", Rank: 1},
+	}
 }

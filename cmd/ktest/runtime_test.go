@@ -75,22 +75,8 @@ func TestTailBufferKeepsOnlyRecentOutput(t *testing.T) {
 	}
 }
 
-func TestAutoRejectsUnknownMethod(t *testing.T) {
-	if code := runAuto([]string{"-methods", "1,9"}); code != 2 {
-		t.Fatalf("code=%d", code)
-	}
-}
-
-func TestAutoWithoutBundleReportsEveryMissingMethod(t *testing.T) {
-	// Nothing to launch in an empty folder: every method is skipped, none is
-	// claimed to work, and the exit code says so.
-	if code := runAuto([]string{"-base", t.TempDir(), "-methods", "1,3"}); code != 1 {
-		t.Fatalf("code=%d", code)
-	}
-}
-
 func TestUsageMentionsNewCommands(t *testing.T) {
-	for _, want := range []string{"ktest auto", "ktest doctor"} {
+	for _, want := range []string{"ktest connect", "ktest doctor"} {
 		if !strings.Contains(usageText, want) {
 			t.Fatalf("usage lacks %q", want)
 		}

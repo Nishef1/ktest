@@ -23,6 +23,7 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -44,6 +45,9 @@ type Upstream struct {
 	// Network is "tcp" (default) or "tcp6". IPv6 paths matter because some
 	// networks filter the IPv4 and IPv6 data planes differently.
 	Network string
+	// Rank is the static preference when two paths have the same track record:
+	// lower first. Plain connections are the least intrusive, cut ones the most.
+	Rank int
 }
 
 type Config struct {
@@ -62,6 +66,19 @@ type Config struct {
 	Resolve6 Resolver
 	// Logf receives one line per decision; nil is silent.
 	Logf func(format string, args ...any)
+	// OnEvent is called once per raced connection with its outcome; it must
+	// not block.
+	OnEvent func(Event)
+}
+
+// Event is the outcome of one raced TLS connection.
+type Event struct {
+	Host string
+	Site string // host reduced to the name the memory is keyed by
+	Path string // winning path; empty when none answered
+	Took time.Duration
+	OK   bool
+	Err  string // last failure reason when no path answered
 }
 
 func (c *Config) defaults() {
@@ -140,7 +157,7 @@ func (p *Proxy) Stats() []Stat {
 	return out
 }
 
-// Winners returns the remembered upstream per host (for display only).
+// Winners returns the remembered upstream per site (for display only).
 func (p *Proxy) Winners() map[string]string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -153,23 +170,32 @@ func (p *Proxy) Winners() map[string]string {
 	return out
 }
 
-// order lists upstreams: the remembered winner for the host first, then by
-// wins (more is better) and average latency.
+// order lists upstreams: the remembered winner for the site first, then by
+// success rate, static rank and average latency.
 func (p *Proxy) order(host string) []*upstreamState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	list := append([]*upstreamState(nil), p.ups...)
 	remembered := ""
-	if m, ok := p.mem[host]; ok && time.Since(m.at) < p.cfg.MemoryTTL {
+	if m, ok := p.mem[siteKey(host)]; ok && time.Since(m.at) < p.cfg.MemoryTTL {
 		remembered = m.name
+	}
+	// Success rate (smoothed, in tenths) rather than raw win counts: counting
+	// wins makes whichever path won early win forever, even when every path is
+	// equally good, and prefers noisy cut paths over the plain one.
+	rate := func(u *upstreamState) int {
+		return int(10*(float64(u.wins)+1)/(float64(u.wins+u.fails)+2) + 0.5)
 	}
 	sort.SliceStable(list, func(i, j int) bool {
 		a, b := list[i], list[j]
 		if (a.Name == remembered) != (b.Name == remembered) {
 			return a.Name == remembered
 		}
-		if a.wins != b.wins {
-			return a.wins > b.wins
+		if ra, rb := rate(a), rate(b); ra != rb {
+			return ra > rb
+		}
+		if a.Rank != b.Rank {
+			return a.Rank < b.Rank
 		}
 		if a.ewmaMS != b.ewmaMS && a.ewmaMS != 0 && b.ewmaMS != 0 {
 			return a.ewmaMS < b.ewmaMS
@@ -184,8 +210,8 @@ func (p *Proxy) record(u *upstreamState, host string, ok bool, took time.Duratio
 	defer p.mu.Unlock()
 	if !ok {
 		u.fails++
-		if m, has := p.mem[host]; has && m.name == u.Name {
-			delete(p.mem, host)
+		if m, has := p.mem[siteKey(host)]; has && m.name == u.Name {
+			delete(p.mem, siteKey(host))
 		}
 		return
 	}
@@ -196,7 +222,7 @@ func (p *Proxy) record(u *upstreamState, host string, ok bool, took time.Duratio
 	} else {
 		u.ewmaMS = 0.8*u.ewmaMS + 0.2*ms
 	}
-	p.mem[host] = memo{name: u.Name, at: time.Now()}
+	p.mem[siteKey(host)] = memo{name: u.Name, at: time.Now()}
 }
 
 // Serve accepts SOCKS5 clients until ctx ends.
@@ -258,29 +284,32 @@ type outcome struct {
 	err   error
 }
 
-// race sends the TLS flight over the paths in learned order and returns the
-// first connection that answered with a TLS handshake record.
+// race sends the TLS flight in two waves. The first wave is one path: the one
+// remembered for the site, else the best-ranked. If it does not answer within
+// the stagger (longer when it is a remembered winner) or fails, the second wave
+// starts every other path at once. One-by-one staggering would delay the right
+// path of a blocked site by 300 ms for each path ranked above it.
 func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (net.Conn, []byte, error) {
 	order := p.order(host)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	results := make(chan outcome, len(order))
 	next, pending := 0, 0
-	launch := func() {
-		if next >= len(order) {
-			return
+	launch := func(n int) {
+		for ; n != 0 && next < len(order); n-- {
+			u := order[next]
+			next++
+			pending++
+			go func() {
+				began := time.Now()
+				conn, first, err := p.attempt(ctx, u, host, port, flight)
+				results <- outcome{u, conn, first, time.Since(began), err}
+			}()
 		}
-		u := order[next]
-		next++
-		pending++
-		go func() {
-			began := time.Now()
-			conn, first, err := p.attempt(ctx, u, host, port, flight)
-			results <- outcome{u, conn, first, time.Since(began), err}
-		}()
 	}
-	launch()
-	timer := time.NewTimer(p.cfg.Stagger)
+	wave := p.firstWave(order[0], host)
+	launch(1)
+	timer := time.NewTimer(wave)
 	defer timer.Stop()
 	var lastErr error
 	for pending > 0 || next < len(order) {
@@ -289,21 +318,19 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 			go drain(results, pending)
 			return nil, nil, parent.Err()
 		case <-timer.C:
-			launch()
-			timer.Reset(p.cfg.Stagger)
+			launch(-1)
 		case r := <-results:
 			pending--
 			if r.err != nil {
 				lastErr = fmt.Errorf("%s: %w", r.u.Name, r.err)
 				p.record(r.u, host, false, r.took)
 				p.logf("%s:%s %s failed: %v", host, port, r.u.Name, r.err)
-				if pending == 0 {
-					launch() // nothing in flight: do not wait for the stagger
-				}
+				launch(-1) // the first wave failed: open the second at once
 				continue
 			}
 			p.record(r.u, host, true, r.took)
 			p.logf("%s:%s won by %s in %dms", host, port, r.u.Name, r.took.Milliseconds())
+			p.emit(Event{Host: host, Site: siteKey(host), Path: r.u.Name, Took: r.took, OK: true})
 			cancel()
 			go drain(results, pending)
 			return r.conn, r.first, nil
@@ -312,7 +339,59 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	if lastErr == nil {
 		lastErr = errors.New("no upstream")
 	}
+	p.emit(Event{Host: host, Site: siteKey(host), Err: lastErr.Error()})
 	return nil, nil, lastErr
+}
+
+// firstWave is how long the first path gets alone. It scales with that path's
+// own typical time to a TLS record: on an open network the plain path then
+// finishes before any duplicate flight is sent, while a blocked site still
+// opens the second wave at once on a reset or after at most 1.5 s of silence.
+func (p *Proxy) firstWave(first *upstreamState, host string) time.Duration {
+	p.mu.Lock()
+	typical := time.Duration(first.ewmaMS * 1.5 * float64(time.Millisecond))
+	p.mu.Unlock()
+	wave := max(p.cfg.Stagger, typical)
+	if p.hasMemory(host) {
+		wave = max(wave, 4*p.cfg.Stagger) // trust a learned path a little longer
+	}
+	return min(wave, 1500*time.Millisecond)
+}
+
+func (p *Proxy) emit(e Event) {
+	if p.cfg.OnEvent != nil {
+		p.cfg.OnEvent(e)
+	}
+}
+
+func (p *Proxy) hasMemory(host string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m, ok := p.mem[siteKey(host)]
+	return ok && time.Since(m.at) < p.cfg.MemoryTTL
+}
+
+// siteKey reduces a host to the name the memory is keyed by, so that one win on
+// r1---sn-abc.googlevideo.com speeds up every googlevideo.com node. It is an
+// approximation of the registrable domain without a public-suffix list.
+func siteKey(host string) string {
+	if net.ParseIP(host) != nil {
+		return host
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	labels := strings.Split(host, ".")
+	n := len(labels)
+	if n <= 2 {
+		return host
+	}
+	tld, sld := labels[n-1], labels[n-2]
+	if len(tld) == 2 {
+		switch sld {
+		case "co", "com", "org", "net", "gov", "edu", "ac":
+			return strings.Join(labels[n-3:], ".")
+		}
+	}
+	return strings.Join(labels[n-2:], ".")
 }
 
 // drain closes connections of attempts that lost the race.

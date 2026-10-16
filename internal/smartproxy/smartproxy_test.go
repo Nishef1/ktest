@@ -3,6 +3,7 @@ package smartproxy
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"sync/atomic"
@@ -247,5 +248,114 @@ func TestLocalDNSUpstreamGetsResolvedIPWhileOthersGetTheName(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("upstream never contacted")
 		}
+	}
+}
+
+func TestSiteKeyGroupsNodesOfOneService(t *testing.T) {
+	for in, want := range map[string]string{
+		"r1---sn-abc.googlevideo.com": "googlevideo.com",
+		"www.youtube.com":             "youtube.com",
+		"youtube.com":                 "youtube.com",
+		"bbc.co.uk":                   "bbc.co.uk",
+		"www.bbc.co.uk":               "bbc.co.uk",
+		"142.250.1.1":                 "142.250.1.1",
+		"WWW.Example.ORG.":            "example.org",
+	} {
+		if got := siteKey(in); got != want {
+			t.Errorf("siteKey(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+func TestMemoryIsSharedAcrossHostsOfOneSiteAndEventsReportTheWinner(t *testing.T) {
+	dest := destination(t)
+	_, port, _ := net.SplitHostPort(dest)
+	var h1, h2 atomic.Int32
+	events := make(chan Event, 8)
+	p, err := New(Config{
+		Upstreams:        []Upstream{{Name: "blocked", Addr: fakeSocks(t, dest, false, &h1)}, {Name: "good", Addr: fakeSocks(t, dest, true, &h2)}},
+		Stagger:          50 * time.Millisecond,
+		FirstByteTimeout: 600 * time.Millisecond,
+		OnEvent:          func(e Event) { events <- e },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Serve(ctx, l)
+
+	if got := viaProxy(t, l.Addr().String(), "r1.cdn.example.com", port, clientHello()); !bytes.Equal(got, serverHello) {
+		t.Fatalf("got %x", got)
+	}
+	e := <-events
+	if !e.OK || e.Path != "good" || e.Site != "example.com" {
+		t.Fatalf("event %+v", e)
+	}
+	// A different host of the same site starts with the remembered winner.
+	if !p.hasMemory("r2.cdn.example.com") {
+		t.Fatal("memory should be shared by every host of the site")
+	}
+}
+
+func TestSecondWaveStartsEveryRemainingPathAtOnce(t *testing.T) {
+	dest := destination(t)
+	_, port, _ := net.SplitHostPort(dest)
+	var hits [5]atomic.Int32
+	var ups []Upstream
+	for i := 0; i < 4; i++ {
+		ups = append(ups, Upstream{Name: fmt.Sprintf("dead%d", i), Addr: fakeSocks(t, dest, false, &hits[i])})
+	}
+	ups = append(ups, Upstream{Name: "good", Addr: fakeSocks(t, dest, true, &hits[4])})
+	// One-by-one staggering with this stagger would need 4 * 2s before "good".
+	p, err := New(Config{Upstreams: ups, Stagger: 2 * time.Second, FirstByteTimeout: 1500 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Serve(ctx, l)
+	began := time.Now()
+	if got := viaProxy(t, l.Addr().String(), "site.example", port, clientHello()); !bytes.Equal(got, serverHello) {
+		t.Fatalf("got %x", got)
+	}
+	if took := time.Since(began); took > 3500*time.Millisecond {
+		t.Fatalf("took %s: the second wave must not be staggered one path at a time", took)
+	}
+}
+
+func TestOrderPrefersPlainWhenTrackRecordsAreEqualAndDemotesFailingPaths(t *testing.T) {
+	p, err := New(Config{Upstreams: []Upstream{
+		{Name: "cut", Addr: "x", Rank: 3},
+		{Name: "external", Addr: "y", Rank: 2},
+		{Name: "plain", Rank: 0},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := func() []string {
+		var out []string
+		for _, u := range p.order("site.example") {
+			out = append(out, u.Name)
+		}
+		return out
+	}
+	if got := names(); got[0] != "plain" || got[1] != "external" || got[2] != "cut" {
+		t.Fatalf("static rank order wrong: %v", got)
+	}
+	// Equal success rates must not let an early winner run away with the order.
+	p.record(p.ups[0], "a.example", true, 10*time.Millisecond)
+	p.record(p.ups[2], "a.example", true, 10*time.Millisecond)
+	if got := names(); got[0] != "plain" {
+		t.Fatalf("a single win must not outrank plain: %v", got)
+	}
+	// A path that keeps failing sinks below the others.
+	for i := 0; i < 6; i++ {
+		p.record(p.ups[2], "b.example", false, time.Second)
+	}
+	if got := names(); got[len(got)-1] != "plain" {
+		t.Fatalf("failing plain path should rank last: %v", got)
 	}
 }

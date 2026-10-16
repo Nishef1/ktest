@@ -35,6 +35,7 @@ type tunSession struct {
 
 type terminal struct {
 	out         io.Writer
+	ui          *term
 	mu          sync.Mutex
 	active      *cliSession
 	tun         *tunSession
@@ -42,6 +43,7 @@ type terminal struct {
 	results     []quickcheck.Result
 	assessments []quickcheck.Assessment
 	scanCancel  context.CancelFunc
+	connect     context.CancelFunc // set while the connect view runs
 }
 
 func (t *terminal) print(format string, args ...any) {
@@ -90,7 +92,7 @@ func (t *terminal) stop() bool {
 		t.mu.Lock()
 		if t.active == s {
 			t.active = nil
-			t.status = "stopped"
+			t.status = "disconnected"
 		}
 		t.mu.Unlock()
 		t.print("Stopped. You can select another mode.\n")
@@ -105,6 +107,7 @@ func (t *terminal) stop() bool {
 // already measured, so the core does not repeat a multi-second DNS wait.
 type launcher func(ctx context.Context, dns *dnscheck.Result) error
 
+// terminalMode prepares one single-method core for the Advanced menu.
 func terminalMode(choice string, base string, output io.Writer) (launcher, int, string, error) {
 	core := filepath.Join(base, "cores")
 	profile := filepath.Join(base, "profiles", "Serverless-for-Iran.json")
@@ -133,16 +136,6 @@ func terminalMode(choice string, base string, output io.Writer) (launcher, int, 
 			})
 		}, xrayPort, "Xray Fragment " + variant, nil
 	}
-	if choice == "9" {
-		o := defaultSmartOptions(base)
-		o.noSelfTest = true // the menu verifies websites itself
-		return func(ctx context.Context, dns *dnscheck.Result) error {
-			if code := smartSession(ctx, o, dns, output); code != 0 {
-				return fmt.Errorf("smart session ended with code %d", code)
-			}
-			return nil
-		}, smartPort, "Smart (race every method)", nil
-	}
 	if choice == "3" || choice == "4" {
 		bin := byeDPIBinary(base)
 		if info, err := os.Stat(bin); err != nil || info.IsDir() {
@@ -165,11 +158,11 @@ func (t *terminal) start(choice, base string) {
 	}
 	launch, port, label, err := terminalMode(choice, base, t.out)
 	if err != nil {
-		t.print("Cannot start: %v\n", err)
+		t.ui.Line(toneFail, "Cannot start: %v", err)
 		return
 	}
 	if err := portFree(port); err != nil {
-		t.print("Cannot start %s: %v\n", label, err)
+		t.ui.Line(toneFail, "Cannot start %s: %v", label, err)
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -177,17 +170,15 @@ func (t *terminal) start(choice, base string) {
 		choice: choice, name: label, port: port, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 	}
 	t.mu.Lock()
-	t.active, t.status, t.results, t.assessments = s, "checking DNS", nil, nil
+	t.active, t.status, t.results, t.assessments = s, "starting "+label, nil, nil
 	t.mu.Unlock()
-	t.print("\nStarting %s (DNS preflight first; the menu stays usable)...\n", label)
+	t.ui.Line(toneInfo, "Starting %s (the menu stays usable)", t.ui.Bold(label))
 	// The DNS preflight runs inside the session goroutine: a network that
 	// silently drops 8.8.8.8 must not freeze the menu or the Ctrl+C handler.
 	go func() {
 		var err error
 		dns := dnscheck.CheckGoogleDNS(ctx)
 		if ctx.Err() == nil {
-			t.setStatus(s, "starting local core")
-			t.print("%s\n", dns.Format())
 			err = launch(ctx, &dns)
 		}
 		close(s.done)
@@ -200,7 +191,7 @@ func (t *terminal) start(choice, base string) {
 			t.active = nil
 		}
 		t.mu.Unlock()
-		t.print("\nCore stopped: %v\n", err)
+		t.ui.Line(toneFail, "%s stopped: %v", label, err)
 	}()
 	go t.waitAndCheck(ctx, s)
 }
@@ -212,8 +203,8 @@ const coreReadyLimit = 45 * time.Second
 
 func (t *terminal) waitAndCheck(ctx context.Context, s *cliSession) {
 	if waitForPort(ctx, s.done, s.port, coreReadyLimit) {
-		t.setStatus(s, "local proxy listening; checking real websites")
-		t.print("\nProxy listening at 127.0.0.1:%d. Verifying YouTube and Google via SOCKS...\n", s.port)
+		t.setStatus(s, fmt.Sprintf("%s on 127.0.0.1:%d, checking websites", s.name, s.port))
+		t.ui.Line(toneOK, "%s listening on 127.0.0.1:%d; verifying YouTube and Google", s.name, s.port)
 		t.check(ctx, s)
 		return
 	}
@@ -223,7 +214,7 @@ func (t *terminal) waitAndCheck(ctx context.Context, s *cliSession) {
 		// The core already reported why it stopped.
 	default:
 		t.setStatus(s, "proxy did not open; check core errors")
-		t.print("\n%s: proxy did not open at 127.0.0.1:%d within %s.\n", s.name, s.port, coreReadyLimit)
+		t.ui.Line(toneFail, "%s: proxy did not open at 127.0.0.1:%d within %s", s.name, s.port, coreReadyLimit)
 	}
 }
 
@@ -240,35 +231,71 @@ func (t *terminal) check(ctx context.Context, s *cliSession) {
 		switch a.Kind {
 		case "candidate":
 			candidates++
-			t.print("CANDIDATE %-8s Proxy OK, direct failed. Requires VPN-off confirmation.\n", a.Target)
+			t.ui.Line(toneOK, "%-9s blocked directly, open through ktest (bypass confirmed)", a.Target)
 		case "already_open":
-			t.print("BASELINE  %-8s Works without ktest too. No bypass attributed.\n", a.Target)
+			t.ui.Line(toneInfo, "%-9s open through ktest and also directly; no bypass attributed", a.Target)
 		case "proxy_regression":
-			t.print("PROXY BROKEN %-8s Direct works but proxy fails (DNS/route issue).\n", a.Target)
+			t.ui.Line(toneWarn, "%-9s open directly but failing through this method (DNS or route)", a.Target)
 		case "baseline_unknown":
-			t.print("UNVERIFIED %-8s Direct baseline did not finish.\n", a.Target)
+			t.ui.Line(toneInfo, "%-9s open through ktest; direct check did not finish", a.Target)
 		default:
-			t.print("FAIL      %-8s %s\n", a.Target, a.Detail)
+			t.ui.Line(toneFail, "%-9s not reachable through this method %s", a.Target, t.ui.Dim(trimDetail(a.Detail)))
 		}
 	}
 	t.mu.Lock()
 	if t.active == s {
 		t.results = proxied
 		t.assessments = compared
-		t.status = fmt.Sprintf("%d proxy-only reachable target(s)", candidates)
+		t.status = fmt.Sprintf("%s on 127.0.0.1:%d (%d/%d verified)", s.name, s.port, proxiedPassCount(proxied), len(proxied))
 	}
 	t.mu.Unlock()
 	if candidates == 0 {
-		t.print("No new ISP-path access verified. A local SOCKS listener or HTTP 204 alone is not proof.\n")
-	} else {
-		t.print("Observed proxy-only reachability; ensure other VPNs are off for a meaningful comparison.\n")
+		t.ui.Note("No new access verified on this network. For the best result use Connect, which races every method.")
 	}
 }
 
-// runInteractive replaces the old blocking terminal menu with managed sessions.
+// mainMenu and advancedMenu are the only two screens.
+func (t *terminal) mainMenu() {
+	u := t.ui
+	t.mu.Lock()
+	status := t.status
+	t.mu.Unlock()
+	u.Heading("free access toolkit", "")
+	state := u.Dim(status)
+	if status != "disconnected" {
+		state = u.Green(status)
+	}
+	u.Printf("  Status: %s\n\n", state)
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("1")), u.Bold("Connect   "), u.Dim("try every method, keep what works (recommended)"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("2")), u.Bold("Diagnose  "), u.Dim("what is this network doing? DNS, SNI, packet cutting"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("3")), u.Bold("Advanced  "), u.Dim("single methods, CDN scan, system-wide TUN"))
+	if t.current() != nil {
+		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("4")), u.Bold("Stop      "), u.Dim("stop the running method"))
+	}
+	u.Printf("  %s  %s\n\n", u.Bold(u.Cyan("0")), u.Bold("Exit      "))
+	u.Printf("  Select > ")
+}
+
+func (t *terminal) advancedMenu() {
+	u := t.ui
+	u.Heading("advanced", "Single methods listen on 127.0.0.1:10808 (Xray) or :10809 (ByeDPI).")
+	for _, r := range [][2]string{
+		{"1", "Xray fragment B"}, {"2", "Xray fragment A"},
+		{"3", "ByeDPI adaptive"}, {"4", "ByeDPI TLS record slicing"},
+		{"5", "CDN IP candidates (Cloudflare scan)"}, {"6", "System-wide TUN (Windows, Administrator, beta)"},
+		{"7", "Stop the running method"}, {"8", "Re-test YouTube and Google"},
+		{"0", "Back"},
+	} {
+		u.Printf("  %s  %s\n", u.Bold(u.Cyan(r[0])), r[1])
+	}
+	u.Printf("\n  Select > ")
+}
+
+// runInteractive is the menu. Connect runs in the foreground with its own
+// progress view; the Advanced screen keeps the single-method sessions.
 // It deliberately keeps Windows routing/DNS unchanged.
 func runInteractive(in io.Reader, out io.Writer, base string) int {
-	t := &terminal{out: out, status: "disconnected"}
+	t := &terminal{out: out, ui: newTerm(out), status: "disconnected"}
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
@@ -280,34 +307,115 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			case <-quitSignal:
 				return
 			case <-interrupts:
-				t.print("\nCtrl+C: stopping active connection; menu remains available.\n")
+				t.mu.Lock()
+				connect := t.connect
+				t.mu.Unlock()
+				if connect != nil {
+					connect() // the connect view prints its own summary
+					continue
+				}
+				t.print("\nCtrl+C: stopping the active method; the menu remains available.\n")
 				t.stop()
 			}
 		}
 	}()
-	reader := bufio.NewScanner(in)
+	// One reader owns stdin, so the connect view can wait for Enter without
+	// swallowing the next menu choice.
+	lines := make(chan string)
+	go func() {
+		sc := bufio.NewScanner(in)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+		close(lines)
+	}()
+	readLine := func() (string, bool) {
+		l, ok := <-lines
+		return strings.TrimSpace(l), ok
+	}
+
 	for {
-		t.mu.Lock()
-		status := t.status
-		t.mu.Unlock()
-		t.print("\nktest | Status: %s\n", status)
-		t.print("1) Direct Fragment B      2) Direct Fragment A\n")
-		t.print("3) ByeDPI adaptive        4) TLS record slicing\n")
-		t.print("5) CDN IP candidates      6) Toggle system-wide TUN (Windows/Admin)\n")
-		t.print("7) Stop active mode       8) Retest YouTube and Google\n")
-		t.print("9) Smart: race every method per connection (recommended) on 127.0.0.1:10800\n")
-		t.print("0) Exit (stops core)\n")
-		t.print("Select > ")
-		if !reader.Scan() {
+		t.mainMenu()
+		line, ok := readLine()
+		if !ok {
 			t.stopIfActive()
 			return 0
 		}
-		option := strings.TrimSpace(reader.Text())
-		switch option {
-		case "1", "2", "3", "4", "9":
-			t.start(option, base)
+		switch line {
+		case "":
+			// Asynchronous output can visually displace the prompt; an empty
+			// Enter is never an invalid choice.
+			continue
+		case "1":
+			if t.current() != nil && !t.stop() {
+				continue
+			}
+			if !t.runConnect(base, lines) {
+				return 0
+			}
+		case "2":
+			runDoctorView(t.ui, base, false)
+		case "3":
+			if !t.advanced(base, readLine) {
+				return 0
+			}
+		case "4", "s", "S":
+			t.stop()
+		case "0", "q", "Q":
+			if !t.stopIfActive() {
+				continue
+			}
+			return 0
+		default:
+			t.ui.Line(toneWarn, "Unknown option. Select 1-3, or 0 to exit.")
+		}
+	}
+}
+
+// runConnect shows the connect view until the session ends or the user presses
+// Enter / Ctrl+C. It reports false when stdin closed.
+func (t *terminal) runConnect(base string, lines <-chan string) bool {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.mu.Lock()
+	t.connect = cancel
+	t.mu.Unlock()
+	o := defaultConnectOptions(base)
+	o.stopHint = "Press Enter or Ctrl+C to disconnect"
+	done := make(chan int, 1)
+	go func() { done <- connectSession(ctx, o, nil, t.ui) }()
+	alive := true
+	select {
+	case <-done:
+	case _, ok := <-lines:
+		alive = ok
+		cancel()
+		<-done
+	case <-ctx.Done(): // Ctrl+C
+		<-done
+	}
+	cancel()
+	t.mu.Lock()
+	t.connect = nil
+	t.mu.Unlock()
+	return alive
+}
+
+// advanced is the single-method screen. It reports false when stdin closed.
+func (t *terminal) advanced(base string, readLine func() (string, bool)) bool {
+	for {
+		t.advancedMenu()
+		line, ok := readLine()
+		if !ok {
+			t.stopIfActive()
+			return false
+		}
+		switch line {
+		case "":
+			continue
+		case "1", "2", "3", "4":
+			t.start(line, base)
 		case "5":
-			t.print("Scanning up to 300 official Cloudflare IPs; Ctrl+C cancels.\n")
+			t.ui.Line(toneInfo, "Scanning up to 300 official Cloudflare IPs; Ctrl+C cancels.")
 			scanCtx, scanStop := context.WithCancel(context.Background())
 			t.mu.Lock()
 			t.scanCancel = scanStop
@@ -318,77 +426,71 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			t.scanCancel = nil
 			t.mu.Unlock()
 		case "6":
-			t.mu.Lock()
-			exists := t.tun != nil
-			t.mu.Unlock()
-			if exists {
-				t.stopTunIfActive()
-				continue
-			}
-			active := t.current()
-			if active == nil {
-				t.print("Start and verify a local mode (1-4) first.\n")
-				continue
-			}
-			t.mu.Lock()
-			verified := false
-			for _, result := range t.assessments {
-				if result.Target == "YouTube" && result.Kind == "candidate" {
-					verified = true
-				}
-			}
-			t.mu.Unlock()
-			if !verified {
-				t.print("YouTube has not been proven newly reachable through ktest. Refusing to change system routes.\n")
-				continue
-			}
-			t.print("Rechecking YouTube directly before TUN startup...\n")
-			directCtx, stopBaseline := context.WithTimeout(context.Background(), 9*time.Second)
-			recheck := quickcheck.RunDirect(directCtx, 4*time.Second)
-			stopBaseline()
-			for _, result := range recheck {
-				if result.Target == "YouTube" && result.Success {
-					verified = false
-				}
-			}
-			if !verified {
-				t.print("YouTube now works without ktest. TUN would be an unverified benefit; refusing activation.\n")
-				continue
-			}
-			t.print("BETA: TCP-wide TUN, administrator required; UDP except DNS is blocked.\n")
-			t.print("May disrupt Windows/other VPNs. Routes should restore when stopped.\n")
-			t.print("Type YES to modify system-wide routes > ")
-			if !reader.Scan() {
-				t.stopIfActive()
-				return 0
-			}
-			if strings.TrimSpace(reader.Text()) != "YES" {
-				t.print("Cancelled.\n")
-				continue
-			}
-			t.startTun(base, active.port)
+			t.toggleTun(base, readLine)
 		case "7", "s", "S":
 			t.stop()
 		case "8", "t", "T":
 			s := t.current()
 			if s == nil {
-				t.print("No active connection; select mode 1-4 first.\n")
+				t.ui.Line(toneWarn, "No active method; start one of 1-4 first.")
 			} else {
 				go t.check(s.ctx, s)
 			}
-		case "":
-			// Asynchronous core logs can visually displace an input prompt.
-			// An empty Enter must never be presented as a bad user selection.
-			continue
-		case "0", "q", "Q":
-			if !t.stopIfActive() {
-				continue
-			}
-			return 0
+		case "0", "b", "B":
+			return true
 		default:
-			t.print("Unknown option. Select 1-9 or 0 to exit.\n")
+			t.ui.Line(toneWarn, "Unknown option. Select 1-8, or 0 to go back.")
 		}
 	}
+}
+
+func (t *terminal) toggleTun(base string, readLine func() (string, bool)) {
+	t.mu.Lock()
+	exists := t.tun != nil
+	t.mu.Unlock()
+	if exists {
+		t.stopTunIfActive()
+		return
+	}
+	active := t.current()
+	if active == nil {
+		t.ui.Line(toneWarn, "Start and verify a single method (1-4) first.")
+		return
+	}
+	t.mu.Lock()
+	verified := false
+	for _, result := range t.assessments {
+		if result.Target == "YouTube" && result.Kind == "candidate" {
+			verified = true
+		}
+	}
+	t.mu.Unlock()
+	if !verified {
+		t.ui.Line(toneWarn, "YouTube has not been proven newly reachable through ktest. Refusing to change system routes.")
+		return
+	}
+	t.ui.Line(toneInfo, "Rechecking YouTube directly before TUN startup...")
+	directCtx, stopBaseline := context.WithTimeout(context.Background(), 9*time.Second)
+	recheck := quickcheck.RunDirect(directCtx, 4*time.Second)
+	stopBaseline()
+	for _, result := range recheck {
+		if result.Target == "YouTube" && result.Success {
+			verified = false
+		}
+	}
+	if !verified {
+		t.ui.Line(toneWarn, "YouTube now works without ktest. TUN would be an unverified benefit; refusing activation.")
+		return
+	}
+	t.ui.Line(toneWarn, "BETA: TCP-wide TUN, Administrator required; UDP except DNS is blocked.")
+	t.ui.Note("May disrupt Windows and other VPNs. Routes should restore when stopped.")
+	t.print("  Type YES to modify system-wide routes > ")
+	answer, ok := readLine()
+	if !ok || answer != "YES" {
+		t.ui.Line(toneInfo, "Cancelled.")
+		return
+	}
+	t.startTun(base, active.port)
 }
 
 func (t *terminal) stopIfActive() bool {

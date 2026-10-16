@@ -21,7 +21,7 @@ func TestMenuExitWithoutCore(t *testing.T) {
 
 func TestMenuSwitchErrorsDoNotPreventExit(t *testing.T) {
 	var out bytes.Buffer
-	if code := runInteractive(strings.NewReader("1\n3\n7\n0\n"), &out, t.TempDir()); code != 0 {
+	if code := runInteractive(strings.NewReader("3\n1\n7\n0\n0\n"), &out, t.TempDir()); code != 0 {
 		t.Fatal(code)
 	}
 	if !strings.Contains(out.String(), "missing ") {
