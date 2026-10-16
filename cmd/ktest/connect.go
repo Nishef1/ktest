@@ -65,6 +65,7 @@ func xrayLauncher(base, variant string, port int, out io.Writer) (launcher, erro
 // the product; every field is for experiments.
 type connectOptions struct {
 	base       string
+	mode       ConnectionMode
 	listen     string
 	strategies int
 	noXray     bool
@@ -90,7 +91,7 @@ type connectOptions struct {
 
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
-		base: base, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12,
+		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12,
 		stagger: 250 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
 		stopHint: "Press Ctrl+C to disconnect",
 	}
@@ -101,6 +102,7 @@ func runConnect(args []string) int {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	o := defaultConnectOptions(defaultBase())
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
+	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, vpn (all exit-only), tor (Tor-only)")
 	fs.StringVar(&o.listen, "listen", o.listen, "loopback SOCKS5 address for your applications")
 	fs.IntVar(&o.strategies, "strategies", o.strategies, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")
 	fs.BoolVar(&o.noXray, "no-xray", false, "do not run the two Xray profiles")
@@ -128,6 +130,16 @@ func runConnect(args []string) int {
 	host, _, err := net.SplitHostPort(o.listen)
 	if err != nil || (host != "localhost" && (net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback())) {
 		fmt.Fprintln(os.Stderr, "-listen must be a loopback host:port")
+		return 2
+	}
+	mode, modeErr := parseConnectionMode(string(o.mode))
+	if modeErr != nil {
+		fmt.Fprintln(os.Stderr, modeErr)
+		return 2
+	}
+	o.mode = mode
+	if o.mode == ModeWindscribe && o.tun {
+		fmt.Fprintln(os.Stderr, "Windscribe bootstrap cannot run with ktest -tun; stop ktest's whole-PC tunnel first")
 		return 2
 	}
 	if o.strategies < 0 || o.strategies > 12 {
@@ -192,7 +204,12 @@ func (s *siteEvents) print(e smartproxy.Event) {
 // connectSession runs until ctx ends. preflight may carry a Google DNS check
 // the caller already measured.
 func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.Result, t *term) int {
-	t.Heading("connect", "Races every method for each connection. No system proxy, DNS or route is changed.")
+	t.Heading("connect", "Routing mode: "+string(o.mode))
+	t.Note("%s", o.mode.message())
+	if o.mode == ModeWindscribe && o.tun {
+		t.Line(toneFail, "Windscribe bootstrap cannot share ktest's system-wide TUN; run without -tun")
+		return 2
+	}
 	aiRules, aiErr := smartproxy.NewAIDomainRules(o.aiExtra)
 	if aiErr != nil {
 		t.Line(toneFail, "%v", aiErr)
@@ -256,7 +273,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		c.launch = l
 		cores = append(cores, c)
 	}
-	if !o.noXray {
+	if !o.noXray && o.mode != ModeVPN && o.mode != ModeTor {
 		for _, x := range []struct {
 			variant string
 			port    int
@@ -265,7 +282,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			add("Xray fragment "+x.variant, x.port, true, func(w io.Writer) (launcher, error) { return xrayLauncher(o.base, x.variant, x.port, w) })
 		}
 	}
-	if o.strategies > 0 {
+	if o.strategies > 0 && o.mode != ModeVPN && o.mode != ModeTor {
 		bin := byeDPIBinary(o.base)
 		list, _, err := loadStrategies(o.base)
 		switch {
@@ -363,13 +380,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 3. Assemble the race. Initial order is the initial head start: the uncut
 	// baseline first, so unblocked sites never pay for a cut ClientHello.
 	var ups []smartproxy.Upstream
-	if !o.noDirect {
+	if !o.noDirect && o.mode != ModeVPN && o.mode != ModeTor {
 		ups = append(ups, smartproxy.PlainUpstreams()...)
 	}
 	for _, c := range up {
 		ups = append(ups, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port), LocalDNS: c.localDNS, SoftResolve: strings.HasPrefix(c.name, "Xray"), Rank: 2})
 	}
-	if !o.noSelf {
+	if !o.noSelf && o.mode != ModeVPN && o.mode != ModeTor {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
 	}
 	// An independent, already-running TCP exit (e.g. Tor, Psiphon or a
@@ -385,16 +402,19 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			return 2
 		}
 		ip, country, checked := probeForeignExit(ctx, o.exitSocks)
+		if o.mode == ModeTor && checked == nil {
+			checked = probeTorExit(ctx, o.exitSocks)
+		}
 		if checked == nil {
 			t.Note("External SOCKS exit verified outside Iran: %s (%s)", ip, country)
 		} else {
 			t.Note("External SOCKS exit is not permitted for protected AI sites: %v", checked)
 		}
 		ups = append(ups, smartproxy.Upstream{
-			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: true, Rank: 3,
+			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: o.mode != ModeVPN && o.mode != ModeTor, Rank: 3,
 		})
 	}
-	if len(ups) == 0 && !o.forceFront {
+	if len(ups) == 0 && o.mode != ModeVPN && o.mode != ModeTor && !o.forceFront {
 		t.Box("NOTHING TO RUN", toneFail, []string{"No path is available. Extract the complete portable ZIP (cores/ and profiles/)", "or run `ktest doctor`."})
 		return 1
 	}
@@ -408,8 +428,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 		},
 	}
-	if !o.aiDirect {
-		cfg.ExitOnly = aiRules.Match
+	o.mode.configure(&cfg, aiRules)
+	if o.mode == ModeBalanced && o.aiDirect {
+		cfg.ExitOnly = nil
 	}
 	logDNS := func(f string, a ...any) {
 		if o.verbose {
@@ -436,7 +457,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// Domain fronting is a takeover path: it needs the application to trust the
 	// ktest CA, so it is only added when the system says it does.
-	fronter, frontNote := newFronter(o, cfg.Resolve, t, logDNS)
+	var fronter *front.Fronter
+	frontNote := ""
+	if o.mode != ModeVPN && o.mode != ModeTor {
+		fronter, frontNote = newFronter(o, cfg.Resolve, t, logDNS)
+	}
 	if fronter != nil {
 		cfg.Upstreams = append(cfg.Upstreams, fronter.Upstream())
 	}
@@ -470,7 +495,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			defer stopHTTP()
 		}
 	}
-	warpNote, stopWarp := startWarp(ctx, o, proxy, &dns, t)
+	var warpNote string
+	var stopWarp func()
+	if o.mode == ModeTor {
+		warpNote, stopWarp = startTor(ctx, o, proxy, t)
+	} else {
+		warpNote, stopWarp = startWarp(ctx, o, proxy, &dns, t)
+	}
 	defer stopWarp()
 
 	// 4. Verify through the proxy, against the plain route.
@@ -519,12 +550,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if frontNote != "" {
 		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))
 	}
-	lines = append(lines, t.Bold("WARP    ")+"  "+t.Dim(warpNote))
-	if !o.aiDirect {
-		lines = append(lines, t.Bold("AI      ")+"  verified non-Iran exit only, session-pinned; otherwise BLOCKED (domain rules)")
-	} else {
-		lines = append(lines, t.Bold("AI      ")+"  direct access allowed (-ai-direct; real IP may be visible)")
-	}
+	lines = append(lines, t.Bold("Exit    ")+"  "+t.Dim(warpNote))
+	lines = append(lines, t.Bold("Mode    ")+"  "+t.Dim(o.mode.message()))
 	switch {
 	case bypassed > 0:
 		lines = append(lines, t.Bold("Result  ")+"  "+t.Green(fmt.Sprintf("%d site(s) blocked on this network are open through ktest", bypassed)))
