@@ -49,7 +49,8 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 		line = strings.TrimSpace(line)
 		low := strings.ToLower(line)
 		if strings.HasPrefix(low, "login state:") {
-			loggedIn = strings.Contains(low, "logged in")
+			status := strings.TrimSpace(strings.TrimPrefix(low, "login state:"))
+			loggedIn = status == "logged in"
 		}
 		if !strings.HasPrefix(low, "connect state:") {
 			continue
@@ -124,6 +125,21 @@ func (m *windscribeMonitor) State() windscribeState {
 
 func (m *windscribeMonitor) Connected() bool { return m != nil && m.State() == windscribeConnected }
 
+// waitDisconnected holds the bootstrap process inactive when ktest launches
+// during a live Windscribe VPN session. Only a confirmed disconnection permits
+// a fresh bootstrap; unknown states don't indicate an actual disconnect.
+func (m *windscribeMonitor) waitDisconnected(ctx context.Context) bool {
+	tick := time.NewTicker(500*time.Millisecond)
+	defer tick.Stop()
+	for {
+		if m.State() == windscribeDisconnected { return true }
+		select {
+		case <-ctx.Done(): return false
+		case <-tick.C:
+		}
+	}
+}
+
 func (m *windscribeMonitor) attach(p *smartproxy.Proxy) {
 	if m == nil { return }
 	m.mu.Lock()
@@ -190,6 +206,10 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 	}
 	m := &windscribeMonitor{cli: path, t: t, autoReconnect: o.windscribeReconnect}
 	m.refresh(ctx) // initial state before external tunnel scanning
+	if m.State() == windscribeUnknown {
+		t.Note("Windscribe CLI status not trusted yet; running bootstrap in manual fallback mode (no automatic reconnect)")
+		return nil
+	}
 	go func(){
 		ticker := time.NewTicker(3*time.Second)
 		defer ticker.Stop()
