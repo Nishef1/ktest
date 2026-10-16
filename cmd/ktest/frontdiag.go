@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,7 @@ func probeFronts(ctx context.Context) []frontCheck {
 	f := front.New(front.Config{Resolve: resolve, DialTimeout: 6 * time.Second})
 	sites := []struct{ site, path string }{
 		{"www.youtube.com", "/generate_204"},
+		{"redirector.googlevideo.com", "/generate_204"}, // video servers: their own addresses only
 		{"www.instagram.com", "/"},
 		{"www.reddit.com", "/"},
 		{"x.com", "/"},
@@ -136,4 +139,69 @@ func printECHDoH(ctx context.Context, u *term) {
 		return
 	}
 	u.Line(toneOK, "%-26s www.youtube.com -> %s  %s", "Encrypted DNS over ECH", ips[0], shortDur(time.Since(began)))
+}
+
+// frontHosts collects, per host, how fronted connections ended, so that a front
+// that connects and verifies but serves nothing shows up by name.
+var frontHosts = &hostAggregate{rows: map[string]*hostRow{}}
+
+type hostRow struct {
+	conns, silent int
+	up, down      int64
+	front         string
+	lastWarn      time.Time
+}
+
+type hostAggregate struct {
+	mu   sync.Mutex
+	rows map[string]*hostRow
+}
+
+// add records one finished connection and reports whether a warning for the
+// host should be printed now (silent connection, at most once per 30 seconds).
+func (h *hostAggregate) add(si front.SessionInfo) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r := h.rows[si.Host]
+	if r == nil {
+		r = &hostRow{}
+		h.rows[si.Host] = r
+	}
+	r.conns++
+	r.up += si.Up
+	r.down += si.Down
+	r.front = si.Front
+	if si.Up > 0 && si.Down == 0 {
+		r.silent++
+		if time.Since(r.lastWarn) > 30*time.Second {
+			r.lastWarn = time.Now()
+			return true
+		}
+	}
+	return false
+}
+
+// problems lists hosts that had silent connections, worst first.
+func (h *hostAggregate) problems() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	type kv struct {
+		host string
+		r    *hostRow
+	}
+	var bad []kv
+	for host, r := range h.rows {
+		if r.silent > 0 {
+			bad = append(bad, kv{host, r})
+		}
+	}
+	sort.Slice(bad, func(i, j int) bool { return bad[i].r.silent > bad[j].r.silent })
+	var out []string
+	for i, b := range bad {
+		if i == 6 {
+			break
+		}
+		out = append(out, fmt.Sprintf("fronted but silent: %s  %d of %d connections (via %s)", b.host, b.r.silent, b.r.conns, b.r.front))
+	}
+	return out
 }

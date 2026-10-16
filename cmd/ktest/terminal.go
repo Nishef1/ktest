@@ -271,7 +271,7 @@ func (t *terminal) mainMenu() {
 	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("1")), u.Bold("Connect          "), u.Dim("try every method, keep what works (recommended)"))
 	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("2")), u.Bold("Connect, whole PC"), u.Dim("the same, for every application (Windows, Administrator)"))
 	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("3")), u.Bold("Diagnose         "), u.Dim("what is this network doing? DNS, SNI, packet cutting"))
-	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("4")), u.Bold("Setup            "), u.Dim("certificate for domain fronting, WARP exit for Telegram"))
+	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("4")), u.Bold("Setup            "), u.Dim("certificate for domain fronting, exit paths (WARP, Psiphon) for Telegram"))
 	u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("5")), u.Bold("Advanced         "), u.Dim("single methods, CDN scan"))
 	if t.current() != nil {
 		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("6")), u.Bold("Stop             "), u.Dim("stop the running method"))

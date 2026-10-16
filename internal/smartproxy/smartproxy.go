@@ -305,7 +305,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 		host = p.nameFor(host, flight)
 		win, err = p.race(ctx, host, port, flight)
 	} else {
-		win.conn, err = p.plain(ctx, host, port, flight)
+		win, err = p.plain(ctx, host, port, flight)
 	}
 	if err != nil {
 		p.logf("%s:%s no path answered: %v", host, port, err)
@@ -577,12 +577,19 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 	return winner{conn: conn, first: header}, nil
 }
 
-// plain handles non-TLS traffic: no replay is possible and nothing cuts a
-// protocol it cannot parse, so only the direct route and exit paths are tried,
-// in learned order, falling through when the connection cannot be made. The
-// outcome is remembered per destination, so a destination blocked by address
-// (Telegram's) goes to the exit first the next time instead of timing out again.
-func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (net.Conn, error) {
+// plain handles non-TLS traffic: nothing cuts a protocol it cannot parse, so
+// only the direct route and exit paths are tried, in learned order. The outcome
+// is remembered per destination, so a destination that is blocked goes to the
+// exit first the next time.
+//
+// A connection that opens is not proof that the route works: a filter may let
+// the TCP handshake through and drop the protocol's first bytes (Telegram's
+// MTProto is dropped this way). When the application speaks first to a
+// destination named by address, so that no TLS is there to check, the first
+// flight is therefore offered to the direct route and the exits and the first
+// to answer is kept. Only the application's own first flight is repeated, to
+// machines it was already sending it to.
+func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (winner, error) {
 	all := p.order(host)
 	var cands []*upstreamState
 	for _, u := range all {
@@ -597,6 +604,9 @@ func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (ne
 			}
 		}
 	}
+	if len(cands) > 1 && len(flight) > 0 && net.ParseIP(host) != nil && p.rememberedName(host) == "" {
+		return p.racePlain(ctx, cands, host, port, flight)
+	}
 	var lastErr error
 	for _, u := range cands {
 		began := time.Now()
@@ -609,19 +619,124 @@ func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (ne
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, ctx.Err()
+				return winner{}, ctx.Err()
 			}
 			p.record(u, host, false, time.Since(began))
 			lastErr = fmt.Errorf("%s: %w", u.Name, err)
 			continue
 		}
 		p.record(u, host, true, time.Since(began))
-		return conn, nil
+		return winner{conn: conn, path: u.Name}, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no upstream")
 	}
-	return nil, lastErr
+	return winner{}, lastErr
+}
+
+// racePlain offers the first flight to every candidate, the best first and the
+// others after a short delay or as soon as it fails, and keeps the first one
+// that sends bytes back.
+func (p *Proxy) racePlain(parent context.Context, cands []*upstreamState, host, port string, flight []byte) (winner, error) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	type res struct {
+		u     *upstreamState
+		conn  net.Conn
+		first []byte
+		took  time.Duration
+		err   error
+	}
+	results := make(chan res, len(cands))
+	next, pending := 0, 0
+	launch := func(n int) {
+		for ; n != 0 && next < len(cands); n-- {
+			u := cands[next]
+			next++
+			pending++
+			go func() {
+				began := time.Now()
+				conn, err := p.dial(ctx, u.Upstream, host, port)
+				if err != nil {
+					results <- res{u: u, err: err, took: time.Since(began)}
+					return
+				}
+				stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+				_ = conn.SetDeadline(time.Now().Add(p.cfg.FirstByteTimeout))
+				if _, err := conn.Write(flight); err != nil {
+					stop()
+					_ = conn.Close()
+					results <- res{u: u, err: err, took: time.Since(began)}
+					return
+				}
+				buf := make([]byte, 4096)
+				n, err := conn.Read(buf)
+				if n == 0 {
+					stop()
+					_ = conn.Close()
+					if err == nil {
+						err = errors.New("no answer")
+					}
+					results <- res{u: u, err: fmt.Errorf("no answer: %w", err), took: time.Since(began)}
+					return
+				}
+				if !stop() {
+					_ = conn.Close()
+					results <- res{u: u, err: context.Canceled}
+					return
+				}
+				_ = conn.SetDeadline(time.Time{})
+				results <- res{u: u, conn: conn, first: buf[:n], took: time.Since(began)}
+			}()
+		}
+	}
+	launch(1)
+	timer := time.NewTimer(600 * time.Millisecond)
+	defer timer.Stop()
+	var lastErr error
+	for pending > 0 || next < len(cands) {
+		select {
+		case <-parent.Done():
+			go func(left int) {
+				for ; left > 0; left-- {
+					if r := <-results; r.conn != nil {
+						_ = r.conn.Close()
+					}
+				}
+			}(pending)
+			return winner{}, parent.Err()
+		case <-timer.C:
+			launch(1)
+			if next < len(cands) {
+				timer.Reset(600 * time.Millisecond)
+			}
+		case r := <-results:
+			pending--
+			if r.err != nil {
+				if parent.Err() == nil {
+					p.record(r.u, host, false, r.took)
+				}
+				lastErr = fmt.Errorf("%s: %w", r.u.Name, r.err)
+				launch(1) // the one in front failed: the next goes now
+				continue
+			}
+			p.record(r.u, host, true, r.took)
+			p.logf("%s:%s answered through %s in %dms", host, port, r.u.Name, r.took.Milliseconds())
+			cancel()
+			go func(left int) {
+				for ; left > 0; left-- {
+					if x := <-results; x.conn != nil {
+						_ = x.conn.Close()
+					}
+				}
+			}(pending)
+			return winner{conn: r.conn, first: r.first, path: r.u.Name}, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no upstream")
+	}
+	return winner{}, lastErr
 }
 
 // Add joins an upstream to the race while the proxy runs, for paths that take

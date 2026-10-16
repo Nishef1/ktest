@@ -493,3 +493,40 @@ func TestLatePathIsALastResortNotACompetitor(t *testing.T) {
 		t.Fatalf("last resort took %v, used %d times", took, last.Load())
 	}
 }
+
+func TestNonTLSFirstFlightIsOfferedToTheExitWhenTheDirectRouteOpensButStaysSilent(t *testing.T) {
+	// A filter that lets the TCP handshake through and drops the protocol's
+	// first bytes: the connection opens and nothing ever comes back.
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { silent.Close() })
+	go func() {
+		for {
+			c, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			go func() { io.Copy(io.Discard, c) }()
+		}
+	}()
+	dest := destination(t)
+	var hits atomic.Int32
+	p, addr := startProxy(t, []Upstream{{Name: "plain", Rank: 0}})
+	if err := p.Add(Upstream{Name: "exit", Addr: fakeSocks(t, dest, true, &hits), Rank: 5, Exit: true}); err != nil {
+		t.Fatal(err)
+	}
+	host, port, _ := net.SplitHostPort(silent.Addr().String())
+	for i := 0; i < 2; i++ {
+		if got := viaProxy(t, addr, host, port, []byte("mtproto-init")); !bytes.Equal(got, serverHello) {
+			t.Fatalf("attempt %d: got %x", i, got)
+		}
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("the exit carried %d of 2 connections", hits.Load())
+	}
+	if w := p.Winners()[host]; w != "exit" {
+		t.Fatalf("remembered %q for %s, want exit", w, host)
+	}
+}

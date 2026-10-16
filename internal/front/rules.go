@@ -58,6 +58,10 @@ type Family struct {
 	// the family's edge serves every site of the family, so a stale hint still
 	// works as long as it is an edge address at all.
 	Hints []string
+	// NoStandIn are domains that only their own servers can serve: a front that
+	// dials another machine (the www.google.com stand-in) would connect, verify
+	// and then answer 404, which looks like success and hides the real failure.
+	NoStandIn []string
 }
 
 // Match reports whether host belongs to the family.
@@ -77,6 +81,16 @@ func (f *Family) Match(host string) bool {
 func (f *Family) h1Only(host string) bool {
 	host = normalize(host)
 	for _, d := range f.H1Only {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *Family) noStandIn(host string) bool {
+	host = normalize(host)
+	for _, d := range f.NoStandIn {
 		if host == d || strings.HasSuffix(host, "."+d) {
 			return true
 		}
@@ -112,6 +126,8 @@ func DefaultFamilies() []Family {
 			Verify: []string{"www.google.com", "www.youtube.com", "www.googlevideo.com", "www.gstatic.com", "www.googleapis.com", "dns.google"},
 			// The video servers were kept on HTTP/1.1 in the reference project.
 			H1Only: []string{"googlevideo.com"},
+			// Video comes from cache servers, not from the front ends.
+			NoStandIn: []string{"googlevideo.com"},
 		},
 		{
 			Name: "meta",

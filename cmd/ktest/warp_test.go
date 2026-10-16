@@ -31,8 +31,11 @@ func zipOf(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyTheCore(t *testing.T) {
-	data := zipOf(t, map[string]string{filepath.Base(aetherBinary("x")): "core", "pt/lyrebird.exe": "other", "../evil": "no"})
+func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
+	data := zipOf(t, map[string]string{
+		filepath.Base(aetherBinary("x")): "core", "pt/psiphon-tunnel-core.exe": "psiphon", "pt/lyrebird.exe": "lyre",
+		"pt/other.exe": "no", "../evil": "no", "run-aether.bat": "no",
+	})
 	sum := sha256.Sum256(data)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write(data) }))
 	defer srv.Close()
@@ -50,9 +53,18 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyTheCore(t *testing.T) {
 	if b, _ := os.ReadFile(aetherBinary(base)); string(b) != "core" {
 		t.Fatalf("core content %q", b)
 	}
-	entries, _ := os.ReadDir(filepath.Join(base, "cores"))
-	if len(entries) != 1 {
-		t.Fatalf("only the core may be extracted, got %d files", len(entries))
+	if b, _ := os.ReadFile(filepath.Join(base, "cores", "pt", "psiphon-tunnel-core.exe")); string(b) != "psiphon" {
+		t.Fatalf("psiphon core %q", b)
+	}
+	var names []string
+	filepath.WalkDir(filepath.Join(base, "cores"), func(p string, d os.DirEntry, _ error) error {
+		if !d.IsDir() {
+			names = append(names, d.Name())
+		}
+		return nil
+	})
+	if len(names) != 3 {
+		t.Fatalf("only the three known files may be extracted, got %v", names)
 	}
 
 	// An archive without the core is refused even with a matching checksum.
@@ -65,33 +77,83 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyTheCore(t *testing.T) {
 	}
 }
 
-func TestAetherRunArgsNeverPromptAndStayOnLoopback(t *testing.T) {
-	t.Setenv("KTEST_WARP_DIR", t.TempDir())
-	for i, p := range aetherProfiles("CFG", "1.2.3.4") {
-		args := strings.Join(aetherRunArgs(i, p, aetherBasePort+i), " ")
-		// Protocol, scan mode, IP version and the reconnect question each have a flag.
-		for _, want := range []string{"--masque", "--h2", "--turbo", "-4", "--quick-reconnect", "--masque-config"} {
-			if !strings.Contains(args, want) {
-				t.Errorf("profile %d lacks %s: %s", i, want, args)
-			}
-		}
-		if !strings.Contains(args, "--bind 127.0.0.1:") {
-			t.Errorf("profile %d must bind to loopback: %s", i, args)
+func TestDefaultProfilesCoverTheTransportsAndSkipWhatNeedsECH(t *testing.T) {
+	all, err := parseAetherProfiles(defaultAetherProfiles, "CFG", "1.2.3.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := ""
+	for _, p := range all {
+		joined += strings.Join(p.Args, " ") + "\n"
+	}
+	// HTTP/2 and HTTP/3 MASQUE, WireGuard, IPv6 and Psiphon: networks differ in
+	// which of them gets through.
+	for _, want := range []string{"--h2", "--h3", "--wg", "-6", "--psiphon-only", "--ech CFG", "--enroll-address 1.2.3.4", "--api-fragment"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("default profiles lack %q", want)
 		}
 	}
-	echo := false
-	for _, p := range aetherProfiles("CFG", "1.2.3.4") {
-		joined := strings.Join(p.Args, " ")
-		if strings.Contains(joined, "--ech CFG") && strings.Contains(joined, "--no-fragment") && strings.Contains(joined, "--enroll-address 1.2.3.4") {
-			echo = true
+	// Without a fetched configuration only the lines that do not need it remain,
+	// and Psiphon, which needs neither the key nor WARP, is among them.
+	few, err := parseAetherProfiles(defaultAetherProfiles, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	psiphon := 0
+	for _, p := range few {
+		if strings.Contains(strings.Join(p.Args, " "), "{ECH") {
+			t.Fatalf("placeholder left in %v", p)
+		}
+		if p.psiphon() {
+			psiphon++
 		}
 	}
-	if !echo {
-		t.Fatal("an ECH profile with a fetched configuration and a known address is required for firewalls that close fragmentation and filter the API")
+	if len(few) >= len(all) || psiphon == 0 {
+		t.Fatalf("%d of %d profiles remain without ECH, %d Psiphon", len(few), len(all), psiphon)
+	}
+	for _, bad := range []string{"no separator", "x | --bind 0.0.0.0:1", "x | --masque\nx | --wg"} {
+		if _, err := parseAetherProfiles(bad, "", ""); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
 	}
 }
 
-func TestWarpStateAndRegisterOrder(t *testing.T) {
+func TestAetherRunArgsNeverPromptStayOnLoopbackAndDoNotRepeatFlags(t *testing.T) {
+	t.Setenv("KTEST_WARP_DIR", t.TempDir())
+	p := aetherProfile{Label: "x", Args: []string{"--masque", "--h2", "--scan", "thorough", "-6", "--startup-secs", "100"}}
+	args := strings.Join(aetherRunArgs(0, p, 10830), " ")
+	for _, want := range []string{"--quick-reconnect", "--bind 127.0.0.1:10830", "--masque-config", "--wg-config"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("lacks %s: %s", want, args)
+		}
+	}
+	for _, dup := range []string{"--turbo", "-4", "--startup-secs 45"} {
+		if strings.Contains(args, dup) {
+			t.Errorf("repeats a flag the profile sets (%s): %s", dup, args)
+		}
+	}
+	plain := strings.Join(aetherRunArgs(1, aetherProfile{Label: "y", Args: []string{"--masque"}}, 10831), " ")
+	for _, want := range []string{"-4", "--turbo", "--startup-secs 45"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("default %s missing: %s", want, plain)
+		}
+	}
+	ps := strings.Join(aetherRunArgs(2, aetherProfile{Label: "p", Args: []string{"--psiphon-only"}}, 10832), " ")
+	if strings.Contains(ps, "--turbo") || strings.Contains(ps, "--quick-reconnect") || !strings.Contains(ps, "--bind 127.0.0.1:10832") {
+		t.Errorf("psiphon args: %s", ps)
+	}
+}
+
+func TestLastGoodProfileGoesFirstAndWarpStateAndRegisterOrder(t *testing.T) {
+	ps := []aetherProfile{{Label: "a"}, {Label: "b"}, {Label: "c"}}
+	got := lastGoodFirst(ps, "c")
+	if got[0].Label != "c" || got[1].Label != "a" || got[2].Label != "b" || len(got) != 3 {
+		t.Fatalf("%v", got)
+	}
+	if got := lastGoodFirst(ps, "gone"); got[0].Label != "a" || len(got) != 3 {
+		t.Fatalf("%v", got)
+	}
+
 	t.Setenv("KTEST_WARP_DIR", t.TempDir())
 	base := t.TempDir()
 	if warpState(base) != "no core" {

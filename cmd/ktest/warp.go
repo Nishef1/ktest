@@ -22,7 +22,6 @@ import (
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/front"
-	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
 // The WARP exit is the one path that does not depend on what a site's CDN
@@ -59,9 +58,17 @@ func aetherBinary(base string) string {
 	return filepath.Join(base, "cores", name)
 }
 
+// psiphonCore is the helper Aether runs for its Psiphon profiles; it must
+// sit in a pt folder next to aether.exe.
+func psiphonCore(base string) string {
+	return filepath.Join(base, "cores", "pt", "psiphon-tunnel-core.exe")
+}
+
 func identityFile() string { return filepath.Join(warpDir(), "masque.toml") }
 
-// warpState reports what is missing: "ready", "no core" or "no identity".
+// warpState reports "no core" (the exit paths are off), "no identity" (the core
+// is there, no WARP identity yet; Psiphon needs none and the others register on
+// demand) or "ready".
 func warpState(base string) string {
 	switch {
 	case !fileOK(aetherBinary(base)):
@@ -70,42 +77,6 @@ func warpState(base string) string {
 		return "no identity"
 	}
 	return "ready"
-}
-
-// aetherProfile is one way of running the tunnel. Which one gets through
-// depends on the firewall: the channel reports that Iran's firewall resets a
-// ClientHello whose SNI is cloudflareclient.com unless it is fragmented, and
-// that fragmentation is closed on the MCI-type firewall, where ECH works.
-type aetherProfile struct {
-	Label string
-	Args  []string
-}
-
-// aetherProfiles lists the profiles. ech is the ECH configuration to hand to
-// Aether (base64) and ip an edge address that was reached, so that neither a DNS
-// lookup nor the WARP API's own name is needed; without them Aether is left to
-// look the key up by DNS, which is what a filtering network denies it.
-func aetherProfiles(ech, ip string) []aetherProfile {
-	echo := []string{"--masque", "--h2", "--no-fragment", "--ech", "auto"}
-	if ech != "" && ip != "" {
-		echo = []string{"--masque", "--h2", "--no-fragment", "--ech", ech, "--enroll-address", ip}
-	}
-	return []aetherProfile{
-		{"WARP exit, MASQUE over HTTP/2 with ECH", echo},
-		{"WARP exit, MASQUE over HTTP/2, fragmented", []string{"--masque", "--h2", "--api-fragment"}},
-	}
-}
-
-// aetherRunArgs is the full command line of profile i on a local port. Every
-// prompt Aether would ask has a flag here, so it never waits for input.
-func aetherRunArgs(i int, p aetherProfile, port int) []string {
-	args := append([]string(nil), p.Args...)
-	return append(args,
-		"-4", "--turbo", "--quick-reconnect", "--startup-secs", "60", "--log-level", "warn",
-		"--bind", fmt.Sprintf("127.0.0.1:%d", port),
-		"--config", filepath.Join(warpDir(), fmt.Sprintf("run-%d.toml", i+1)),
-		"--masque-config", identityFile(),
-	)
 }
 
 // aetherLauncher runs Aether until ctx ends.
@@ -151,34 +122,55 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	if err != nil {
 		return err
 	}
-	want := filepath.Base(aetherBinary(base))
+	// Only these files are used; anything else in the archive, and any path
+	// that is not exactly one of them, is ignored.
+	core := filepath.Base(aetherBinary(base))
+	want := map[string]string{
+		core:                         aetherBinary(base),
+		"pt/psiphon-tunnel-core.exe": filepath.Join(base, "cores", "pt", "psiphon-tunnel-core.exe"),
+		"pt/lyrebird.exe":            filepath.Join(base, "cores", "pt", "lyrebird.exe"),
+	}
+	found := false
 	for _, f := range zr.File {
-		if f.Name != want {
+		dest, ok := want[f.Name]
+		if !ok {
 			continue
 		}
-		rc, err := f.Open()
-		if err != nil {
+		if err := extractZipFile(f, dest); err != nil {
 			return err
 		}
-		defer rc.Close()
-		if err := os.MkdirAll(filepath.Join(base, "cores"), 0o755); err != nil {
-			return err
+		if f.Name == core {
+			found = true
 		}
-		tmp := aetherBinary(base) + ".part"
-		out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, rc); err != nil {
-			out.Close()
-			return err
-		}
-		if err := out.Close(); err != nil {
-			return err
-		}
-		return os.Rename(tmp, aetherBinary(base))
 	}
-	return fmt.Errorf("the archive does not contain %s", want)
+	if !found {
+		return fmt.Errorf("the archive does not contain %s", core)
+	}
+	return nil
+}
+
+func extractZipFile(f *zip.File, dest string) error {
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	tmp := dest + ".part"
+	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, rc); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dest)
 }
 
 // registerAttempts are tried in turn. The route to the WARP API (the key) is
@@ -236,7 +228,7 @@ func registerWarp(ctx context.Context, u *term, bin string) error {
 
 // warpEnable makes the WARP exit available: the core, then the identity.
 func warpEnable(ctx context.Context, u *term, base string) int {
-	if !fileOK(aetherBinary(base)) {
+	if !fileOK(aetherBinary(base)) || !fileOK(psiphonCore(base)) {
 		step := u.Progress("Downloading Aether "+aetherVersion, 1)
 		if err := fetchAether(ctx, aetherZipURL, aetherZipSHA, base); err != nil {
 			step.Finish(toneFail, err.Error())
@@ -247,12 +239,11 @@ func warpEnable(ctx context.Context, u *term, base string) int {
 	}
 	if !fileOK(identityFile()) {
 		if err := registerWarp(ctx, u, aetherBinary(base)); err != nil {
-			u.Line(toneFail, "%v", err)
-			u.Note("Start Connect in another window first (the registration then goes through ktest), or register with another VPN on once; the identity is only needed once.")
-			return 1
+			u.Line(toneWarn, "%v", err)
+			u.Note("No WARP identity yet. That is not fatal: the Psiphon profile needs none, and the WARP profiles try to register themselves with the ECH route each time.")
 		}
 	}
-	u.Line(toneOK, "The WARP exit is enabled. Connect starts it in the background; Telegram and sites blocked by address open through it.")
+	u.Line(toneOK, "The exit paths are enabled. Connect searches for the one that works on this network in the background; Telegram and sites blocked by address open through it.")
 	return 0
 }
 
@@ -270,23 +261,24 @@ func warpDisable(u *term) int {
 }
 
 func warpStatus(u *term, base string) {
-	u.Heading("WARP exit", "Leaves from a Cloudflare address, so destinations blocked by address (Telegram) open too.")
+	u.Heading("exit paths", "WARP and Psiphon leave from another address, so what is blocked by address (Telegram) opens too.")
 	switch s := warpState(base); s {
 	case "ready":
-		u.Line(toneOK, "Enabled: Connect starts it in the background and adds it to the race.")
-		u.Note("identity %s", identityFile())
+		u.Line(toneOK, "Enabled: Connect searches for the profiles that work here, in the background.")
+		u.Note("WARP identity %s", identityFile())
 	case "no identity":
-		u.Line(toneWarn, "The core is present but no WARP identity is registered: `ktest warp -enable`.")
+		u.Line(toneOK, "Enabled (no WARP identity yet): Psiphon needs none, the WARP profiles register themselves or `ktest warp -enable` tries again.")
 	default:
-		u.Line(toneInfo, "Off. `ktest warp -enable` downloads Aether %s (about 24 MB, pinned SHA-256) and registers a free anonymous WARP identity on this PC.", aetherVersion)
+		u.Line(toneInfo, "Off. `ktest warp -enable` downloads Aether %s (about 24 MB, pinned SHA-256) and tries to register a free anonymous WARP identity on this PC.", aetherVersion)
 	}
-	u.Note("Traffic that uses it goes through Cloudflare. It is the last resort: it joins a connection only after the other paths failed or took more than 3 seconds.")
+	u.Note("Traffic that uses them goes through Cloudflare or Psiphon. They are the last resort: they join a connection only after the other paths failed or took more than 3 seconds.")
+	u.Note("Edit profiles/aether-profiles.txt to change what is tried; logs are in %s.", warpDir())
 }
 
 const warpUsage = `usage: ktest warp [-enable | -disable] [-base DIR]
 
-  (no flag)   show the state of the WARP exit
-  -enable     download the Aether core if needed and register a WARP identity
+  (no flag)   show the state of the exit paths
+  -enable     download the Aether core if needed and try to register a WARP identity
   -disable    delete the WARP identity
 `
 
@@ -311,85 +303,6 @@ func runWarp(args []string) int {
 	return 0
 }
 
-// startWarp runs the WARP profiles in the background and adds each to the race
-// as soon as its port opens, so Connect is not held up by the scan Aether does
-// first. It returns the note for the result box and the function that stops
-// the processes.
-func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, dns *dnscheck.Result, t *term) (string, func()) {
-	if o.noWarp {
-		return "off (-no-warp)", func() {}
-	}
-	switch warpState(o.base) {
-	case "no core", "no identity":
-		return "off - optional: `ktest warp -enable` lets Telegram and sites blocked by address open", func() {}
-	}
-	var started []*runningCore
-	var files []*os.File
-	ech, echIP := "", ""
-	if cfg, addr, err := front.FetchCloudflareECH(ctx); err == nil {
-		ech, echIP = base64.StdEncoding.EncodeToString(cfg), addr
-	}
-	for i, p := range aetherProfiles(ech, echIP) {
-		port := aetherBasePort + i
-		if err := portFree(port); err != nil {
-			t.Note("skipped %s: %v", p.Label, err)
-			continue
-		}
-		logs := &tailBuffer{max: 8192}
-		logPath := filepath.Join(warpDir(), fmt.Sprintf("aether-%d.log", i+1))
-		if lf, err := os.Create(logPath); err == nil {
-			files = append(files, lf)
-			logs.tee = lf
-		}
-		if o.verbose {
-			if logs.tee != nil {
-				logs.tee = io.MultiWriter(logs.tee, os.Stderr)
-			} else {
-				logs.tee = os.Stderr
-			}
-		}
-		cctx, cancel := context.WithCancel(ctx)
-		rc := &runningCore{cancel: cancel, done: make(chan struct{})}
-		l := aetherLauncher(aetherBinary(o.base), aetherRunArgs(i, p, port), logs)
-		go func() {
-			rc.err = l(cctx, dns)
-			close(rc.done)
-		}()
-		started = append(started, rc)
-		go func(p aetherProfile, port int, logs *tailBuffer, logPath string) {
-			if !waitForPort(ctx, rc.done, port, 90*time.Second) {
-				if ctx.Err() == nil {
-					t.Line(toneWarn, "%s did not come up", p.Label)
-					if rc.err != nil {
-						t.Note("%v", rc.err)
-					}
-					for _, l := range logs.lastLines(3) {
-						t.Note("%s", wrapOne(l, 150))
-					}
-					t.Note("full log: %s", logPath)
-				}
-				return
-			}
-			err := proxy.Add(smartproxy.Upstream{Name: p.Label, Addr: fmt.Sprintf("127.0.0.1:%d", port), Rank: 5, Exit: true, Late: true})
-			if err == nil && ctx.Err() == nil {
-				t.Line(toneOK, "%s is ready: Telegram and sites blocked by address can open now", p.Label)
-			}
-		}(p, port, logs, logPath)
-	}
-	stop := func() {
-		for _, rc := range started {
-			rc.cancel()
-		}
-		for _, rc := range started {
-			rc.stop()
-		}
-		for _, f := range files {
-			_ = f.Close()
-		}
-	}
-	return "starting in the background (a scan comes first, up to a minute)", stop
-}
-
 // setup is the menu screen for the two optional pieces: the certificate that
 // enables domain fronting and the WARP exit.
 func (t *terminal) setup(base string, readLine func() (string, bool)) {
@@ -401,7 +314,7 @@ func (t *terminal) setup(base string, readLine func() (string, bool)) {
 		}[certState()]
 		warp := map[string]string{"ready": "enabled", "no core": "off", "no identity": "core present, not registered"}[warpState(base)]
 		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("1")), u.Bold("Certificate"), u.Dim(cert+" (domain fronting: YouTube, X, Instagram, Reddit ...)"))
-		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("2")), u.Bold("WARP exit "), u.Dim(warp+" (Telegram and sites blocked by address)"))
+		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("2")), u.Bold("Exit paths"), u.Dim(warp+" (WARP, Psiphon: Telegram and sites blocked by address)"))
 		u.Printf("  %s  %s\n\n  Select > ", u.Bold(u.Cyan("0")), u.Bold("Back"))
 		line, ok := readLine()
 		if !ok {

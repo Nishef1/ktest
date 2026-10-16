@@ -43,7 +43,7 @@ var ErrPoisoned = errors.New("system DNS answered with private or reserved addre
 // address of www.google.com (which filters leave alone) is a usable stand-in.
 // Endpoints that do not actually serve the name simply lose the race.
 var googleFamily = []string{
-	"youtube.com", "youtu.be", "ytimg.com", "ggpht.com", "googlevideo.com",
+	"youtube.com", "youtu.be", "ytimg.com", "ggpht.com",
 	"googleusercontent.com", "gstatic.com", "googleapis.com", "google.com",
 	"youtube-nocookie.com", "withgoogle.com",
 }

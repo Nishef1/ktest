@@ -57,6 +57,8 @@ type Config struct {
 	HedgeDelay  time.Duration
 	// OnTrouble is called once when applications keep refusing the CA.
 	OnTrouble func(msg string)
+	// OnSession is called when a fronted connection ends, with what it carried.
+	OnSession func(SessionInfo)
 	// dial is replaceable in tests.
 	dial func(ctx context.Context, addr string) (net.Conn, error)
 }
@@ -266,6 +268,9 @@ func (f *Fronter) connect(ctx context.Context, fams []*Family, name string, prot
 	var routes []route
 	for _, fam := range fams {
 		for _, fr := range f.ordered(fam) {
+			if fr.Dial != "" && fam.noStandIn(name) {
+				continue
+			}
 			routes = append(routes, route{fam, fr})
 		}
 	}
@@ -524,6 +529,17 @@ type session struct {
 	fr     Front
 }
 
+// SessionInfo describes one finished fronted connection. A connection that
+// carried requests upward but received nothing back is the sign of a front that
+// connects and verifies but does not serve the site.
+type SessionInfo struct {
+	Host  string
+	Front string
+	Up    int64
+	Down  int64
+	Took  time.Duration
+}
+
 func (s *session) Close() { _ = s.up.Close() }
 
 // replayConn presents bytes that were already read from the application ahead
@@ -564,7 +580,11 @@ func (s *session) Serve(client net.Conn, flight []byte) error {
 	}
 	_ = client.SetDeadline(time.Time{})
 	s.f.acceptedOne()
-	relay(srv, s.up)
+	began := time.Now()
+	up, down := relay(srv, s.up)
+	if s.f.cfg.OnSession != nil {
+		s.f.cfg.OnSession(SessionInfo{Host: s.name, Front: s.fr.String(), Up: up, Down: down, Took: time.Since(began)})
+	}
 	return nil
 }
 
@@ -590,21 +610,23 @@ func clientAborted(err error) bool {
 type closeWriter interface{ CloseWrite() error }
 
 // relay copies both directions and half-closes each when its source ends.
-func relay(a, b io.ReadWriteCloser) {
+// It returns the bytes that went to a (down, from b) and to b (up, from a).
+func relay(a, b io.ReadWriteCloser) (up, down int64) {
 	done := make(chan struct{}, 2)
-	cp := func(dst io.WriteCloser, src io.Reader) {
-		_, _ = io.Copy(dst, src)
+	cp := func(dst io.WriteCloser, src io.Reader, n *int64) {
+		*n, _ = io.Copy(dst, src)
 		if cw, ok := dst.(closeWriter); ok {
 			_ = cw.CloseWrite()
 		}
 		done <- struct{}{}
 	}
-	go cp(a, b)
-	go cp(b, a)
+	go cp(a, b, &down)
+	go cp(b, a, &up)
 	<-done
 	<-done
 	_ = a.Close()
 	_ = b.Close()
+	return up, down
 }
 
 // ProbeResult is one front tested against one family without any certificate
@@ -626,7 +648,13 @@ func (f *Fronter) Probe(ctx context.Context, site, path string) []ProbeResult {
 	if fam == nil {
 		return nil
 	}
-	fronts := append([]Front(nil), fam.Fronts...)
+	var fronts []Front
+	for _, fr := range fam.Fronts {
+		if fr.Dial != "" && fam.noStandIn(site) {
+			continue
+		}
+		fronts = append(fronts, fr)
+	}
 	out := make([]ProbeResult, len(fronts))
 	var wg sync.WaitGroup
 	for i, fr := range fronts {

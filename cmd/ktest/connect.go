@@ -570,6 +570,9 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 		t.Printf("    %s %-44s %s\n", t.Bar(float64(s.Wins)/float64(maxWins), 12, toneInfo), s.Name, t.Dim(fmt.Sprintf("%d %s · %d ms avg", s.Wins, plural(s.Wins, "win", "wins"), s.AvgMS)))
 	}
 	if fronter != nil {
+		for _, l := range frontHosts.problems() {
+			t.Println("    " + t.Dim(l))
+		}
 		acc, ref := fronter.Stats()
 		if acc+ref > 0 || fronter.Disabled() != "" {
 			t.Printf("    %s\n", t.Dim(fmt.Sprintf("domain fronting: %d accepted, %d refused by applications", acc, ref)))
@@ -658,6 +661,11 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 	f := front.New(front.Config{
 		CA: ca, Families: fams, Resolve: resolve, Logf: logf,
 		OnTrouble: func(msg string) { t.Line(toneWarn, "%s", msg) },
+		OnSession: func(si front.SessionInfo) {
+			if frontHosts.add(si) {
+				t.Line(toneWarn, "%-26s %s", si.Host, t.Yellow("fronted connection received nothing back")+t.Dim("  via "+si.Front))
+			}
+		},
 	})
 	if missing := caMissing(ca); len(missing) > 0 {
 		return f, "on, but the CA predates " + strings.Join(firstN(missing, 3), ", ") + " - run `ktest ca -renew` to cover them"
