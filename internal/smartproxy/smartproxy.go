@@ -161,10 +161,10 @@ type memo struct {
 }
 
 type Proxy struct {
-	cfg Config
-	mu  sync.Mutex
-	ups []*upstreamState
-	mem map[string]memo
+	cfg      Config
+	mu       sync.Mutex
+	ups      []*upstreamState
+	mem      map[string]memo
 	aiPinned string // first working AI exit stays selected until this session ends
 }
 
