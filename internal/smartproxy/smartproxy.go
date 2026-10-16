@@ -349,7 +349,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 // is what lets an application that ignores "proxy DNS" still work.
 func (p *Proxy) nameFor(host string, flight []byte) string {
 	ip := net.ParseIP(host)
-	if ip == nil || !Bogus(ip) {
+	if ip == nil {
 		return host
 	}
 	if sni, _, ok := ParseClientHello(flight); ok && sni != "" && net.ParseIP(sni) == nil {
@@ -357,11 +357,10 @@ func (p *Proxy) nameFor(host string, flight []byte) string {
 			p.logf("%s uses protected AI SNI %s; enforcing foreign exit", host, sni)
 			return sni
 		}
-		if !Bogus(ip) {
-			return host
+		if Bogus(ip) {
+			p.logf("%s is a block-page address; using the SNI %s instead", host, sni)
+			return sni
 		}
-		p.logf("%s is a block-page address; using the SNI %s instead", host, sni)
-		return sni
 	}
 	return host
 }
