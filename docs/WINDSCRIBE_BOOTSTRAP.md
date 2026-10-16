@@ -2,6 +2,25 @@
 
 The goal is **not** to replace Windscribe. It is to give the installed Windscribe desktop client an initial TCP path through ktest's existing censorship-circumvention methods. Once Windscribe establishes its own tunnel, Windscribe is the primary VPN and supplies the external IP.
 
+## 2026-10-16: Why HTTP CONNECT 200 did not connect the VPN
+
+The OpenVPN/TCP logs for Istanbul (ports 443 and 80), another Istanbul server, and Berlin (443 and 8080) all reach `HTTP/1.1 200 Connection Established`, then remain in `WAIT` and reset. The log also shows that ordinary WireGuard ignores LAN HTTP Proxy, so those WireGuard attempts did not test the proxy at all.
+
+**Root cause in ktest:** the previous SOCKS proxy returned CONNECT success before choosing a real outbound. For opaque, non-TLS OpenVPN traffic its plain/direct path could open a TCP socket to a filtered VPN address, return HTTP 200, then never receive a valid server handshake. A working web front for YouTube does not provide a TCP relay to arbitrary VPN server addresses. When Psiphon and WARP fail to start, there is no verified foreign egress to carry that server-side OpenVPN TCP stream.
+
+**Fix on main:** in `-mode windscribe` only, the HTTP listener `127.0.0.1:10801` now uses a strict verified-exit dialer. If no verified, non-Iran/non-Russia foreign SOCKS egress is ready, it returns `HTTP 502` instead of `200`. If a verified exit connects to the requested remote IP:port, `200` is returned. The first verified exit is pinned per ktest session. This only verifies a TCP tunnel, not OpenVPN authentication or VPN data flow.
+
+**Actionable test:**
+
+1. Leave ktest running in Windscribe mode, and keep its whole-PC TUN disabled.
+2. First inspect the ktest terminal: wait for a message confirming a *verified foreign exit*, e.g. Psiphon. `Exit: searching` does not count.
+3. While no exit has come up, a Windscribe OpenVPN/TCP CONNECT should fail with 502 instead of displaying a misleading success. This is expected. If it does not, capture the current WinDscribe and `ktest -v` logs.
+4. When an actual verified exit appears, select **OpenVPN TCP, 443**, then retry. Test `WStunnel, 443` independently, but do not assume Windscribe's LAN-proxy setting is honored for every protocol without confirming it in the logs.
+5. DNS-over-8.8.8.8 is blocked on this ISP. Windscribe's DNS policy is set to Google; after the TCP path actually works, inspect whether DNS within Windscribe still needs adjustment. The October 16 TCP logs already show IP literals and therefore do not identify DNS poisoning as the immediate OpenVPN handshake failure.
+6. Check the Windscribe firewall settings, especially Manual, Automatic and Always On. Keep the desired leak protection; changing it must not be presented as a permanent fix for blocked VPN servers.
+
+The `tried=0, actual=88` warning occurs after OpenVPN has started writing. Its meaning must not be inferred as a `ktest` HTTP-proxy bug based only on that log line; TCP reset and absence of remote OpenVPN response are the primary observations.
+
 ## Important diagnosis from the October 16 Windscribe log
 
 - An OpenVPN TCP CONNECT to the HTTP proxy received `HTTP/1.1 200 Connection Established`, **but OpenVPN did not complete a tunnel**; it waited and received a connection reset. This means the proxy listener worked, not that the Windscribe server IP was reachable for a VPN handshake.
