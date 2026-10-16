@@ -143,6 +143,10 @@ func runConnect(args []string) int {
 		return 2
 	}
 	o.mode = mode
+	if o.mode == ModeWindscribe && o.exitSocks != "" {
+		fmt.Fprintln(os.Stderr, "Windscribe mode forbids -exit-socks: no foreign proxy/VPN exit may be used")
+		return 2
+	}
 	if o.mode == ModeWindscribe && o.tun {
 		fmt.Fprintln(os.Stderr, "Windscribe bootstrap cannot run with ktest -tun; stop ktest's whole-PC tunnel first")
 		return 2
@@ -211,6 +215,15 @@ func (s *siteEvents) print(e smartproxy.Event) {
 func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.Result, t *term) int {
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("%s", o.mode.message())
+	if o.mode == ModeWindscribe {
+		if o.exitSocks != "" {
+			t.Line(toneFail, "Windscribe local-only mode forbids external SOCKS exits (-exit-socks)")
+			return 2
+		}
+		// Mode policy is non-negotiable. Never load Aether, Psiphon, WARP,
+		// Tor or foreign SOCKS, even when the user enabled them in Setup.
+		o.noWarp = true
+	}
 	if o.mode == ModeWindscribe && o.tun {
 		t.Line(toneFail, "Windscribe bootstrap cannot share ktest's system-wide TUN; run without -tun")
 		return 2
@@ -294,7 +307,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		c.launch = l
 		cores = append(cores, c)
 	}
-	if !o.noXray && o.mode != ModeVPN && o.mode != ModeTor {
+	if !o.noXray && o.mode != ModeVPN && o.mode != ModeTor && o.mode != ModeWindscribe {
+		// Imported Xray profiles may contain foreign outbound proxies. Do
+		// not trust a filename containing "fragment" as identity-preserving.
 		for _, x := range []struct {
 			variant string
 			port    int
@@ -401,11 +416,15 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 3. Assemble the race. Initial order is the initial head start: the uncut
 	// baseline first, so unblocked sites never pay for a cut ClientHello.
 	var ups []smartproxy.Upstream
-	if !o.noDirect && o.mode != ModeVPN && o.mode != ModeTor {
+	if !o.noDirect && o.mode != ModeVPN && o.mode != ModeTor && o.mode != ModeWindscribe {
 		ups = append(ups, smartproxy.PlainUpstreams()...)
 	}
 	for _, c := range up {
-		ups = append(ups, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port), LocalDNS: c.localDNS, SoftResolve: strings.HasPrefix(c.name, "Xray"), Rank: 2})
+		ups = append(ups, smartproxy.Upstream{
+			Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port),
+			LocalDNS: c.localDNS, SoftResolve: strings.HasPrefix(c.name, "Xray"),
+			Rank: 2, LocalBypass: o.mode == ModeWindscribe && strings.HasPrefix(c.name, "ByeDPI "),
+		})
 	}
 	if !o.noSelf && o.mode != ModeVPN && o.mode != ModeTor {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
@@ -450,6 +469,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		},
 	}
 	o.mode.configure(&cfg, aiRules)
+	if o.mode == ModeWindscribe {
+		cfg.RejectExits = true // guard both initial and dynamically added routes
+	}
 	if o.mode == ModeBalanced && o.aiDirect {
 		cfg.ExitOnly = nil
 	}
@@ -480,7 +502,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// ktest CA, so it is only added when the system says it does.
 	var fronter *front.Fronter
 	frontNote := ""
-	if o.mode != ModeVPN && o.mode != ModeTor {
+	if o.mode != ModeVPN && o.mode != ModeTor && o.mode != ModeWindscribe {
+		// A CDN front can act as an egress/HTTP takeover; its public-IP
+		// semantics are not guaranteed. Local-only means no CDN relay.
 		fronter, frontNote = newFronter(o, cfg.Resolve, t, logDNS)
 	}
 	if fronter != nil {
@@ -511,7 +535,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if !o.noHTTP {
 		var stopHTTP func()
 		if o.mode == ModeWindscribe {
-			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String(), proxy.DialVerifiedExit)
+			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String(), proxy.DialWindscribeLocal)
 		} else {
 			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String())
 		}
@@ -525,6 +549,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	var stopWarp func()
 	if o.mode == ModeTor {
 		warpNote, stopWarp = startTor(ctx, o, proxy, t)
+	} else if o.mode == ModeWindscribe {
+		warpNote = "disabled: local anti-DPI only; Psiphon/Aether/WARP/Tor and foreign exits prohibited"
+		stopWarp = func() {}
 	} else {
 		warpNote, stopWarp = startWarp(ctx, o, proxy, &dns, t, monitor)
 	}
@@ -576,19 +603,19 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 5. The result.
 	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
 	if o.mode == ModeWindscribe {
-		title = "WEBSITES READY; VPN EXIT NOT YET VERIFIED"
-		if proxy.HasVerifiedExit() {
-			title = "VPN BOOTSTRAP EXIT READY (VPN HANDSHAKE UNTESTED)"
+		title = "LOCAL ANTI-DPI READY; WINDSCRIBE VPN NOT VERIFIED"
+		if !proxy.HasLocalBypass() {
+			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}
 	}
 	lines := []string{
 		t.Bold("Proxy   ") + "  socks5://" + l.Addr().String() + t.Dim("   (turn on \"proxy DNS\" / remote DNS in the app)"),
-		t.Bold("Paths   ") + fmt.Sprintf("  %d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)) + frontSuffix(fronter),
+		t.Bold("Paths   ") + fmt.Sprintf("  %d configured: local anti-DPI only in Windscribe mode", len(ups)) + frontSuffix(fronter),
 	}
 	if httpAddr != "" {
 		lines = append(lines, t.Bold("HTTP    ")+"  http://"+httpAddr+t.Dim("   (Windscribe Proxy Settings; TCP only)"))
 		if o.mode == ModeWindscribe {
-			lines = append(lines, t.Bold("VPN TCP ")+"  "+t.Yellow("HTTP CONNECT is blocked with 502 until a checked foreign exit works. HTTP 200 never proves OpenVPN handshake."))
+			lines = append(lines, t.Bold("VPN TCP ")+"  "+t.Yellow("Only locally run ByeDPI paths; 502 if unavailable. HTTP 200 does NOT prove VPN handshake."))
 		}
 	}
 	if frontNote != "" {
