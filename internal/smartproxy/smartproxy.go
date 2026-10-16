@@ -103,9 +103,6 @@ type Proxy struct {
 	mu  sync.Mutex
 	ups []*upstreamState
 	mem map[string]memo
-	// dohFails counts consecutive resolver failures; dohOffUntil pauses it.
-	dohFails    int
-	dohOffUntil time.Time
 }
 
 func New(cfg Config) (*Proxy, error) {
@@ -397,8 +394,18 @@ func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Co
 		network, resolver = "tcp6", p.cfg.Resolve6
 	}
 	if (u.LocalDNS || u.Addr == "") && resolver != nil && net.ParseIP(host) == nil {
-		if ip, ok := p.resolve(dctx, resolver, host); ok {
+		ip, err := p.resolve(dctx, resolver, host)
+		switch {
+		case err == nil:
 			host = ip
+		case errors.Is(err, ErrPoisoned):
+			// Connecting to a block-page address would only look like a
+			// network failure; say what it is and let other paths try.
+			return nil, err
+		case ctx.Err() != nil:
+			return nil, ctx.Err()
+		default:
+			p.logf("%s: no trusted address (%v); using the name as given", host, err)
 		}
 	}
 	if u.Addr == "" {
@@ -601,39 +608,17 @@ func DialVia(ctx context.Context, socksAddr, host, port string, timeout time.Dur
 	return conn, nil
 }
 
-// resolve asks the encrypted resolver, but never lets it make things worse.
-// DoH/DoT is itself filtered on many networks, so the wait is short and after
-// repeated failures the resolver is skipped for a while (system DNS is used
-// instead), then probed again.
-func (p *Proxy) resolve(ctx context.Context, resolver Resolver, host string) (string, bool) {
-	p.mu.Lock()
-	if time.Now().Before(p.dohOffUntil) {
-		p.mu.Unlock()
-		return "", false
-	}
-	p.mu.Unlock()
-	rctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+// resolve asks the trusted resolver. It waits a bounded time; the lookup keeps
+// running detached and fills the cache for later attempts.
+func (p *Proxy) resolve(ctx context.Context, resolver Resolver, host string) (string, error) {
+	rctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	ips, err := resolver(rctx, host)
 	if err == nil && len(ips) > 0 {
-		p.mu.Lock()
-		p.dohFails = 0
-		p.mu.Unlock()
-		return ips[0], true
+		return ips[0], nil
 	}
-	if ctx.Err() != nil {
-		return "", false // the race ended; not the resolver's fault
+	if err == nil {
+		err = errors.New("no address")
 	}
-	p.mu.Lock()
-	p.dohFails++
-	off := p.dohFails >= 3 && !time.Now().Before(p.dohOffUntil)
-	if off {
-		p.dohOffUntil = time.Now().Add(5 * time.Minute)
-		p.dohFails = 0
-	}
-	p.mu.Unlock()
-	if off {
-		p.logf("encrypted DNS keeps failing here (%v); using the system resolver for 5 minutes", err)
-	}
-	return "", false
+	return "", err
 }

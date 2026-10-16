@@ -1,20 +1,26 @@
-# ByeDPI strategies tried by `ktest auto` (method "s"), one per line:
+# ByeDPI strategies tried by `ktest auto` (method "s") and run side by side by
+# `ktest smart`, one per line:
 #   label | ciadpi arguments
-# Lines starting with # are ignored. ktest adds "-i 127.0.0.1 -p 10809" itself,
+# Lines starting with # are ignored. ktest adds "-i 127.0.0.1 -p <port>" itself,
 # so -i/--ip/-p/--port/-D/--daemon/-w/--pidfile are rejected.
 # Copy this file to profiles/byedpi-strategies.txt (`ktest strategies -write`)
 # to edit it. Option meanings: https://github.com/hufrea/byedpi
 #
-# These are candidates taken from the ByeDPI documentation and community
-# practice, not results measured on any particular ISP. ktest only keeps one
-# that passes real HTTPS checks on the network it runs on.
+# The order matters: the list is deliberately mixed across mechanisms (plain
+# first, fake packets, reordering, out-of-band, record slicing), because some
+# networks punish splitting a ClientHello at all (even for sites that are not
+# blocked) and then only the non-splitting mechanisms can work.
+#
+# These are candidates from the ByeDPI documentation and community practice,
+# not results measured on any particular ISP. ktest only keeps what passes real
+# HTTPS checks on the network it runs on.
 
-adaptive TLS record slicing | --auto=torst --timeout 3 --tlsrec 3+s
-TLS record slicing | --tlsrec 3+s
+adaptive (plain first, slices only after a reset) | --auto=torst --timeout 3 --tlsrec 3+s
+disorder + fake packet | --disorder 1 --fake -1
+fake packet, low TTL | --fake -1 --ttl 8
 split + disorder (Windows default) | --split 1+s --disorder 3+s
-disorder + fake | --disorder 1 --fake -1
-disorder, adaptive, TLS record | --disorder 1 --auto=torst --tlsrec 1+s
-fake, low TTL | --fake -1 --ttl 8
 out-of-band byte | --oob 3+s
 disordered out-of-band | --disoob 3 --disorder 7
+TLS record slicing | --tlsrec 3+s
+disorder, adaptive, TLS record | --disorder 1 --auto=torst --tlsrec 1+s
 double split | --split 3 --split 7

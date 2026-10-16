@@ -65,7 +65,7 @@ type smartOptions struct {
 	noXray     bool
 	noSelf     bool
 	noDoH      bool
-	direct     bool
+	noDirect   bool
 	stagger    time.Duration
 	firstByte  time.Duration
 	ready      time.Duration
@@ -75,7 +75,7 @@ type smartOptions struct {
 
 func defaultSmartOptions(base string) smartOptions {
 	return smartOptions{
-		base: base, listen: smartListenDefault, strategies: 3,
+		base: base, listen: smartListenDefault, strategies: 12,
 		stagger: 300 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
 	}
 }
@@ -87,11 +87,11 @@ func runSmart(args []string) int {
 	o := defaultSmartOptions(defaultBase())
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
 	fs.StringVar(&o.listen, "listen", o.listen, "loopback SOCKS5 address for your applications")
-	fs.IntVar(&o.strategies, "strategies", o.strategies, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")
+	fs.IntVar(&o.strategies, "strategies", o.strategies, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run side by side, in file order (0 = none)")
 	fs.BoolVar(&o.noXray, "no-xray", false, "do not run the two Xray profiles")
 	fs.BoolVar(&o.noSelf, "no-self", false, "do not add ktest's built-in ClientHello cutting paths")
 	fs.BoolVar(&o.noDoH, "no-doh", false, "let ByeDPI paths use the system DNS (poisoned on many filtered networks)")
-	fs.BoolVar(&o.direct, "direct", false, "also race the ordinary system route (uses local DNS)")
+	fs.BoolVar(&o.noDirect, "no-direct", false, "do not race the plain, uncut connection (the baseline for sites that are not blocked)")
 	fs.DurationVar(&o.stagger, "stagger", o.stagger, "head start of the best-known path before the next one joins")
 	fs.DurationVar(&o.firstByte, "first-byte", o.firstByte, "how long a path may take to answer the TLS ClientHello")
 	fs.DurationVar(&o.ready, "ready", coreReadyLimit, "how long to wait for each core's local port")
@@ -105,8 +105,8 @@ func runSmart(args []string) int {
 		fmt.Fprintln(os.Stderr, "-listen must be a loopback host:port")
 		return 2
 	}
-	if o.strategies < 0 || o.strategies > 8 {
-		fmt.Fprintln(os.Stderr, "-strategies must be 0..8")
+	if o.strategies < 0 || o.strategies > 12 {
+		fmt.Fprintln(os.Stderr, "-strategies must be 0..12")
 		return 2
 	}
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -230,42 +230,46 @@ func smartSession(ctx context.Context, o smartOptions, dnsResult *dnscheck.Resul
 	}
 	sort.Slice(up, func(i, j int) bool { return up[i].port < up[j].port })
 
+	// Initial order = initial head start: the uncut baseline first, so sites
+	// that are not blocked never pay for a cut ClientHello; learned wins reorder
+	// this per site afterwards.
 	var ups []smartproxy.Upstream
+	if !o.noDirect {
+		ups = append(ups, smartproxy.PlainUpstreams()...)
+	}
 	for _, c := range up {
 		ups = append(ups, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port), LocalDNS: c.localDNS})
 	}
 	if !o.noSelf {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
 	}
-	if o.direct {
-		ups = append(ups, smartproxy.Upstream{Name: "direct (system route)", LocalDNS: true})
-	}
 	cfg := smartproxy.Config{Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte}
+	// Name resolution is the first thing a censor poisons, so it is never left
+	// to the system resolver alone: system answers are screened for private
+	// block-page addresses, then encrypted DNS is asked by IP literal (no DNS
+	// needed to find the resolver) over every working path at once, then the
+	// Google front-end address stands in for Google-owned names.
+	var dohA, dohAAAA smartproxy.Resolver
 	if !o.noDoH {
-		// Encrypted DNS for upstreams that would otherwise use the system
-		// resolver. The DoH requests travel over a name-resolving upstream
-		// (Xray) when one is up, else over the system route.
 		var carriers []string
 		for _, u := range ups {
-			if !u.LocalDNS {
+			if u.Addr != "" {
 				carriers = append(carriers, u.Addr)
 			}
 		}
 		dial := func(ctx context.Context, _, addr string) (net.Conn, error) {
-			h, p, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			for _, carrier := range carriers {
-				if c, err := smartproxy.DialVia(ctx, carrier, h, p, 6*time.Second); err == nil {
-					return c, nil
-				}
-			}
-			return (&net.Dialer{Timeout: 6 * time.Second}).DialContext(ctx, "tcp", addr)
+			return raceDial(ctx, carriers, addr)
 		}
-		cfg.Resolve = smartproxy.NewDoH(smartproxy.DefaultDoH, dial, nil)
-		cfg.Resolve6 = smartproxy.NewDoHType(smartproxy.DefaultDoH, dial, nil, "AAAA")
+		dohA = smartproxy.NewDoH(smartproxy.DefaultDoH, dial, nil)
+		dohAAAA = smartproxy.NewDoHType(smartproxy.DefaultDoH, dial, nil, "AAAA")
 	}
+	logDNS := func(f string, a ...any) {
+		if o.verbose {
+			fmt.Fprintf(out, "  dns: "+f+"\n", a...)
+		}
+	}
+	cfg.Resolve = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohA, Logf: logDNS})
+	cfg.Resolve6 = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohAAAA, IPv6: true, Logf: logDNS})
 	if o.verbose {
 		cfg.Logf = func(f string, a ...any) { fmt.Fprintf(out, "  "+f+"\n", a...) }
 	}
@@ -327,4 +331,50 @@ func selfTest(ctx context.Context, port int, skip bool) []quickcheck.Result {
 		return nil
 	}
 	return quickcheck.Run(ctx, port, 10*time.Second)
+}
+
+// raceDial connects to host:port (an IP literal, so no DNS) through every
+// SOCKS carrier and directly at the same time, and keeps the first connection.
+func raceDial(ctx context.Context, carriers []string, addr string) (net.Conn, error) {
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type res struct {
+		c   net.Conn
+		err error
+	}
+	n := len(carriers) + 1
+	ch := make(chan res, n)
+	for _, carrier := range carriers {
+		go func(carrier string) {
+			c, err := smartproxy.DialVia(rctx, carrier, h, p, 5*time.Second)
+			ch <- res{c, err}
+		}(carrier)
+	}
+	go func() {
+		c, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(rctx, "tcp", addr)
+		ch <- res{c, err}
+	}()
+	var winner net.Conn
+	var last error
+	for i := 0; i < n; i++ {
+		r := <-ch
+		if r.err != nil {
+			last = r.err
+			continue
+		}
+		if winner == nil {
+			winner = r.c
+			cancel()
+			continue
+		}
+		_ = r.c.Close()
+	}
+	if winner == nil {
+		return nil, last
+	}
+	return winner, nil
 }

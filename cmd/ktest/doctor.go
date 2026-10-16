@@ -36,8 +36,9 @@ func fileOK(path string) bool {
 func runDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	base := fs.String("base", defaultBase(), "portable folder holding cores/ and profiles/")
+	noNet := fs.Bool("no-net", false, "skip the network characterization (DNS poisoning, encrypted DNS, ClientHello shapes)")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: ktest doctor [-base DIR]")
+		fmt.Fprintln(os.Stderr, "usage: ktest doctor [-base DIR] [-no-net]")
 		return 2
 	}
 	ctx := context.Background()
@@ -149,6 +150,13 @@ func runDoctor(args []string) int {
 	}
 	if open == len(direct) && open > 0 {
 		d.line("INFO", "interpretation", "every target already works directly, so ktest can only report BASELINE. If another VPN is connected, disconnect it to test a bypass; otherwise this network is not blocking them now.")
+	}
+
+	if !*noNet {
+		fmt.Println("\nNetwork characterization (no proxy, certificate-verified handshakes only):")
+		npctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+		networkProbe(npctx, os.Stdout, d.line)
+		cancel()
 	}
 
 	if d.failed {

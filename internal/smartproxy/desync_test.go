@@ -2,10 +2,8 @@ package smartproxy
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -107,24 +105,4 @@ func (c *firstWriteConn) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return c.Conn.Write(p)
-}
-
-func TestDoHBreakerStopsWaitingOnAFilteredResolver(t *testing.T) {
-	calls := 0
-	failing := func(ctx context.Context, host string) ([]string, error) {
-		calls++
-		return nil, errors.New("filtered")
-	}
-	p, err := New(Config{Upstreams: []Upstream{{Name: "x", Addr: "127.0.0.1:1"}}, Resolve: failing})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 10; i++ {
-		if _, ok := p.resolve(context.Background(), failing, "youtube.com"); ok {
-			t.Fatal("failed lookup reported success")
-		}
-	}
-	if calls != 3 {
-		t.Fatalf("resolver called %d times; should stop after 3 consecutive failures", calls)
-	}
 }

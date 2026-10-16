@@ -194,3 +194,10 @@ func DesyncUpstreams() []Upstream {
 	}
 	return out
 }
+
+// PlainUpstreams is the baseline: an ordinary connection with the ClientHello
+// sent untouched. Some networks punish any cut ClientHello, even for sites
+// that are not blocked, so the uncut path must always take part in the race.
+func PlainUpstreams() []Upstream {
+	return []Upstream{{Name: "plain: no cutting", LocalDNS: true}}
+}

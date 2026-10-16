@@ -22,17 +22,28 @@ type Resolver func(ctx context.Context, host string) ([]string, error)
 // working upstream path instead of the (possibly filtered) system route.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// DoHEndpoint is a JSON DNS-over-HTTPS service (RFC 8484 JSON, as served by
-// Google and Cloudflare).
+// DoHEndpoint is a JSON DNS-over-HTTPS service (as served by Google and
+// Cloudflare). Addr, when set, is the IP:port to connect to, so the lookup does
+// not itself need DNS (the resolver's own name is often poisoned or filtered);
+// ServerName is then the certificate name to verify.
 type DoHEndpoint struct {
-	URL    string // e.g. https://dns.google/resolve
-	Accept string // optional Accept header
+	URL        string // e.g. https://dns.google/resolve
+	Accept     string // optional Accept header
+	Addr       string // optional IP:port to dial instead of resolving the URL host
+	ServerName string // certificate name when Addr is used (default: URL host)
 }
 
-// DefaultDoH are two independent public resolvers.
+// DefaultDoH lists two independent public resolvers, each reachable by several
+// IP literals so that no step depends on the system resolver. Cloudflare's
+// 104.16.248.249 / 104.16.249.249 sit inside the CDN ranges that are usually
+// reachable even when 1.1.1.1 and 8.8.8.8 are not.
 var DefaultDoH = []DoHEndpoint{
+	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "104.16.248.249:443", ServerName: "cloudflare-dns.com"},
+	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "104.16.249.249:443", ServerName: "cloudflare-dns.com"},
+	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "1.1.1.1:443", ServerName: "cloudflare-dns.com"},
+	{URL: "https://dns.google/resolve", Addr: "8.8.8.8:443", ServerName: "dns.google"},
+	{URL: "https://dns.google/resolve", Addr: "8.8.4.4:443", ServerName: "dns.google"},
 	{URL: "https://dns.google/resolve"},
-	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json"},
 }
 
 type dohAnswer struct {
@@ -44,30 +55,109 @@ type dohAnswer struct {
 	} `json:"Answer"`
 }
 
-// NewDoH returns a caching resolver. Certificates are always verified. Names
-// that are already IP literals are returned as they are.
-func NewDoH(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool) Resolver {
-	return NewDoHType(endpoints, dial, roots, "A")
-}
+// lookupFunc resolves one host and says how long the answer may be cached.
+type lookupFunc func(ctx context.Context, host string) ([]string, time.Duration, error)
 
-// NewDoHType is NewDoH for a record type: "A" (IPv4) or "AAAA" (IPv6).
-func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qtype string) Resolver {
-	transport := &http.Transport{
-		DialContext:         dial,
-		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
-		ForceAttemptHTTP2:   true,
-		TLSHandshakeTimeout: 6 * time.Second,
-		DisableKeepAlives:   true,
+// cachedResolver adds, around a lookup: IP-literal passthrough, a TTL cache,
+// de-duplication of concurrent lookups for one host, and detachment from the
+// caller's context. The last one matters: a race that is already won cancels
+// its losers, and a cancelled lookup would never fill the cache.
+func cachedResolver(lookup lookupFunc, budget time.Duration) Resolver {
+	type result struct {
+		ips []string
+		err error
 	}
-	client := &http.Client{Transport: transport, Timeout: 8 * time.Second}
 	type entry struct {
 		ips     []string
 		expires time.Time
 	}
 	var mu sync.Mutex
 	cache := map[string]entry{}
+	inflight := map[string][]chan result{}
 
-	query := func(ctx context.Context, ep DoHEndpoint, host, qtype string) ([]string, int, error) {
+	run := func(host string) ([]string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		defer cancel()
+		ips, ttl, err := lookup(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		if ttl < 30*time.Second {
+			ttl = 30 * time.Second
+		}
+		mu.Lock()
+		cache[host] = entry{ips: ips, expires: time.Now().Add(ttl)}
+		mu.Unlock()
+		return ips, nil
+	}
+	return func(ctx context.Context, host string) ([]string, error) {
+		if net.ParseIP(host) != nil {
+			return []string{host}, nil
+		}
+		mu.Lock()
+		if e, ok := cache[host]; ok && time.Now().Before(e.expires) {
+			mu.Unlock()
+			return e.ips, nil
+		}
+		wait := make(chan result, 1)
+		waiters, running := inflight[host]
+		inflight[host] = append(waiters, wait)
+		mu.Unlock()
+		if !running {
+			go func() {
+				ips, err := run(host)
+				mu.Lock()
+				done := inflight[host]
+				delete(inflight, host)
+				mu.Unlock()
+				for _, w := range done {
+					w <- result{ips, err}
+				}
+			}()
+		}
+		select {
+		case r := <-wait:
+			return r.ips, r.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// NewDoH returns a caching resolver for A records. Certificates are always
+// verified. Names that are already IP literals are returned as they are.
+func NewDoH(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool) Resolver {
+	return NewDoHType(endpoints, dial, roots, "A")
+}
+
+// NewDoHType is NewDoH for a record type: "A" (IPv4) or "AAAA" (IPv6). All
+// endpoints are asked at once and the first usable answer wins, so a filtered
+// provider or IP costs nothing while another one answers.
+func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qtype string) Resolver {
+	clients := make([]*http.Client, len(endpoints))
+	for i, ep := range endpoints {
+		ep := ep
+		cfg := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: ep.ServerName}
+		transport := &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if ep.Addr != "" {
+					addr = ep.Addr
+				}
+				return dial(ctx, network, addr)
+			},
+			TLSClientConfig:     cfg,
+			ForceAttemptHTTP2:   true,
+			TLSHandshakeTimeout: 6 * time.Second,
+			DisableKeepAlives:   true,
+		}
+		clients[i] = &http.Client{Transport: transport, Timeout: 8 * time.Second}
+	}
+	want := 1
+	if qtype == "AAAA" {
+		want = 28
+	}
+	query := func(ctx context.Context, i int, host string) ([]string, time.Duration, error) {
+		ep := endpoints[i]
 		u, err := url.Parse(ep.URL)
 		if err != nil {
 			return nil, 0, err
@@ -85,7 +175,7 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 			accept = "application/dns-json"
 		}
 		req.Header.Set("Accept", accept)
-		resp, err := client.Do(req)
+		resp, err := clients[i].Do(req)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -97,89 +187,53 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&ans); err != nil {
 			return nil, 0, err
 		}
-		want := 1
-		if qtype == "AAAA" {
-			want = 28
-		}
 		var out []string
 		ttl := 300
 		for _, a := range ans.Answer {
-			if a.Type == want && net.ParseIP(a.Data) != nil {
+			ip := net.ParseIP(a.Data)
+			if a.Type == want && ip != nil && !Bogus(ip) {
 				out = append(out, a.Data)
 				if a.TTL > 0 && a.TTL < ttl {
 					ttl = a.TTL
 				}
 			}
 		}
-		return out, ttl, nil
+		if len(out) == 0 {
+			return nil, 0, fmt.Errorf("%s: no usable %s record from %s", host, qtype, u.Host)
+		}
+		return out, time.Duration(ttl) * time.Second, nil
 	}
-
-	type result struct {
-		ips []string
-		err error
-	}
-	var inflight = map[string][]chan result{}
-
-	resolve := func(host string) ([]string, error) {
-		// Detached from any caller: a race that is already won must not cancel
-		// the lookup, otherwise the answer is never cached for later attempts.
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	lookup := func(ctx context.Context, host string) ([]string, time.Duration, error) {
+		if len(endpoints) == 0 {
+			return nil, 0, errors.New("no DoH endpoint configured")
+		}
+		rctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		var lastErr error
-		for _, ep := range endpoints {
-			ips, ttl, err := query(ctx, ep, host, qtype)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if len(ips) == 0 {
-				lastErr = fmt.Errorf("%s: no %s record", host, qtype)
-				continue
-			}
-			if ttl < 30 {
-				ttl = 30
-			}
-			mu.Lock()
-			cache[host] = entry{ips: ips, expires: time.Now().Add(time.Duration(ttl) * time.Second)}
-			mu.Unlock()
-			return ips, nil
+		type res struct {
+			ips []string
+			ttl time.Duration
+			err error
 		}
-		if lastErr == nil {
-			lastErr = errors.New("no DoH endpoint configured")
+		ch := make(chan res, len(endpoints))
+		for i := range endpoints {
+			go func(i int) {
+				ips, ttl, err := query(rctx, i, host)
+				ch <- res{ips, ttl, err}
+			}(i)
 		}
-		return nil, lastErr
-	}
-
-	return func(ctx context.Context, host string) ([]string, error) {
-		if net.ParseIP(host) != nil {
-			return []string{host}, nil
-		}
-		mu.Lock()
-		if e, ok := cache[host]; ok && time.Now().Before(e.expires) {
-			mu.Unlock()
-			return e.ips, nil
-		}
-		wait := make(chan result, 1)
-		waiters, running := inflight[host]
-		inflight[host] = append(waiters, wait)
-		mu.Unlock()
-		if !running {
-			go func() {
-				ips, err := resolve(host)
-				mu.Lock()
-				done := inflight[host]
-				delete(inflight, host)
-				mu.Unlock()
-				for _, w := range done {
-					w <- result{ips, err}
+		var last error
+		for range endpoints {
+			select {
+			case r := <-ch:
+				if r.err == nil {
+					return r.ips, r.ttl, nil
 				}
-			}()
+				last = r.err
+			case <-ctx.Done():
+				return nil, 0, ctx.Err()
+			}
 		}
-		select {
-		case r := <-wait:
-			return r.ips, r.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+		return nil, 0, last
 	}
+	return cachedResolver(lookup, 12*time.Second)
 }
