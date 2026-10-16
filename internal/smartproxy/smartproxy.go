@@ -169,6 +169,7 @@ type Proxy struct {
 	ups      []*upstreamState
 	mem      map[string]memo
 	aiPinned string // first working AI exit stays selected until this session ends
+	bootstrapPinned string // Windscribe TCP bootstrap uses one verified foreign upstream per session
 }
 
 func New(cfg Config) (*Proxy, error) {
@@ -289,6 +290,68 @@ func (p *Proxy) record(u *upstreamState, host string, ok bool, took time.Duratio
 		u.ewmaMS = 0.8*u.ewmaMS + 0.2*ms
 	}
 	p.mem[siteKey(host)] = memo{name: u.Name, at: time.Now()}
+}
+
+// HasVerifiedExit reports whether a foreign TCP exit has been verified.
+// Opening an arbitrary local SOCKS port or reaching a web front is not enough.
+func (p *Proxy) HasVerifiedExit() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, u := range p.ups {
+		if u.Exit && u.AIEligible {
+			return true
+		}
+	}
+	return false
+}
+
+// DialVerifiedExit is for raw TCP carried by Windscribe's local HTTP proxy.
+// It must NOT report CONNECT success until the foreign SOCKS upstream has
+// acknowledged a connection to the actual Windscribe destination. No direct,
+// ByeDPI, Xray-fragment or fronting fallback is allowed for this transport.
+// After the first real TCP connection, the chosen exit stays pinned for this
+// session to prevent accidental mid-session route/identity switching.
+func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Conn, error) {
+	p.mu.Lock()
+	pinned := p.bootstrapPinned
+	p.mu.Unlock()
+	candidates := p.order(host)
+	var lastErr error
+	any := false
+	for _, u := range candidates {
+		if !u.Exit || !u.AIEligible || (pinned != "" && u.Name != pinned) {
+			continue
+		}
+		any = true
+		began := time.Now()
+		conn, err := p.dial(ctx, u.Upstream, host, port)
+		if err != nil {
+			p.record(u, host, false, time.Since(began))
+			lastErr = err
+			continue
+		}
+		p.mu.Lock()
+		if p.bootstrapPinned == "" {
+			p.bootstrapPinned = u.Name
+		}
+		accepted := p.bootstrapPinned == u.Name
+		p.mu.Unlock()
+		if !accepted {
+			_ = conn.Close()
+			continue
+		}
+		p.record(u, host, true, time.Since(began))
+		p.logf("Windscribe CONNECT %s:%s carried through verified exit %s", host, port, u.Name)
+		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
+		return conn, nil
+	}
+	if !any {
+		return nil, errors.New("Windscribe bootstrap blocked: no verified foreign TCP exit; waiting for Aether/Psiphon")
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("Windscribe verified exit is unreachable: %w", lastErr)
+	}
+	return nil, errors.New("Windscribe bootstrap exit changed; reconnect ktest explicitly to select another")
 }
 
 // Serve accepts SOCKS5 clients until ctx ends.
