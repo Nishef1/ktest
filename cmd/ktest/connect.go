@@ -471,6 +471,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	o.mode.configure(&cfg, aiRules)
 	if o.mode == ModeWindscribe {
 		cfg.RejectExits = true // guard both initial and dynamically added routes
+		cfg.LocalOnly = true   // also reject plain/unknown relays and takeovers
 	}
 	if o.mode == ModeBalanced && o.aiDirect {
 		cfg.ExitOnly = nil
@@ -603,7 +604,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 5. The result.
 	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
 	if o.mode == ModeWindscribe {
-		title = "LOCAL ANTI-DPI READY; WINDSCRIBE VPN NOT VERIFIED"
+		title = "LOCAL ANTI-DPI CANDIDATES; WINDSCRIBE VPN NOT VERIFIED"
 		if !proxy.HasLocalBypass() {
 			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}
