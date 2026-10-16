@@ -19,7 +19,12 @@ import (
 
 // Server bridges HTTP CONNECT or absolute-form HTTP requests into a local
 // SOCKS5 CONNECT server. It does not change system DNS, routes or certificates.
-type Server struct{ Upstream string }
+// Dial, when supplied, replaces the generic SOCKS5 bridge. It is used by
+// Windscribe to require an already verified foreign TCP exit before HTTP 200.
+type Server struct {
+	Upstream string
+	Dial     func(context.Context, string, string) (net.Conn, error)
+}
 
 func isLoopback(addr net.Addr) bool {
 	t, ok := addr.(*net.TCPAddr)
@@ -73,6 +78,9 @@ func (s *Server) socksDial(ctx context.Context, target string) (net.Conn, error)
 	host, port, err := validTarget(target)
 	if err != nil {
 		return nil, err
+	}
+	if s.Dial != nil {
+		return s.Dial(ctx, host, strconv.Itoa(port))
 	}
 	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", s.Upstream)
 	if err != nil {
