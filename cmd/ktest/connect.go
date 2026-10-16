@@ -19,6 +19,7 @@ import (
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/front"
+	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/revive"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 	"github.com/Nishef1/ktest/internal/systemtun"
@@ -79,6 +80,8 @@ type connectOptions struct {
 	exitSocks  string
 	aiExtra    string
 	aiDirect   bool
+	windscribeCLI string
+	windscribeReconnect bool
 	tun        bool
 	cert       bool
 	forceFront bool
@@ -91,7 +94,7 @@ type connectOptions struct {
 
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
-		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12,
+		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12, windscribeReconnect: true,
 		stagger: 250 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
 		stopHint: "Press Ctrl+C to disconnect",
 	}
@@ -103,6 +106,8 @@ func runConnect(args []string) int {
 	o := defaultConnectOptions(defaultBase())
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
 	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, vpn (all exit-only), tor (Tor-only)")
+	fs.StringVar(&o.windscribeCLI, "windscribe-cli", "", "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
+	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
 	fs.StringVar(&o.listen, "listen", o.listen, "loopback SOCKS5 address for your applications")
 	fs.IntVar(&o.strategies, "strategies", o.strategies, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")
 	fs.BoolVar(&o.noXray, "no-xray", false, "do not run the two Xray profiles")
@@ -217,6 +222,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				t.Line(toneFail, "The previous ktest sing-tun is still active (%s). Stop whole-PC mode and restore Windows routes before connecting Windscribe.", iface.Name)
 				return 2
 			}
+		}
+	}
+	monitor := startWindscribeMonitor(ctx, o, t)
+	if monitor != nil && monitor.Connected() {
+		t.Note("Windscribe already connected. ktest standing by; waiting for the official CLI to report disconnect.")
+		if !monitor.waitDisconnected(ctx) {
+			return 0
 		}
 	}
 	aiRules, aiErr := smartproxy.NewAIDomainRules(o.aiExtra)
@@ -487,6 +499,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		t.Line(toneFail, "cannot listen on %s: %v", o.listen, err)
 		return 1
 	}
+	monitor.attach(proxy)
 	_, portText, _ := net.SplitHostPort(l.Addr().String())
 	var lport int
 	fmt.Sscanf(portText, "%d", &lport)
@@ -513,27 +526,32 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if o.mode == ModeTor {
 		warpNote, stopWarp = startTor(ctx, o, proxy, t)
 	} else {
-		warpNote, stopWarp = startWarp(ctx, o, proxy, &dns, t)
+		warpNote, stopWarp = startWarp(ctx, o, proxy, &dns, t, monitor)
 	}
 	defer stopWarp()
 
-	// 4. Verify through the proxy, against the plain route.
-	vstep := t.Progress("Verifying YouTube and Google", 1)
-	vctx, vcancel := context.WithTimeout(ctx, 30*time.Second)
-	proxied, compared := measure(vctx, lport)
-	vcancel()
-	if ctx.Err() != nil {
-		return 0
+	// 4. Windscribe owns the network while it is connected. In that state,
+	// don't run extra local website probes which could disturb its data plane.
+	var proxied []quickcheck.Result
+	var compared []quickcheck.Assessment
+	verdict := toneInfo
+	if monitor == nil || !monitor.Connected() {
+		vstep := t.Progress("Verifying YouTube and Google", 1)
+		vctx, vcancel := context.WithTimeout(ctx, 30*time.Second)
+		proxied, compared = measure(vctx, lport)
+		vcancel()
+		if ctx.Err() != nil { return 0 }
+		passedNow := proxiedPassCount(proxied)
+		verdict = toneOK
+		switch {
+		case passedNow == 0: verdict = toneFail
+		case passedNow < len(proxied): verdict = toneWarn
+		}
+		vstep.Finish(verdict, fmt.Sprintf("%d of %d reachable through ktest", passedNow, len(proxied)))
+	} else {
+		t.Note("Windscribe active: skipping extra website probes")
 	}
 	passed := proxiedPassCount(proxied)
-	verdict := toneOK
-	switch {
-	case passed == 0:
-		verdict = toneFail
-	case passed < len(proxied):
-		verdict = toneWarn
-	}
-	vstep.Finish(verdict, fmt.Sprintf("%d of %d reachable through ktest", passed, len(proxied)))
 	bypassed := 0
 	for _, c := range compared {
 		switch c.Kind {
