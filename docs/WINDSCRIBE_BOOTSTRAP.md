@@ -2,6 +2,39 @@
 
 The goal is **not** to replace Windscribe. It is to give the installed Windscribe desktop client an initial TCP path through ktest's existing censorship-circumvention methods. Once Windscribe establishes its own tunnel, Windscribe is the primary VPN and supplies the external IP.
 
+## Automatic Windscribe watchdog and recovery (Windows)
+
+`ktest connect -mode windscribe` now uses Windscribe's **own official command-line tool** to determine VPN state:
+
+```powershell
+& "C:\\Program Files\\Windscribe\\windscribe-cli.exe" status
+```
+
+The desktop CLI reports connection status, firewall and protocol through the Windscribe service. ktest reads the CLI every ~3 seconds; it does **not** infer that the VPN is connected from a local port, adapter, or a page returning HTTP 200.
+
+- **Confirmed Connected:** Windscribe owns the default route, public exit IP and firewall. If ktest was just launched while connected, it stays in standby and does not start its bootstrap cores. If Windscribe connects while ktest is already providing a TCP proxy, ktest **keeps the established proxy transport alive** (otherwise that action could disconnect Windscribe), but stops launching new Aether discovery attempts.
+- **Confirmed Disconnected:** ktest activates/resumes external exit discovery. Once a verified foreign TCP exit is ready, it asks Windscribe to retry the **last selected location** with `windscribe-cli connect -n`. Retries are limited to once every 60 seconds to avoid connection loops.
+- **Connecting / tunnel test pending / network interference:** ktest does not issue duplicate connection requests. A `*Connected` status is **not** treated as a completed tunnel.
+- **CLI unavailable / ambiguous:** no automatic reconnect is attempted. If monitoring has not started, ktest continues in manual-bootstrap mode with an explicit warning.
+
+**No automatic country changes, IP rotations, VPN disconnections, Windscribe firewall changes, or ktest system-wide TUN changes are performed.** The watchdog is a helper, not a replacement for Windscribe's OS-level firewall. It cannot guarantee that arbitrary applications won't leak traffic during a disconnect if Windscribe's firewall is off.
+
+To disable automatic CLI reconnect while still using the HTTP bootstrap:
+
+```powershell
+go run ./cmd/ktest connect -mode windscribe -windscribe-auto-reconnect=false -v
+```
+
+If installed in a nonstandard directory:
+
+```powershell
+go run ./cmd/ktest connect -mode windscribe -windscribe-cli "D:\\Apps\\Windscribe\\windscribe-cli.exe"
+```
+
+**IMPORTANT route-loop boundary:** Windscribe's OpenVPN-over-HTTP session may depend on an already running Aether/Psiphon exit *for its entire lifetime*. Do not kill that exit the moment Windscribe connects. Exclude the stable ktest/Aether binaries from Windscribe's VPN tunnel if necessary and verify they use the physical network; otherwise the VPN can become its own upstream. Windscribe also has an option to force-close TCP sockets on connect, which may terminate existing bootstrap connections. Test this with real Windows logs before promising automatic recovery.
+
+**Firewall:** For sensitive workloads, configure Windscribe's own firewall policy; `ktest` neither weakens nor disables it. Always On may prevent external bootstrap traffic during a disconnected state, so successful recovery in that mode must be validated experimentally rather than assumed.
+
 ## 2026-10-16: Why HTTP CONNECT 200 did not connect the VPN
 
 The OpenVPN/TCP logs for Istanbul (ports 443 and 80), another Istanbul server, and Berlin (443 and 8080) all reach `HTTP/1.1 200 Connection Established`, then remain in `WAIT` and reset. The log also shows that ordinary WireGuard ignores LAN HTTP Proxy, so those WireGuard attempts did not test the proxy at all.
