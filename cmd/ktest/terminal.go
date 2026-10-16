@@ -284,6 +284,7 @@ func (t *terminal) advancedMenu() {
 		{"3", "ByeDPI adaptive"}, {"4", "ByeDPI TLS record slicing"},
 		{"5", "CDN IP candidates (Cloudflare scan)"}, {"6", "System-wide TUN (Windows, Administrator, beta)"},
 		{"7", "Stop the running method"}, {"8", "Re-test YouTube and Google"},
+		{"9", "Domain fronting: local CA (status, trust, remove)"},
 		{"0", "Back"},
 	} {
 		u.Printf("  %s  %s\n", u.Bold(u.Cyan(r[0])), r[1])
@@ -436,10 +437,12 @@ func (t *terminal) advanced(base string, readLine func() (string, bool)) bool {
 			} else {
 				go t.check(s.ctx, s)
 			}
+		case "9":
+			t.frontSetup(readLine)
 		case "0", "b", "B":
 			return true
 		default:
-			t.ui.Line(toneWarn, "Unknown option. Select 1-8, or 0 to go back.")
+			t.ui.Line(toneWarn, "Unknown option. Select 1-9, or 0 to go back.")
 		}
 	}
 }

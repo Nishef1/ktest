@@ -165,8 +165,22 @@ func runDoctorView(u *term, base string, noNet bool) (failed bool) {
 		cancel()
 		prog.Finish(toneOK, "")
 		rep.print(u)
+		fprog := u.Progress("Probing domain fronting", 1)
+		fctx, fcancel := context.WithTimeout(ctx, 25*time.Second)
+		checks := probeFronts(fctx)
+		fcancel()
+		fprog.Finish(toneOK, "")
+		printFronts(u, checks)
 		u.Println("")
-		u.Box("VERDICT", rep.verdict, wrapText(rep.verdictText, 76))
+		verdict := wrapText(rep.verdictText, 76)
+		for _, c := range checks {
+			if c.working() > 0 {
+				verdict = append(verdict, "")
+				verdict = append(verdict, wrapText("Domain fronting gets through for "+c.family+" sites. It does not cut the ClientHello, so it also works where cutting is punished. `ktest ca -install` enables it in Connect.", 76)...)
+				break
+			}
+		}
+		u.Box("VERDICT", rep.verdict, verdict)
 	} else if open == len(direct) && open > 0 {
 		u.Note("Everything tested already works directly: no filtering is visible on this path (or another VPN carries it).")
 	}

@@ -56,11 +56,32 @@ Name resolution is the first thing a censor poisons, so it is not left to the sy
 
 Run it once with any other VPN off and keep the output with your notes: it is the evidence for choosing methods.
 
-## 5. Advanced
+## 5. Domain fronting (optional)
+
+Cutting the ClientHello can only hide the server name by splitting it; some networks punish any cut (field reports say fragmentation is closed on the MCI firewall, even over IPv6). Domain fronting does not cut anything. ktest terminates the application's TLS itself and opens a **new** connection to the CDN edge with a harmless server name (for example `www.google.com`) in the ClientHello, a Chrome-like fingerprint and the application's own protocol (h2 or http/1.1). The edge routes by the request's Host / :authority, so YouTube answers although the wire only says google.com. The idea is the public MITM-DomainFronting project's; this is a Go re-implementation without Xray.
+
+It needs the application to trust a local certificate authority, so it is **off until you set it up**:
+
+```
+ktest ca -install     create the CA and trust it for your Windows user (Windows asks you to confirm)
+ktest ca              show its state
+ktest ca -delete      stop trusting it and delete its key
+```
+
+What ktest does to keep this safe:
+
+* The CA is **name-constrained** (critical X.509 name constraints) to the sites ktest can front: Google/YouTube, Meta (Facebook, Instagram, WhatsApp) and Fastly-hosted sites (Reddit, PyPI, ...). Even if its key leaked, no browser that honors constraints would accept it for a bank or a mail provider. The key lives in your user profile (`AppData/Roaming/ktest/ca`, or `KTEST_CA_DIR`), never in the portable folder.
+* The connection to the edge is made and verified (certificate chain to the system roots, valid for the front, the site or the family) **before** the application is answered. If it fails, the application gets nothing and the other paths race as usual.
+* Connect enables it only when the system reports the CA as trusted (`-front` forces it, `-no-front` forbids it). If applications keep refusing the certificate (Firefox has its own store: set `security.enterprise_roots.enabled` to true in about:config), fronting switches itself off after three refusals so nothing breaks.
+* Several fronts are tried per family and ranked by what worked on your network, because a server name that is open on one operator is closed on the next. Add your own in `profiles/fronts.txt`: one line `family sni [dial]` (`-` = no SNI, `@own` = the site's own address). Diagnose tests every front without any certificate and shows which ones this network allows.
+
+Limits: only HTTPS on port 443 for the listed families; applications that pin certificates refuse it; Google may still refuse sanctioned content for an Iranian address, and fronting does not change your IP.
+
+## 6. Advanced
 
 Single methods (Xray fragment B/A on `127.0.0.1:10808`, ByeDPI on `127.0.0.1:10809`), the Cloudflare IP candidate scan and the experimental system-wide TCP TUN (Windows, Administrator, explicit `YES`). Connect makes these unnecessary for everyday use. The research commands (`probe`, `compare`, `edges`, `path`, `echo`, `access`, `revive`) are unchanged; see `ktest help`.
 
-## 6. What is, and is not, possible
+## 7. What is, and is not, possible
 
 * Every path connects straight to the destination site. ktest needs no server of yours, and it does not change your public IP.
 * Changing a byte of the ClientHello (rewriting the SNI, changing its case) is not possible for a transparent relay: the TLS handshake transcript would no longer match and the handshake fails. ktest cuts the ClientHello, it does not edit it.
@@ -69,14 +90,14 @@ Single methods (Xray fragment B/A on `127.0.0.1:10808`, ByeDPI on `127.0.0.1:108
 * A site whose IP address itself is blocked cannot be reached by any of these methods.
 * No result in this repository comes from a measured Iranian ISP. `Diagnose` and the result box tell you what happens on **your** network, right now.
 
-## 7. Where ktest looks for its files
+## 8. Where ktest looks for its files
 
 `cores/` and `profiles/` are searched next to the executable, then in the working directory, `./dist/ktest-portable` and `./ktest-portable`. `KTEST_BASE` or `-base DIR` overrides it. `ktest strategies -write` creates the editable `profiles/byedpi-strategies.txt` (the packaged build ships it).
 
-## 8. Output
+## 9. Output
 
 Colors, box drawing and the in-place progress line are used only on an interactive terminal. In a pipe, a file, CI, with `NO_COLOR` or `TERM=dumb`, output is plain ASCII. Set `KTEST_ASCII=1` to force ASCII on a terminal that cannot show the glyphs.
 
 ## Options of `ktest connect`
 
-None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`.
+None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-front`, `-front`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`.

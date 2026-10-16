@@ -52,6 +52,28 @@ type Upstream struct {
 	// Rank is the static preference when two paths have the same track record:
 	// lower first. Plain connections are the least intrusive, cut ones the most.
 	Rank int
+	// Match, when set, restricts the path to the hosts it accepts. It is how a
+	// path that only works for some sites (domain fronting) stays out of the way
+	// of all the others.
+	Match func(host string) bool
+	// Takeover, when set, replaces the relay: the path speaks TLS to the
+	// application itself (it terminates the connection and re-originates it
+	// toward the site). Prepare must do everything that can fail without the
+	// application noticing, such as reaching the site, so that a failure here
+	// leaves the other paths free to answer the unchanged ClientHello.
+	Takeover func(ctx context.Context, host, port string, flight []byte) (Session, error)
+}
+
+// Session is a prepared takeover: the upstream side is ready, the application
+// has not been answered yet.
+type Session interface {
+	// Serve answers the application, whose first flight (the ClientHello that
+	// was already read) is flight, and relays until either side ends. It
+	// returns an error when the application refused the connection, for
+	// example because it does not trust the certificate that was presented.
+	Serve(client net.Conn, flight []byte) error
+	// Close releases the upstream side of a session that lost the race.
+	Close()
 }
 
 type Config struct {
@@ -83,6 +105,9 @@ type Event struct {
 	Took time.Duration
 	OK   bool
 	Err  string // last failure reason when no path answered
+	// Rejected marks a connection that a takeover path prepared but the
+	// application then refused (it does not trust the certificate presented).
+	Rejected bool
 }
 
 func (c *Config) defaults() {
@@ -179,7 +204,12 @@ func (p *Proxy) Winners() map[string]string {
 func (p *Proxy) order(host string) []*upstreamState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	list := append([]*upstreamState(nil), p.ups...)
+	list := make([]*upstreamState, 0, len(p.ups))
+	for _, u := range p.ups {
+		if u.Match == nil || u.Match(host) {
+			list = append(list, u)
+		}
+	}
 	remembered := ""
 	if m, ok := p.mem[siteKey(host)]; ok && time.Since(m.at) < p.cfg.MemoryTTL {
 		remembered = m.name
@@ -260,32 +290,72 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 		return
 	}
 	flight := readFirstFlight(client)
-	var up net.Conn
-	var first []byte
+	var win winner
 	if isTLSFlight(flight) {
-		up, first, err = p.race(ctx, host, port, flight)
+		host = p.nameFor(host, flight)
+		win, err = p.race(ctx, host, port, flight)
 	} else {
-		up, err = p.plain(ctx, host, port, flight)
+		win.conn, err = p.plain(ctx, host, port, flight)
 	}
 	if err != nil {
 		p.logf("%s:%s no path answered: %v", host, port, err)
 		return
 	}
-	defer up.Close()
-	if len(first) > 0 {
-		if _, err := client.Write(first); err != nil {
+	if win.sess != nil {
+		if err := win.sess.Serve(client, flight); err != nil {
+			p.logf("%s:%s %s: %v", host, port, win.path, err)
+			p.emit(Event{Host: host, Site: siteKey(host), Path: win.path, Err: err.Error(), Rejected: true})
+		}
+		return
+	}
+	defer win.conn.Close()
+	if len(win.first) > 0 {
+		if _, err := client.Write(win.first); err != nil {
 			return
 		}
 	}
-	pipe(client, up)
+	pipe(client, win.conn)
+}
+
+// nameFor returns the name a connection is about: the SOCKS host, except when
+// the application resolved the name itself and got a poisoned (private) answer,
+// in which case the SNI of its ClientHello is the only truthful name left. This
+// is what lets an application that ignores "proxy DNS" still work.
+func (p *Proxy) nameFor(host string, flight []byte) string {
+	ip := net.ParseIP(host)
+	if ip == nil || !Bogus(ip) {
+		return host
+	}
+	if sni, _, ok := ParseClientHello(flight); ok && sni != "" && net.ParseIP(sni) == nil {
+		p.logf("%s is a block-page address; using the SNI %s instead", host, sni)
+		return sni
+	}
+	return host
 }
 
 type outcome struct {
-	u     *upstreamState
+	u    *upstreamState
+	win  winner
+	took time.Duration
+	err  error
+}
+
+// winner is what a successful attempt hands to handle: either an upstream
+// connection that already produced a TLS record, or a prepared takeover.
+type winner struct {
 	conn  net.Conn
 	first []byte
-	took  time.Duration
-	err   error
+	sess  Session
+	path  string
+}
+
+func (w winner) release() {
+	if w.conn != nil {
+		_ = w.conn.Close()
+	}
+	if w.sess != nil {
+		w.sess.Close()
+	}
 }
 
 // race sends the TLS flight in two waves. The first wave is one path: the one
@@ -293,8 +363,11 @@ type outcome struct {
 // the stagger (longer when it is a remembered winner) or fails, the second wave
 // starts every other path at once. One-by-one staggering would delay the right
 // path of a blocked site by 300 ms for each path ranked above it.
-func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (net.Conn, []byte, error) {
+func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (winner, error) {
 	order := p.order(host)
+	if len(order) == 0 {
+		return winner{}, errors.New("no path applies to this site")
+	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	results := make(chan outcome, len(order))
@@ -306,8 +379,8 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 			pending++
 			go func() {
 				began := time.Now()
-				conn, first, err := p.attempt(ctx, u, host, port, flight)
-				results <- outcome{u, conn, first, time.Since(began), err}
+				w, err := p.attempt(ctx, u, host, port, flight)
+				results <- outcome{u, w, time.Since(began), err}
 			}()
 		}
 	}
@@ -320,7 +393,7 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 		select {
 		case <-parent.Done():
 			go drain(results, pending)
-			return nil, nil, parent.Err()
+			return winner{}, parent.Err()
 		case <-timer.C:
 			launch(-1)
 		case r := <-results:
@@ -337,14 +410,15 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 			p.emit(Event{Host: host, Site: siteKey(host), Path: r.u.Name, Took: r.took, OK: true})
 			cancel()
 			go drain(results, pending)
-			return r.conn, r.first, nil
+			r.win.path = r.u.Name
+			return r.win, nil
 		}
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no upstream")
 	}
 	p.emit(Event{Host: host, Site: siteKey(host), Err: lastErr.Error()})
-	return nil, nil, lastErr
+	return winner{}, lastErr
 }
 
 // firstWave is how long the first path gets alone. It scales with that path's
@@ -401,24 +475,36 @@ func siteKey(host string) string {
 // drain closes connections of attempts that lost the race.
 func drain(results <-chan outcome, pending int) {
 	for ; pending > 0; pending-- {
-		if r := <-results; r.conn != nil {
-			_ = r.conn.Close()
-		}
+		r := <-results
+		r.win.release()
 	}
 }
 
 // attempt connects through one upstream, sends the flight and requires a TLS
 // handshake record back.
-func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string, flight []byte) (net.Conn, []byte, error) {
+func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string, flight []byte) (winner, error) {
+	if u.Takeover != nil {
+		tctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout+p.cfg.FirstByteTimeout)
+		defer cancel()
+		sess, err := u.Takeover(tctx, host, port, flight)
+		if err != nil {
+			return winner{}, err
+		}
+		if ctx.Err() != nil { // the race was decided elsewhere meanwhile
+			sess.Close()
+			return winner{}, context.Canceled
+		}
+		return winner{sess: sess}, nil
+	}
 	conn, err := p.dial(ctx, u.Upstream, host, port)
 	if err != nil {
-		return nil, nil, err
+		return winner{}, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	fail := func(err error) (net.Conn, []byte, error) {
+	fail := func(err error) (winner, error) {
 		stop()
 		_ = conn.Close()
-		return nil, nil, err
+		return winner{}, err
 	}
 	_ = conn.SetDeadline(time.Now().Add(p.cfg.FirstByteTimeout))
 	send := u.Send
@@ -437,10 +523,10 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 	}
 	if !stop() { // ctx already ended, the race was decided elsewhere
 		_ = conn.Close()
-		return nil, nil, context.Canceled
+		return winner{}, context.Canceled
 	}
 	_ = conn.SetDeadline(time.Time{})
-	return conn, header, nil
+	return winner{conn: conn, first: header}, nil
 }
 
 // plain handles non-TLS traffic: no replay is possible, so use the best path
@@ -448,6 +534,9 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (net.Conn, error) {
 	var lastErr error
 	for _, u := range p.order(host) {
+		if u.Takeover != nil {
+			continue // it only speaks TLS
+		}
 		conn, err := p.dial(ctx, u.Upstream, host, port)
 		if err != nil {
 			lastErr = err

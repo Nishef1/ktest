@@ -12,5 +12,5 @@ or `.\ktest.exe` from the portable ZIP built by the `windows-portable` workflow.
 
 * Start here: [docs/USAGE.md](docs/USAGE.md)
 * Honest scope: no result in this repository comes from a measured Iranian ISP. The tool reports what happens on **your** network, right now.
-* Nothing is changed outside ktest: no system proxy, DNS, route, firewall or certificate (the optional TUN is explicit and off by default).
+* Nothing is changed outside ktest: no system proxy, DNS, route or firewall. The two optional exceptions are explicit and off by default: the TUN, and `ktest ca -install`, which trusts a name-constrained local CA so that domain fronting can work.
 * Third-party cores (Xray, ByeDPI, sing-box, Wintun) keep their own licenses: [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md).

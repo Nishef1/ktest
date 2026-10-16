@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
+	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/revive"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -68,6 +69,8 @@ type connectOptions struct {
 	noSelf     bool
 	noDoH      bool
 	noDirect   bool
+	noFront    bool
+	forceFront bool
 	stagger    time.Duration
 	firstByte  time.Duration
 	ready      time.Duration
@@ -94,6 +97,8 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.noSelf, "no-self", false, "do not add ktest's built-in ClientHello cutting paths")
 	fs.BoolVar(&o.noDoH, "no-doh", false, "never use encrypted DNS (system DNS only)")
 	fs.BoolVar(&o.noDirect, "no-direct", false, "do not race the plain, uncut connection")
+	fs.BoolVar(&o.noFront, "no-front", false, "do not use domain fronting even if the ktest CA is trusted")
+	fs.BoolVar(&o.forceFront, "front", false, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
 	fs.DurationVar(&o.stagger, "stagger", o.stagger, "head start of the first path before all others join")
 	fs.DurationVar(&o.firstByte, "first-byte", o.firstByte, "how long a path may take to answer the TLS ClientHello")
 	fs.DurationVar(&o.ready, "ready", o.ready, "how long to wait for each core's local port")
@@ -127,6 +132,13 @@ type siteEvents struct {
 
 func (s *siteEvents) print(e smartproxy.Event) {
 	t := s.t
+	if e.Rejected {
+		if time.Since(s.failedAt[e.Site]) >= 20*time.Second {
+			s.failedAt[e.Site] = time.Now()
+			t.Line(toneWarn, "%-26s %s", e.Host, t.Yellow("the application refused the ktest certificate")+t.Dim("  (is the CA trusted in that application?)"))
+		}
+		return
+	}
 	if e.OK {
 		s.ok.Add(1)
 		if s.last[e.Site] == e.Path {
@@ -326,7 +338,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if !o.noSelf {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
 	}
-	if len(ups) == 0 {
+	if len(ups) == 0 && !o.forceFront {
 		t.Box("NOTHING TO RUN", toneFail, []string{"No path is available. Extract the complete portable ZIP (cores/ and profiles/)", "or run `ktest doctor`."})
 		return 1
 	}
@@ -359,6 +371,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	cfg.Resolve = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohA, Logf: logDNS})
 	cfg.Resolve6 = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohAAAA, IPv6: true, Logf: logDNS})
+
+	// Domain fronting is a takeover path: it needs the application to trust the
+	// ktest CA, so it is only added when the system says it does.
+	fronter, frontNote := newFronter(o, cfg.Resolve, t, logDNS)
+	if fronter != nil {
+		cfg.Upstreams = append(cfg.Upstreams, fronter.Upstream())
+	}
 	if o.verbose {
 		cfg.Logf = func(f string, a ...any) { t.Printf("    %s\n", t.Dim(fmt.Sprintf(f, a...))) }
 	}
@@ -415,7 +434,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
 	lines := []string{
 		t.Bold("Proxy   ") + "  socks5://" + l.Addr().String() + t.Dim("   (turn on \"proxy DNS\" / remote DNS in the app)"),
-		t.Bold("Paths   ") + fmt.Sprintf("  %d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)),
+		t.Bold("Paths   ") + fmt.Sprintf("  %d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)) + frontSuffix(fronter),
+	}
+	if frontNote != "" {
+		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))
 	}
 	switch {
 	case bypassed > 0:
@@ -439,7 +461,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	for {
 		select {
 		case <-ctx.Done():
-			summarize(t, proxy, feed)
+			summarize(t, proxy, feed, fronter)
 			return 0
 		case e := <-events:
 			feed.print(e)
@@ -465,7 +487,7 @@ func trimDetail(s string) string {
 }
 
 // summarize prints what happened during the session.
-func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents) {
+func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *front.Fronter) {
 	t.Println("")
 	t.Println("  " + t.Bold("Session summary"))
 	ok, fail := feed.ok.Load(), feed.fail.Load()
@@ -494,6 +516,15 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents) {
 		}
 		shown++
 		t.Printf("    %s %-44s %s\n", t.Bar(float64(s.Wins)/float64(maxWins), 12, toneInfo), s.Name, t.Dim(fmt.Sprintf("%d %s · %d ms avg", s.Wins, plural(s.Wins, "win", "wins"), s.AvgMS)))
+	}
+	if fronter != nil {
+		acc, ref := fronter.Stats()
+		if acc+ref > 0 || fronter.Disabled() != "" {
+			t.Printf("    %s\n", t.Dim(fmt.Sprintf("domain fronting: %d accepted, %d refused by applications", acc, ref)))
+		}
+		if learned := fronter.Learned(); len(learned) > 0 {
+			t.Printf("    %s\n", t.Dim("fronts that worked here: "+strings.Join(learned, "; ")))
+		}
 	}
 	t.Println("")
 }
@@ -549,4 +580,39 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// newFronter builds the domain-fronting path when it is wanted and usable, and
+// returns a one-line explanation of its state for the result box.
+func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf func(string, ...any)) (*front.Fronter, string) {
+	if o.noFront {
+		return nil, "off (-no-front)"
+	}
+	ca, trusted := loadFrontCA()
+	switch {
+	case ca == nil:
+		return nil, "off - optional: `ktest ca -install` lets Google, YouTube and Meta sites use domain fronting"
+	case !trusted && !o.forceFront:
+		return nil, "off - the system does not trust the ktest CA yet (`ktest ca -install`)"
+	}
+	fams := front.DefaultFamilies()
+	if text, err := os.ReadFile(filepath.Join(o.base, "profiles", "fronts.txt")); err == nil {
+		if extra, perr := front.ParseFronts(string(text)); perr != nil {
+			t.Note("skipped profiles/fronts.txt: %v", perr)
+		} else {
+			fams = front.WithFronts(fams, extra)
+		}
+	}
+	f := front.New(front.Config{
+		CA: ca, Families: fams, Resolve: resolve, Logf: logf,
+		OnTrouble: func(msg string) { t.Line(toneWarn, "%s", msg) },
+	})
+	return f, "on - Google, YouTube, Meta and Fastly-hosted sites can use domain fronting"
+}
+
+func frontSuffix(f *front.Fronter) string {
+	if f == nil {
+		return ""
+	}
+	return " + domain fronting"
 }
