@@ -11,7 +11,7 @@ import (
 // startHTTPBridge exposes ktest's existing SOCKS5 route selector as a
 // loopback-only HTTP proxy for Windscribe's Proxy Settings (not Proxy Gateway).
 // Failure to bind this optional port must never stop the normal SOCKS proxy.
-func startHTTPBridge(ctx context.Context, listen, socks string) (string, func(), error) {
+func startHTTPBridge(ctx context.Context, listen, socks string, dial ...func(context.Context, string, string) (net.Conn, error)) (string, func(), error) {
 	tcp, err := net.ResolveTCPAddr("tcp", listen)
 	if err != nil || tcp.IP == nil || !tcp.IP.IsLoopback() {
 		return "", nil, errors.New("HTTP proxy must listen on loopback only")
@@ -27,6 +27,10 @@ func startHTTPBridge(ctx context.Context, listen, socks string) (string, func(),
 	if err != nil {
 		return "", nil, err
 	}
-	go func() { _ = (&httpproxy.Server{Upstream: socks}).Serve(ctx, l) }()
+	server := &httpproxy.Server{Upstream: socks}
+	if len(dial) > 0 {
+		server.Dial = dial[0]
+	}
+	go func() { _ = server.Serve(ctx, l) }()
 	return l.Addr().String(), func() { _ = l.Close() }, nil
 }
