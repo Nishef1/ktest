@@ -107,13 +107,13 @@ func windscribeCLIPath(override string) (string, error) {
 }
 
 type windscribeMonitor struct {
-	cli string
-	t   *term
+	cli           string
+	t             *term
 	autoReconnect bool
-	mu sync.RWMutex
-	state windscribeState
+	mu            sync.RWMutex
+	state         windscribeState
 	connectedOnce bool
-	proxy *smartproxy.Proxy
+	proxy         *smartproxy.Proxy
 	nextReconnect time.Time
 }
 
@@ -129,19 +129,24 @@ func (m *windscribeMonitor) Connected() bool { return m != nil && m.State() == w
 // during a live Windscribe VPN session. Only a confirmed disconnection permits
 // a fresh bootstrap; unknown states don't indicate an actual disconnect.
 func (m *windscribeMonitor) waitDisconnected(ctx context.Context) bool {
-	tick := time.NewTicker(500*time.Millisecond)
+	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if m.State() == windscribeDisconnected { return true }
+		if m.State() == windscribeDisconnected {
+			return true
+		}
 		select {
-		case <-ctx.Done(): return false
+		case <-ctx.Done():
+			return false
 		case <-tick.C:
 		}
 	}
 }
 
 func (m *windscribeMonitor) attach(p *smartproxy.Proxy) {
-	if m == nil { return }
+	if m == nil {
+		return
+	}
 	m.mu.Lock()
 	m.proxy = p
 	m.mu.Unlock()
@@ -169,11 +174,13 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		// foreign bootstrap rather than carrying over a dead upstream pin.
 		p.ResetBootstrapPin()
 	}
-	if state == windscribeConnected { m.connectedOnce = true }
+	if state == windscribeConnected {
+		m.connectedOnce = true
+	}
 	shouldReconnect := m.autoReconnect && state == windscribeDisconnected &&
 		p != nil && p.HasVerifiedExit() && !time.Now().Before(m.nextReconnect)
 	if shouldReconnect {
-		m.nextReconnect = time.Now().Add(60*time.Second)
+		m.nextReconnect = time.Now().Add(60 * time.Second)
 	}
 	m.mu.Unlock()
 	if changed {
@@ -198,7 +205,9 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 }
 
 func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *windscribeMonitor {
-	if o.mode != ModeWindscribe { return nil }
+	if o.mode != ModeWindscribe {
+		return nil
+	}
 	path, err := windscribeCLIPath(o.windscribeCLI)
 	if err != nil {
 		t.Note("Windscribe monitor unavailable: %v; recovery remains manual until CLI is available", err)
@@ -210,13 +219,15 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 		t.Note("Windscribe CLI status not trusted yet; running bootstrap in manual fallback mode (no automatic reconnect)")
 		return nil
 	}
-	go func(){
-		ticker := time.NewTicker(3*time.Second)
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done(): return
-			case <-ticker.C: m.refresh(ctx)
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.refresh(ctx)
 			}
 		}
 	}()
