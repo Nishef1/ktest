@@ -76,6 +76,8 @@ type connectOptions struct {
 	noHTTP     bool
 	httpListen string
 	exitSocks  string
+	aiExtra    string
+	aiDirect   bool
 	tun        bool
 	cert       bool
 	forceFront bool
@@ -110,6 +112,8 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.noHTTP, "no-http", false, "disable the local HTTP proxy for Windscribe")
 	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
 	fs.StringVar(&o.exitSocks, "exit-socks", "", "optional loopback SOCKS5 exit (Tor, Psiphon or authorized Worker), TCP only")
+	fs.StringVar(&o.aiExtra, "ai-extra", "", "additional AI hostnames, comma-separated; matched names require verified foreign exit")
+	fs.BoolVar(&o.aiDirect, "ai-direct", false, "opt out of fail-closed protection for AI sites (real IP may be exposed)")
 	fs.BoolVar(&o.tun, "tun", false, "route the whole system through ktest (Windows; asks for Administrator)")
 	fs.BoolVar(&o.cert, "cert", false, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", false, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
@@ -189,6 +193,11 @@ func (s *siteEvents) print(e smartproxy.Event) {
 // the caller already measured.
 func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.Result, t *term) int {
 	t.Heading("connect", "Races every method for each connection. No system proxy, DNS or route is changed.")
+	aiRules, aiErr := smartproxy.NewAIDomainRules(o.aiExtra)
+	if aiErr != nil {
+		t.Line(toneFail, "%v", aiErr)
+		return 2
+	}
 
 	// 1. The network, before any core starts.
 	step := t.Progress("Checking the network", 2)
@@ -375,8 +384,14 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			t.Line(toneFail, "-exit-socks must be a distinct loopback SOCKS5 port (not ktest's own listeners)")
 			return 2
 		}
+		ip, country, checked := probeForeignExit(ctx, o.exitSocks)
+		if checked == nil {
+			t.Note("External SOCKS exit verified outside Iran: %s (%s)", ip, country)
+		} else {
+			t.Note("External SOCKS exit is not permitted for protected AI sites: %v", checked)
+		}
 		ups = append(ups, smartproxy.Upstream{
-			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, Late: true, Rank: 3,
+			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: true, Rank: 3,
 		})
 	}
 	if len(ups) == 0 && !o.forceFront {
@@ -392,6 +407,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			default:
 			}
 		},
+	}
+	if !o.aiDirect {
+		cfg.ExitOnly = aiRules.Match
 	}
 	logDNS := func(f string, a ...any) {
 		if o.verbose {
@@ -502,6 +520,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))
 	}
 	lines = append(lines, t.Bold("WARP    ")+"  "+t.Dim(warpNote))
+	if !o.aiDirect {
+		lines = append(lines, t.Bold("AI      ")+"  verified non-Iran exit only, session-pinned; otherwise BLOCKED (domain rules)")
+	} else {
+		lines = append(lines, t.Bold("AI      ")+"  direct access allowed (-ai-direct; real IP may be visible)")
+	}
 	switch {
 	case bypassed > 0:
 		lines = append(lines, t.Bold("Result  ")+"  "+t.Green(fmt.Sprintf("%d site(s) blocked on this network are open through ktest", bypassed)))
