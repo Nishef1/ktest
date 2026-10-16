@@ -364,7 +364,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	var up []*pathCore
 	var failed []string
 	if len(live) > 0 {
-		prog := t.Progress("Starting external paths", len(live))
+		progressLabel := "Starting external paths"
+		if o.mode == ModeWindscribe {
+			progressLabel = "Starting LOCAL ByeDPI paths"
+		}
+		prog := t.Progress(progressLabel, len(live))
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		finished := 0
@@ -563,7 +567,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	var proxied []quickcheck.Result
 	var compared []quickcheck.Assessment
 	verdict := toneInfo
-	if monitor == nil || !monitor.Connected() {
+	if o.mode == ModeWindscribe {
+		t.Note("Windscribe mode skips unrelated website and CDN tests; only local TCP anti-DPI is permitted")
+	} else if monitor == nil || !monitor.Connected() {
 		vstep := t.Progress("Verifying YouTube and Google", 1)
 		vctx, vcancel := context.WithTimeout(ctx, 30*time.Second)
 		proxied, compared = measure(vctx, lport)
@@ -629,6 +635,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	lines = append(lines, t.Bold("Exit    ")+"  "+t.Dim(warpNote))
 	lines = append(lines, t.Bold("Mode    ")+"  "+t.Dim(o.mode.message()))
 	switch {
+	case o.mode == ModeWindscribe:
+		lines = append(lines, t.Bold("Result  ")+"  "+t.Dim("Windscribe CLI checks the VPN; no foreign exit or direct fallback is allowed"))
 	case bypassed > 0:
 		lines = append(lines, t.Bold("Result  ")+"  "+t.Green(fmt.Sprintf("%d site(s) blocked on this network are open through ktest", bypassed)))
 	case passed == len(proxied) && passed > 0:
@@ -636,7 +644,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	case passed == 0:
 		lines = append(lines, t.Bold("Result  ")+"  "+t.Red("no tested site was reachable; run `ktest doctor` to see why"))
 	}
-	if verdict != toneOK && fronter == nil && !o.noFront && ctx.Err() == nil {
+	if o.mode != ModeWindscribe && verdict != toneOK && fronter == nil && !o.noFront && ctx.Err() == nil {
 		// The paths that need no certificate did not reach everything. If fronting
 		// would, say so now instead of leaving the user with a red result.
 		fctx, fcancel := context.WithTimeout(ctx, 8*time.Second)
