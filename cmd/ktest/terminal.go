@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -103,7 +102,11 @@ func (t *terminal) stop() bool {
 	}
 }
 
-func terminalMode(choice string, base string, output io.Writer) (func(context.Context) error, int, string, error) {
+// launcher runs one proxy core until ctx ends. dns is the preflight the caller
+// already measured, so the core does not repeat a multi-second DNS wait.
+type launcher func(ctx context.Context, dns *dnscheck.Result) error
+
+func terminalMode(choice string, base string, output io.Writer) (launcher, int, string, error) {
 	core := filepath.Join(base, "cores")
 	profile := filepath.Join(base, "profiles", "Serverless-for-Iran.json")
 	if choice == "1" || choice == "2" {
@@ -120,15 +123,16 @@ func terminalMode(choice string, base string, output io.Writer) (func(context.Co
 		if choice == "2" {
 			variant = "A"
 		}
-		return func(ctx context.Context) error {
+		return func(ctx context.Context, dns *dnscheck.Result) error {
 			return revive.Run(ctx, revive.Config{
 				XrayBinary: bin,
 				Profile:    profile,
 				Variant:    variant,
 				AssetDir:   core,
 				Output:     output,
+				DNS:        dns,
 			})
-		}, 10808, "Xray Fragment " + variant, nil
+		}, xrayPort, "Xray Fragment " + variant, nil
 	}
 	if choice == "3" || choice == "4" {
 		bin := filepath.Join(core, "ciadpi")
@@ -138,7 +142,7 @@ func terminalMode(choice string, base string, output io.Writer) (func(context.Co
 		if info, err := os.Stat(bin); err != nil || info.IsDir() {
 			return nil, 0, "", fmt.Errorf("missing %s; download the complete portable ZIP", bin)
 		}
-		args := []string{"-i", "127.0.0.1", "-p", "10809"}
+		args := []string{"-i", "127.0.0.1", "-p", fmt.Sprint(byeDPIPort)}
 		label := "ByeDPI TLS record slicing"
 		if choice == "3" {
 			args = append(args, "--auto=torst", "--timeout", "3", "--tlsrec", "3+s")
@@ -146,7 +150,7 @@ func terminalMode(choice string, base string, output io.Writer) (func(context.Co
 		} else {
 			args = append(args, "--tlsrec", "3+s")
 		}
-		return func(ctx context.Context) error {
+		return func(ctx context.Context, _ *dnscheck.Result) error {
 			cmd := exec.CommandContext(ctx, bin, args...)
 			cmd.Stdout, cmd.Stderr = output, output
 			err := cmd.Run()
@@ -157,7 +161,7 @@ func terminalMode(choice string, base string, output io.Writer) (func(context.Co
 				return fmt.Errorf("ByeDPI exited: %w", err)
 			}
 			return fmt.Errorf("ByeDPI exited unexpectedly")
-		}, 10809, label, nil
+		}, byeDPIPort, label, nil
 	}
 	return nil, 0, "", fmt.Errorf("unknown option %q", choice)
 }
@@ -166,12 +170,13 @@ func (t *terminal) start(choice, base string) {
 	if t.current() != nil && !t.stop() {
 		return
 	}
-	t.print("Checking Google Public DNS before starting the selected method...\n")
-	dns := dnscheck.CheckGoogleDNS(context.Background())
-	t.print("%s\n", dns.Format())
 	launch, port, label, err := terminalMode(choice, base, t.out)
 	if err != nil {
 		t.print("Cannot start: %v\n", err)
+		return
+	}
+	if err := portFree(port); err != nil {
+		t.print("Cannot start %s: %v\n", label, err)
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -179,11 +184,19 @@ func (t *terminal) start(choice, base string) {
 		choice: choice, name: label, port: port, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 	}
 	t.mu.Lock()
-	t.active, t.status, t.results, t.assessments = s, "starting local core", nil, nil
+	t.active, t.status, t.results, t.assessments = s, "checking DNS", nil, nil
 	t.mu.Unlock()
-	t.print("\nStarting %s...\n", label)
+	t.print("\nStarting %s (DNS preflight first; the menu stays usable)...\n", label)
+	// The DNS preflight runs inside the session goroutine: a network that
+	// silently drops 8.8.8.8 must not freeze the menu or the Ctrl+C handler.
 	go func() {
-		err := launch(ctx)
+		var err error
+		dns := dnscheck.CheckGoogleDNS(ctx)
+		if ctx.Err() == nil {
+			t.setStatus(s, "starting local core")
+			t.print("%s\n", dns.Format())
+			err = launch(ctx, &dns)
+		}
 		close(s.done)
 		if ctx.Err() != nil {
 			return
@@ -199,48 +212,36 @@ func (t *terminal) start(choice, base string) {
 	go t.waitAndCheck(ctx, s)
 }
 
+// coreReadyLimit covers the DNS preflight, "xray version", "xray run -test"
+// (the first launch of an unsigned core can sit in antivirus scanning) and the
+// listener opening. A fixed few seconds misreported slow starts as failures.
+const coreReadyLimit = 45 * time.Second
+
 func (t *terminal) waitAndCheck(ctx context.Context, s *cliSession) {
-	deadline := time.NewTimer(7 * time.Second)
-	defer deadline.Stop()
-	tick := time.NewTicker(120 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.done:
-			return
-		case <-deadline.C:
-			t.setStatus(s, "proxy did not open in 7 seconds; check core errors")
-			t.print("\n%s: proxy did not open at 127.0.0.1:%d.\n", s.name, s.port)
-			return
-		case <-tick.C:
-			conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", s.port), 200*time.Millisecond)
-			if err == nil {
-				_ = conn.Close()
-				t.setStatus(s, "local proxy listening; checking real websites")
-				t.print("\nProxy listening at 127.0.0.1:%d. Verifying YouTube and Google via SOCKS...\n", s.port)
-				t.check(ctx, s)
-				return
-			}
-		}
+	if waitForPort(ctx, s.done, s.port, coreReadyLimit) {
+		t.setStatus(s, "local proxy listening; checking real websites")
+		t.print("\nProxy listening at 127.0.0.1:%d. Verifying YouTube and Google via SOCKS...\n", s.port)
+		t.check(ctx, s)
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case <-s.done:
+		// The core already reported why it stopped.
+	default:
+		t.setStatus(s, "proxy did not open; check core errors")
+		t.print("\n%s: proxy did not open at 127.0.0.1:%d within %s.\n", s.name, s.port, coreReadyLimit)
 	}
 }
 
 func (t *terminal) check(ctx context.Context, s *cliSession) {
 	// Check ordinary OS routing and the selected SOCKS path at the same time.
-	// A third-party VPN may transparently carry either one; inspect possible
-	// VPN clients both before and after, including split tunnel users.
-	checkCtx, cancel := context.WithTimeout(ctx, 24*time.Second)
-	defer cancel()
-	directCh := make(chan []quickcheck.Result, 1)
-	go func() { directCh <- quickcheck.RunDirect(checkCtx, 8*time.Second) }()
-	proxied := quickcheck.Run(checkCtx, s.port, 8*time.Second)
-	direct := <-directCh
+	// A third-party VPN may transparently carry either one, so the user keeps
+	// control of VPN state for a meaningful comparison.
+	proxied, compared := measure(ctx, s.port)
 	if ctx.Err() != nil || t.current() != s {
 		return
 	}
-	compared := quickcheck.Compare(proxied, direct)
 	candidates := 0
 	for _, a := range compared {
 		switch a.Kind {

@@ -92,6 +92,9 @@ type Config struct {
 	Variant    string
 	AssetDir   string
 	Output     io.Writer
+	// DNS is an optional, already measured Google DNS preflight. When nil, Run
+	// measures it itself; callers that did so (the menu) avoid a second wait.
+	DNS *dnscheck.Result
 }
 
 var versionPattern = regexp.MustCompile(`(?m)\bXray\s+(\d+)\.(\d+)\.(\d+)\b`)
@@ -128,7 +131,12 @@ func Run(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
-	google := dnscheck.CheckGoogleDNS(ctx)
+	var google dnscheck.Result
+	if c.DNS != nil {
+		google = *c.DNS
+	} else {
+		google = dnscheck.CheckGoogleDNS(ctx)
+	}
 	if c.Output != nil {
 		fmt.Fprintln(c.Output, "DNS preflight:", google.Format())
 	}

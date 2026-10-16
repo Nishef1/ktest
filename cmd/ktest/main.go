@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -29,6 +28,21 @@ import (
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
+
+const usageText = `ktest: diagnostics and local proxy launcher
+
+Everyday use (from the extracted portable folder):
+  ktest               interactive menu
+  ktest auto          try Xray B, Xray A, ByeDPI in turn; keep the first that passes real HTTPS checks
+  ktest doctor        check the package, ports, DNS and direct reachability; changes nothing
+
+Other commands:
+  ktest scan          bounded Cloudflare IP candidate check
+  ktest revive        run one Xray profile:  -xray -profile -variant -assets
+  ktest access        domain-scoped CONNECT proxy backed by SNI-Spoofing-Go
+  ktest path          DNS / TCP / TLS stage diagnosis
+  ktest probe|compare|edges|echo   controlled-origin experiments (see docs/)
+`
 
 func run(args []string) int {
 	// Internal schema-check export: no networking or core startup.
@@ -70,6 +84,17 @@ func run(args []string) int {
 	if len(args) == 0 {
 		return interactiveMenu()
 	}
+	switch args[0] {
+	case "auto":
+		return runAuto(args[1:])
+	case "doctor":
+		return runDoctor(args[1:])
+	case "menu":
+		return interactiveMenu()
+	case "help", "-h", "-help", "--help":
+		fmt.Print(usageText)
+		return 0
+	}
 	if len(args) > 0 && args[0] == "edges" {
 		return runEdges(args[1:])
 	}
@@ -86,7 +111,7 @@ func run(args []string) int {
 		return runEcho(args[1:])
 	}
 	if len(args) == 0 || (args[0] != "probe" && args[0] != "compare") {
-		fmt.Fprintln(os.Stderr, "usage: ktest probe|compare -url https://example.org [options]")
+		fmt.Fprint(os.Stderr, usageText)
 		return 2
 	}
 	command := args[0]
@@ -354,40 +379,6 @@ func interactiveMenu() int {
 		return 1
 	}
 	return runInteractive(os.Stdin, os.Stdout, filepath.Dir(path))
-}
-
-// runPackagedByeDPI launches an already bundled upstream executable, without
-// installing a service, changing DNS or enabling a system-wide proxy.
-func runPackagedByeDPI(option string) int {
-	base, err := os.Executable()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	binary := filepath.Join(filepath.Dir(base), "cores", "ciadpi")
-	if runtime.GOOS == "windows" {
-		binary += ".exe"
-	}
-	if _, err := os.Stat(binary); err != nil {
-		fmt.Println("ByeDPI is not included for this operating system in this package.")
-		return 1
-	}
-	args := []string{"-i", "127.0.0.1", "-p", "10809"}
-	if option == "3" {
-		args = append(args, "--auto=torst", "--timeout", "3", "--tlsrec", "3+s")
-	} else {
-		args = append(args, "--tlsrec", "3+s")
-	}
-	fmt.Println("Local SOCKS5 at 127.0.0.1:10809. Point your app to this address. Ctrl+C stops the core.")
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil && ctx.Err() == nil {
-		fmt.Fprintln(os.Stderr, "ByeDPI:", err)
-		return 1
-	}
-	return 0
 }
 
 // runQuickScan verifies selected CDN candidates through a real TLS connection.

@@ -45,7 +45,7 @@ type Result struct {
 	TotalDurationMS int64  `json:"total_duration_ms"`
 }
 
-func Run(parent context.Context, cfg Config) (Result, error) {
+func Run(parent context.Context, cfg Config) (res Result, runErr error) {
 	u, err := url.Parse(cfg.URL)
 	if err != nil || u == nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil || u.Opaque != "" {
 		return Result{}, errors.New("URL must use http or https, with a hostname and without user info")
@@ -77,29 +77,37 @@ func Run(parent context.Context, cfg Config) (Result, error) {
 	ctx, cancel := context.WithTimeout(parent, cfg.Timeout)
 	defer cancel()
 	start := time.Now()
-	res := Result{TargetHost: u.Hostname(), Network: cfg.Network, ConnectOverride: cfg.ConnectAddr != "", DNSStatus: "not_run", TCPStatus: "not_run", TLSStatus: "not_run"}
+	res = Result{TargetHost: u.Hostname(), Network: cfg.Network, ConnectOverride: cfg.ConnectAddr != "", DNSStatus: "not_run", TCPStatus: "not_run", TLSStatus: "not_run"}
 
 	// DNS is measured independently even with a pinned TCP address: a DNS
 	// failure is not allowed to mask a functional, explicitly pinned route.
-	dnsStart := time.Now()
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
-	res.DNSDurationMS = time.Since(dnsStart).Milliseconds()
-	if err != nil {
-		res.DNSStatus, res.DNSError = "failed", err.Error()
-	} else {
-		res.DNSStatus = "ok"
-		for _, ip := range ips {
-			if ip.IP.To4() != nil {
-				res.DNSIPv4Count++
-			} else if ip.IP.To16() != nil {
-				res.DNSIPv6Count++
-			}
+	// With a pinned address the lookup runs concurrently, so a resolver that
+	// hangs (common on filtered networks) cannot consume the TCP/TLS budget.
+	dnsDone := make(chan dnsOutcome, 1)
+	go func() { dnsDone <- lookupHost(ctx, u.Hostname()) }()
+	collectDNS := func() error {
+		out := <-dnsDone
+		res.DNSDurationMS = out.duration.Milliseconds()
+		if out.err != nil {
+			res.DNSStatus, res.DNSError = "failed", out.err.Error()
+			return out.err
 		}
+		res.DNSStatus = "ok"
+		res.DNSIPv4Count, res.DNSIPv6Count = out.v4, out.v6
+		return nil
 	}
-	if err != nil && cfg.ConnectAddr == "" {
-		res.TCPStatus, res.TLSStatus, res.Outcome = "skipped", "skipped", "dns_unresolved"
-		res.TotalDurationMS = time.Since(start).Milliseconds()
-		return res, nil
+	if cfg.ConnectAddr == "" {
+		// Without a pinned address the dial depends on this lookup.
+		if collectDNS() != nil {
+			res.TCPStatus, res.TLSStatus, res.Outcome = "skipped", "skipped", "dns_unresolved"
+			res.TotalDurationMS = time.Since(start).Milliseconds()
+			return res, nil
+		}
+	} else {
+		defer func() {
+			_ = collectDNS()
+			res.TotalDurationMS = time.Since(start).Milliseconds()
+		}()
 	}
 
 	address := u.Host
@@ -148,4 +156,24 @@ func Run(parent context.Context, cfg Config) (Result, error) {
 	_ = tlsConn.Close()
 	res.TotalDurationMS = time.Since(start).Milliseconds()
 	return res, nil
+}
+
+type dnsOutcome struct {
+	v4, v6   int
+	duration time.Duration
+	err      error
+}
+
+func lookupHost(ctx context.Context, host string) dnsOutcome {
+	began := time.Now()
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	out := dnsOutcome{duration: time.Since(began), err: err}
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			out.v4++
+		} else if ip.IP.To16() != nil {
+			out.v6++
+		}
+	}
+	return out
 }

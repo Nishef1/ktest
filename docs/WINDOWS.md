@@ -27,3 +27,13 @@ Before Fragment A/B, ktest sends actual Google Public DNS TXT identity queries t
 Menu #5 scans up to 300 diverse official Cloudflare IPv4 candidates, six concurrent HTTPS requests maximum, and tries to find 10 *real TLS-verified provider HTTPS* responses. Ctrl+C cancels. The output **does not** establish that SNI/Host domain fronting works for other websites. CLI: `ktest scan -provider cloudflare -limit 100` or increase to 300. A small Akamai/Google/Fastly list is still available through flags.
 
 **Windscribe heuristics were removed on request.** The app no longer checks the Windscribe process or VPN adapters, and it no longer blocks scanning based on them. For interpretable ISP results, disconnect any other VPN yourself. Proxy-vs-direct website results are still compared, but attribution assumes the user controlled the network state.
+
+
+## 2026-10-16 update: `auto`, `doctor` and startup fixes
+
+- `ktest auto` tries Xray Fragment B, Fragment A, ByeDPI adaptive and ByeDPI TLS slicing in order. Each is started, verified with real HTTPS requests through its own proxy and compared with the direct route; the first method that passes every target stays running until Ctrl+C. Options: `-methods 1,2,3,4`, `-hold=false` (verify and exit), `-v` (show core logs), `-ready 45s`. Exit code 1 means no method could be verified; the output lists each method's reason. It never changes system proxy, DNS or routes.
+- `ktest doctor` changes nothing. It checks the package files, the Xray version, both profile variants, ports 10808/10809, a real Google DNS query and direct YouTube/Google reachability, and says which layer to fix first.
+- Port conflicts are now detected before launch. v2rayN also defaults to 10808/10809, and an orphaned `xray.exe` keeps its port. Previously the readiness probe connected to that foreign listener and the website check measured someone else's proxy.
+- The menu waits up to 45 s for a core's port instead of a fixed 7 s, and no longer repeats the DNS preflight. The preflight runs in the background, so a network that drops 8.8.8.8 no longer freezes the menu or Ctrl+C. UDP and TCP DNS probes run in parallel.
+- `ktest path -connect` runs its DNS lookup concurrently with TCP/TLS. A hanging resolver can no longer consume the whole timeout and report a working pinned address as `tcp_unavailable`.
+- CDN candidate IPs no longer end in `.0` or `.255`.

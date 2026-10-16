@@ -44,8 +44,17 @@ func CloudflareCandidates(max int) ([]string, error) {
 		base := binary.BigEndian.Uint32(p.Addr().AsSlice())
 		capacity := uint64(1) << uint(32-p.Bits())
 		offset := uint32(1 + uint64(slot)*(capacity-2)/uint64(slots+1))
+		addr := base + offset
+		// Network (.0) and broadcast (.255) style endings are poor probes of a
+		// real edge; nudge to a neighbouring host address inside the prefix.
+		switch addr & 0xff {
+		case 0:
+			addr++
+		case 0xff:
+			addr--
+		}
 		var ip [4]byte
-		binary.BigEndian.PutUint32(ip[:], base+offset)
+		binary.BigEndian.PutUint32(ip[:], addr)
 		out = append(out, netip.AddrFrom4(ip).String())
 	}
 	return out, nil

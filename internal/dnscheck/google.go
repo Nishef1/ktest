@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,8 +21,13 @@ type Result struct {
 // It only measures this moment's reachability; UDP 53 is not encrypted.
 func CheckGoogleDNS(ctx context.Context) Result {
 	r := Result{}
-	r.UDP = check(ctx, "udp", "8.8.8.8:53")
-	r.TCP = check(ctx, "tcp", "8.8.8.8:53")
+	// Both transports are probed at once: on a network that silently drops
+	// 8.8.8.8 the preflight costs one timeout, not two.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); r.UDP = check(ctx, "udp", "8.8.8.8:53") }()
+	go func() { defer wg.Done(); r.TCP = check(ctx, "tcp", "8.8.8.8:53") }()
+	wg.Wait()
 	if r.UDP {
 		r.Notes = append(r.Notes, "8.8.8.8 UDP DNS identity verified")
 	}
