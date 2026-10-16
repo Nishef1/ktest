@@ -75,7 +75,7 @@ type connectOptions struct {
 	noWarp     bool
 	noHTTP     bool
 	httpListen string
-	exitSocks   string
+	exitSocks  string
 	tun        bool
 	cert       bool
 	forceFront bool
