@@ -162,7 +162,14 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	out, err := m.command(ctx, "status")
 	state, loggedIn := parseWindscribeStatus(string(out))
 	if err != nil || !loggedIn {
-		state = windscribeUnknown
+		// A transient CLI/IPC error is not proof of VPN disconnection.
+		// Keep a previously confirmed connected state rather than activating
+		// traffic recovery while the VPN may still be running.
+		if m.Connected() {
+			state = windscribeConnected
+		} else {
+			state = windscribeUnknown
+		}
 	}
 	m.mu.Lock()
 	previous := m.state
