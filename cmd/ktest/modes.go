@@ -54,7 +54,7 @@ func (m ConnectionMode) message() string {
 	case ModeFast:
 		return "Speed first: direct, fronting, desync and VPN exits can win; public IP may change by site."
 	case ModeWindscribe:
-		return "IP-preserving local anti-DPI only (Xray TCP fragmentation, ByeDPI and TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."
+		return "OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI, optional own Cloudflare hostname) plus IP-preserving local anti-DPI (Xray TCP fragmentation, ByeDPI, TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."
 	case ModeVPN:
 		return "Exit-only: one verified foreign upstream pinned for this session; no direct fallback for managed apps."
 	case ModeTor:

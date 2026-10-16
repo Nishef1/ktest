@@ -23,6 +23,7 @@ import (
 	"github.com/Nishef1/ktest/internal/revive"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 	"github.com/Nishef1/ktest/internal/systemtun"
+	"github.com/Nishef1/ktest/internal/wstunnel"
 )
 
 const (
@@ -97,6 +98,7 @@ type connectOptions struct {
 	aiDirect            bool
 	windscribeCLI       string
 	windscribeReconnect bool
+	ws                  wsOptions
 	tun                 bool
 	cert                bool
 	forceFront          bool
@@ -110,6 +112,7 @@ type connectOptions struct {
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
 		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12, windscribeReconnect: true,
+		ws:      wsOptions{direct: true, sni: "www.speedtest.net"},
 		stagger: 250 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
 		stopHint: "Press Ctrl+C to disconnect",
 	}
@@ -123,6 +126,13 @@ func runConnect(args []string) int {
 	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, vpn (all exit-only), tor (Tor-only)")
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", "", "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
+	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: carry OpenVPN TCP inside WStunnel straight to the Windscribe server with a chosen SNI")
+	fs.StringVar(&o.ws.sni, "windscribe-wstunnel-sni", o.ws.sni, "comma-separated TLS SNIs for the direct WStunnel carrier (rotated)")
+	fs.StringVar(&o.ws.serverIP, "windscribe-wstunnel-ip", "", "Windscribe WStunnel server IP (default: the OpenVPN TCP IP minus one, as Windscribe numbers its nodes)")
+	fs.StringVar(&o.ws.path, "windscribe-wstunnel-path", "", "WStunnel path (default "+wstunnel.DefaultPath+")")
+	fs.StringVar(&o.ws.cdnHost, "windscribe-cdn", "", "your Cloudflare hostname whose proxied DNS record points at a Windscribe WStunnel IP; tried first")
+	fs.StringVar(&o.ws.cdnSNI, "windscribe-cdn-sni", "", "TLS SNI for the CDN carrier (default: -windscribe-cdn)")
+	fs.StringVar(&o.ws.cdnEdges, "windscribe-cdn-edge", "", "comma-separated CDN edge IPs to connect to (default: resolve -windscribe-cdn)")
 	fs.StringVar(&o.listen, "listen", o.listen, "loopback SOCKS5 address for your applications")
 	fs.IntVar(&o.strategies, "strategies", o.strategies, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")
 	fs.BoolVar(&o.noXray, "no-xray", false, "do not run Xray profiles (including generated local TCP methods in Windscribe mode)")
@@ -162,6 +172,14 @@ func runConnect(args []string) int {
 		fmt.Fprintln(os.Stderr, "Windscribe mode forbids -exit-socks: no foreign proxy/VPN exit may be used")
 		return 2
 	}
+	if err := o.ws.validate(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if o.mode != ModeWindscribe && o.ws.cdnHost != "" {
+		fmt.Fprintln(os.Stderr, "-windscribe-cdn only applies to -mode windscribe")
+		return 2
+	}
 	if o.mode == ModeWindscribe && o.tun {
 		fmt.Fprintln(os.Stderr, "Windscribe bootstrap cannot run with ktest -tun; stop ktest's whole-PC tunnel first")
 		return 2
@@ -196,6 +214,10 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	t := s.t
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
+		if strings.HasPrefix(e.Path, "wstunnel") {
+			t.Line(toneInfo, "%-26s Windscribe WStunnel answered (HTTP 101) via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
+			return
+		}
 		t.Line(toneInfo, "%-26s TCP proxy accepted via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
 		return
 	}
@@ -567,7 +589,15 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if !o.noHTTP {
 		var stopHTTP func()
 		if o.mode == ModeWindscribe {
-			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String(), proxy.DialWindscribeLocal)
+			dial := proxy.DialWindscribeLocal
+			if o.ws.enabled() {
+				logf := cfg.Logf
+				if logf == nil {
+					logf = func(string, ...any) {}
+				}
+				dial = newWSBridge(o.ws, proxy.DialWindscribeLocal, cfg.OnEvent, logf).Dial
+			}
+			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String(), dial)
 		} else {
 			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String())
 		}

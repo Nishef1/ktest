@@ -1,0 +1,344 @@
+// Package wstunnel speaks the client side of Windscribe's WStunnel transport:
+// an HTTP/1.1 WebSocket upgrade to /tcp/127.0.0.1/<port> on a Windscribe
+// server, after which binary WebSocket messages carry the OpenVPN TCP stream.
+// The wire format matches https://github.com/Windscribe/wstunnel (cli package).
+//
+// The TLS layer uses a browser ClientHello and lets the caller choose the SNI,
+// so the same stream can go straight to a Windscribe server or through a CDN
+// hostname the user controls whose origin is a Windscribe WStunnel server.
+package wstunnel
+
+import (
+	"bufio"
+	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	utls "github.com/refraction-networking/utls"
+)
+
+// DefaultPath is the path Windscribe's desktop client requests: its WStunnel
+// server forwards the stream to the node's local OpenVPN TCP server.
+const DefaultPath = "/tcp/127.0.0.1/1194"
+
+// Config describes one WStunnel attempt.
+type Config struct {
+	// Addr is the TCP destination host:port: a Windscribe server or a CDN edge.
+	Addr string
+	// SNI is the TLS server name; empty sends none (as the official client
+	// does for an IP address).
+	SNI string
+	// Host is the HTTP Host header: the server IP in direct mode, the user's
+	// CDN hostname in CDN mode.
+	Host string
+	// Path is the WebSocket request path; empty means DefaultPath.
+	Path string
+	// Verify checks the certificate chain against SNI (CDN mode). Without it,
+	// VerifyPeer, when set, still decides whether to accept the peer.
+	Verify     bool
+	VerifyPeer func(certs []*x509.Certificate) error
+	// Dial opens the TCP leg (directly or through a local anti-DPI core).
+	Dial func(ctx context.Context, addr string) (net.Conn, error)
+	// Timeout bounds TCP, TLS and the upgrade together; 0 means 12 s.
+	Timeout time.Duration
+}
+
+const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+// Dial opens the TCP leg, completes TLS and the WebSocket upgrade, and
+// returns a stream whose Read/Write carry the raw tunneled bytes. HTTP 101
+// proves a WStunnel server answered; it does not prove the VPN handshake.
+func Dial(ctx context.Context, c Config) (net.Conn, error) {
+	if c.Dial == nil || c.Addr == "" || c.Host == "" {
+		return nil, errors.New("wstunnel: Addr, Host and Dial are required")
+	}
+	if c.Verify && c.SNI == "" {
+		return nil, errors.New("wstunnel: certificate verification needs an SNI")
+	}
+	path := c.Path
+	if path == "" {
+		path = DefaultPath
+	}
+	if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, " \r\n") {
+		return nil, fmt.Errorf("wstunnel: invalid path %q", path)
+	}
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 12 * time.Second
+	}
+	dctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	raw, err := c.Dial(dctx, c.Addr)
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(dctx, func() { _ = raw.Close() })
+	conn, br, err := handshake(dctx, raw, c, path)
+	if !stop() || err != nil {
+		_ = raw.Close()
+		if err == nil {
+			err = dctx.Err()
+		}
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return &Conn{c: conn, r: br}, nil
+}
+
+func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Conn, *bufio.Reader, error) {
+	if dl, ok := ctx.Deadline(); ok {
+		_ = raw.SetDeadline(dl)
+	}
+	conf := &utls.Config{
+		ServerName:         c.SNI,
+		InsecureSkipVerify: !c.Verify,
+		MinVersion:         tls.VersionTLS12,
+	}
+	if c.VerifyPeer != nil {
+		check := c.VerifyPeer
+		conf.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			certs := make([]*x509.Certificate, 0, len(rawCerts))
+			for _, b := range rawCerts {
+				cert, err := x509.ParseCertificate(b)
+				if err != nil {
+					return err
+				}
+				certs = append(certs, cert)
+			}
+			return check(certs)
+		}
+	}
+	u := utls.UClient(raw, conf, utls.HelloChrome_Auto)
+	if err := u.BuildHandshakeState(); err != nil {
+		return nil, nil, err
+	}
+	onlyHTTP11(u)
+	if err := u.HandshakeContext(ctx); err != nil {
+		return nil, nil, fmt.Errorf("TLS: %w", err)
+	}
+	keyBytes := make([]byte, 16)
+	if _, err := rand.Read(keyBytes); err != nil {
+		return nil, nil, err
+	}
+	key := base64.StdEncoding.EncodeToString(keyBytes)
+	req := "GET " + path + " HTTP/1.1\r\nHost: " + c.Host + "\r\nUser-Agent: Go-http-client/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
+	if _, err := io.WriteString(u, req); err != nil {
+		return nil, nil, err
+	}
+	br := bufio.NewReaderSize(u, 32<<10)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("upgrade: %w", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		return nil, nil, fmt.Errorf("upgrade refused: HTTP %d", resp.StatusCode)
+	}
+	if !strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") || resp.Header.Get("Sec-WebSocket-Accept") != acceptKey(key) {
+		return nil, nil, errors.New("upgrade: not a WebSocket server")
+	}
+	return u, br, nil
+}
+
+// onlyHTTP11 offers exactly http/1.1: a WebSocket upgrade cannot use h2.
+func onlyHTTP11(u *utls.UConn) {
+	exts := u.Extensions[:0]
+	for _, e := range u.Extensions {
+		switch x := e.(type) {
+		case *utls.ALPNExtension:
+			x.AlpnProtocols = []string{"http/1.1"}
+		case *utls.ApplicationSettingsExtension:
+			continue
+		}
+		exts = append(exts, e)
+	}
+	u.Extensions = exts
+}
+
+func acceptKey(key string) string {
+	h := sha1.Sum([]byte(key + wsGUID))
+	return base64.StdEncoding.EncodeToString(h[:])
+}
+
+// Conn carries a byte stream in binary WebSocket messages (client side).
+type Conn struct {
+	c         net.Conn
+	r         *bufio.Reader
+	wmu       sync.Mutex
+	remaining int64 // unread payload of the current data frame
+	mask      [4]byte
+	masked    bool
+	maskPos   int
+	closed    bool
+}
+
+const (
+	opCont   = 0x0
+	opText   = 0x1
+	opBinary = 0x2
+	opClose  = 0x8
+	opPing   = 0x9
+	opPong   = 0xA
+	maxFrame = 16 << 10
+)
+
+func (w *Conn) writeFrame(op byte, payload []byte) error {
+	header := make([]byte, 0, 14)
+	header = append(header, 0x80|op)
+	n := len(payload)
+	switch {
+	case n < 126:
+		header = append(header, 0x80|byte(n))
+	case n <= 0xFFFF:
+		header = append(header, 0x80|126, byte(n>>8), byte(n))
+	default:
+		header = append(header, 0x80|127)
+		header = binary.BigEndian.AppendUint64(header, uint64(n))
+	}
+	var mask [4]byte
+	if _, err := rand.Read(mask[:]); err != nil {
+		return err
+	}
+	header = append(header, mask[:]...)
+	frame := append(header, payload...)
+	body := frame[len(header):]
+	for i := range body {
+		body[i] ^= mask[i&3]
+	}
+	w.wmu.Lock()
+	defer w.wmu.Unlock()
+	_, err := w.c.Write(frame)
+	return err
+}
+
+// Write sends p as one or more binary messages, like the official client
+// which sends each TCP read as its own message.
+func (w *Conn) Write(p []byte) (int, error) {
+	written := 0
+	for len(p) > 0 {
+		n := min(len(p), maxFrame)
+		if err := w.writeFrame(opBinary, p[:n]); err != nil {
+			return written, err
+		}
+		written += n
+		p = p[n:]
+	}
+	return written, nil
+}
+
+// Read returns tunneled bytes, answering pings and ending at a close frame.
+func (w *Conn) Read(p []byte) (int, error) {
+	for w.remaining == 0 {
+		if err := w.nextFrame(); err != nil {
+			return 0, err
+		}
+	}
+	if int64(len(p)) > w.remaining {
+		p = p[:w.remaining]
+	}
+	n, err := w.r.Read(p)
+	if w.masked {
+		for i := 0; i < n; i++ {
+			p[i] ^= w.mask[w.maskPos&3]
+			w.maskPos++
+		}
+	}
+	w.remaining -= int64(n)
+	if err == io.EOF && w.remaining > 0 {
+		err = io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
+func (w *Conn) nextFrame() error {
+	var h [2]byte
+	if _, err := io.ReadFull(w.r, h[:]); err != nil {
+		return err
+	}
+	op := h[0] & 0x0F
+	masked := h[1]&0x80 != 0
+	length := int64(h[1] & 0x7F)
+	switch length {
+	case 126:
+		var b [2]byte
+		if _, err := io.ReadFull(w.r, b[:]); err != nil {
+			return err
+		}
+		length = int64(binary.BigEndian.Uint16(b[:]))
+	case 127:
+		var b [8]byte
+		if _, err := io.ReadFull(w.r, b[:]); err != nil {
+			return err
+		}
+		v := binary.BigEndian.Uint64(b[:])
+		if v > 1<<40 {
+			return errors.New("wstunnel: frame too large")
+		}
+		length = int64(v)
+	}
+	var mask [4]byte
+	if masked {
+		if _, err := io.ReadFull(w.r, mask[:]); err != nil {
+			return err
+		}
+	}
+	switch op {
+	case opBinary, opCont:
+		w.remaining, w.mask, w.masked, w.maskPos = length, mask, masked, 0
+		return nil
+	case opText:
+		return errors.New("wstunnel: unexpected text message")
+	}
+	if length > 125 {
+		return errors.New("wstunnel: oversized control frame")
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(w.r, payload); err != nil {
+		return err
+	}
+	if masked {
+		for i := range payload {
+			payload[i] ^= mask[i&3]
+		}
+	}
+	switch op {
+	case opPing:
+		return w.writeFrame(opPong, payload)
+	case opPong:
+		return nil
+	case opClose:
+		_ = w.writeFrame(opClose, nil)
+		return io.EOF
+	}
+	return fmt.Errorf("wstunnel: unknown opcode %d", op)
+}
+
+// Close sends a close frame (best effort) and closes the TCP leg.
+func (w *Conn) Close() error {
+	w.wmu.Lock()
+	already := w.closed
+	w.closed = true
+	w.wmu.Unlock()
+	if !already {
+		_ = w.c.SetWriteDeadline(time.Now().Add(time.Second))
+		_ = w.writeFrame(opClose, []byte{0x03, 0xE8})
+	}
+	return w.c.Close()
+}
+
+func (w *Conn) LocalAddr() net.Addr                { return w.c.LocalAddr() }
+func (w *Conn) RemoteAddr() net.Addr               { return w.c.RemoteAddr() }
+func (w *Conn) SetDeadline(t time.Time) error      { return w.c.SetDeadline(t) }
+func (w *Conn) SetReadDeadline(t time.Time) error  { return w.c.SetReadDeadline(t) }
+func (w *Conn) SetWriteDeadline(t time.Time) error { return w.c.SetWriteDeadline(t) }

@@ -21,13 +21,42 @@ Menu option **8** launches the same mode. Windscribe **Proxy Settings** (not Pro
 
 The local HTTP proxy is just a loopback bridge. **HTTP does NOT mean Windscribe's VPN destination port must be 80**. Start with **OpenVPN TCP port 443**. The supplied Windscribe 2.25.4 Windows logs explicitly ignore the LAN proxy for WireGuard, IKEv2, Stealth and WStunnel. Use OpenVPN TCP to test this bootstrap; a connection through those other protocols does not verify ktest's VPN transport. ktest reports the selected protocol when it observes a connecting/connected non-TCP tunnel. Do not combine ktest **whole-PC TUN** with Windscribe.
 
+## WStunnel bridge: chosen SNI, optional own CDN
+
+Set Windscribe to **OpenVPN TCP** (port 443) with the HTTP proxy above. Windscribe then sends `CONNECT <OpenVPN TCP IP>:443` to ktest. ktest waits for the first bytes: TLS/HTTP (Windscribe API) keeps the local anti-DPI dialer; anything else is OpenVPN and is re-wrapped exactly like Windscribe's own **WStunnel** protocol ([source](https://github.com/Windscribe/wstunnel)): TLS, then a WebSocket upgrade to `/tcp/127.0.0.1/1194`, then binary messages. The Windscribe node forwards that to its own OpenVPN server, so credentials, encryption and the public exit stay Windscribe's. Differences from the official client: a Chrome-like TLS ClientHello offering only `http/1.1`, and a **chosen SNI**.
+
+Carriers, tried in this order for each new OpenVPN connection (rotation starts after the last one used; a carrier whose stream stayed up ≥1 min and received ≥64 KiB stays first):
+
+1. **CDN** (only with `-windscribe-cdn`): TLS to a CDN edge with SNI = your hostname (or `-windscribe-cdn-sni`), certificate **verified** against that SNI, `Host:` your hostname. Direct TCP first, then the TCP leg through local anti-DPI.
+2. **Direct WStunnel**: TLS straight to the node's WStunnel address with SNI from `-windscribe-wstunnel-sni` (comma-separated, default `www.speedtest.net`). The WStunnel address is the OpenVPN TCP address **minus one** (observed: `68.67.118.163` → `.162`, `198.44.157.28` → `.27`); override with `-windscribe-wstunnel-ip`. The server certificate must name a `*.windscribe.com` host, otherwise the carrier is refused. Direct TCP first, then through local anti-DPI.
+3. **Raw OpenVPN TCP** through local Xray/ByeDPI (the previous behaviour).
+
+`-windscribe-wstunnel=false` disables carrier 2. HTTP 101 proves the Windscribe WStunnel server answered; it is reported as `Windscribe WStunnel answered (HTTP 101) … VPN handshake not verified`.
+
+Measured on 2026-10-16 on the author's ISP with Windscribe disconnected: Windscribe's own WStunnel client failed against `68.67.118.162` (timeout / `tls: illegal parameter`), while this bridge with SNI `www.speedtest.net` got HTTP 101 from `68.67.118.162` and `198.44.157.27`, and a tls-auth-signed OpenVPN `P_CONTROL_HARD_RESET_CLIENT_V2` sent through it was answered with `P_CONTROL_HARD_RESET_SERVER_V2` by both. A full Windscribe login and sustained data transfer through the bridge is **not yet verified**.
+
+### Optional: your own Cloudflare hostname
+
+ktest cannot create this for you; it needs your Cloudflare account and a domain on it.
+
+1. Pick one Windscribe location and its WStunnel IP (Windscribe log line `Connecting to IP: "…" protocol: "WStunnel"`, or OpenVPN TCP IP minus one).
+2. In Cloudflare DNS add an `A` record, e.g. `ws.example.com` → that IP, **Proxied** (orange cloud).
+3. SSL/TLS mode **Full** (not *Full (strict)*: the origin presents a `windscribe.com` certificate). WebSockets stay on (default).
+4. Optionally find reachable Cloudflare edge IPs (`ktest edges`, see [FRONTING.md](FRONTING.md)).
+
+```powershell
+go run ./cmd/ktest connect -mode windscribe -windscribe-cdn ws.example.com -windscribe-cdn-edge 104.16.0.1,172.67.0.1 -v
+```
+
+Every OpenVPN connection then reaches that **one** origin, whatever location Windscribe shows; keep Windscribe on the same location to avoid confusion. Cloudflare sees only TLS-wrapped OpenVPN between you and Windscribe; it is a transport hop, not an exit. Check Cloudflare's terms for your plan before relying on it.
+
 ## Allowed versus forbidden in Windscribe mode
 
-**Allowed:** generated local Xray TCP fragmentation, local ByeDPI/ciadpi SOCKS TCP handling, and built-in TLS ClientHello packet cutting. These transmit over the user's existing network rather than a foreign exit. ktest may use a trusted encrypted DNS resolver to resolve poisoned domain names. The `127.0.0.1:10800` SOCKS listener remains available; its non-TLS traffic may use only explicitly managed local TCP methods. Windscribe's HTTP CONNECT on `127.0.0.1:10801` rotates through local Xray/ByeDPI methods and returns **502** if no eligible local core accepts the request.
+**Allowed:** the WStunnel bridge above (direct to a certificate-checked Windscribe node, or through the CDN hostname you configured), generated local Xray TCP fragmentation, local ByeDPI/ciadpi SOCKS TCP handling, and built-in TLS ClientHello packet cutting. These transmit over the user's existing network rather than a foreign exit. ktest may use a trusted encrypted DNS resolver to resolve poisoned domain names. The `127.0.0.1:10800` SOCKS listener remains available; its non-TLS traffic may use only explicitly managed local TCP methods. Windscribe's HTTP CONNECT on `127.0.0.1:10801` rotates through local Xray/ByeDPI methods and returns **502** if no eligible local core accepts the request.
 
 Xray in this mode uses **only ktest-generated configuration**, with one loopback TCP SOCKS inbound and one `freedom` outbound whose `fragment.packets` is a numeric TCP-write range. It never reads `Serverless-for-Iran.json`, accepts a redirect, or chains another proxy. This differs from `tlshello` fragmentation: raw OpenVPN TCP frames are not TLS ClientHello records. Two local variants provide different fragment lengths/timing; they are candidates, not measured ISP successes. `-no-xray` disables both. See [Xray Freedom fragmentation](https://xtls.github.io/en/config/outbounds/freedom.html#fragmentobject).
 
-**Forbidden by code policy:** Aether (any profile), Psiphon (including CDN Fronting), WARP, Tor, remote/externally operated SOCKS5 and Workers, Xray subscription profiles with unknown external outbounds, **plain/no-method** paths, general CDN Fronting/HTTP takeover and the optional whole-PC TUN. A `-exit-socks` argument is rejected. The core router also refuses initial or dynamically added foreign exits and unapproved routes. The Windscribe mode does not prompt to install a MITM certificate.
+**Forbidden by code policy:** Aether (any profile), Psiphon (including CDN Fronting), WARP, Tor, remote/externally operated SOCKS5 and Workers, Xray subscription profiles with unknown external outbounds, **plain/no-method** paths, general CDN Fronting/HTTP takeover (the only CDN use is the WStunnel carrier to your own hostname) and the optional whole-PC TUN. A `-exit-socks` argument is rejected. The core router also refuses initial or dynamically added foreign exits and unapproved routes. The Windscribe mode does not prompt to install a MITM certificate.
 
 This conservative design intentionally avoids claiming an unchanged public identity when a third-party CDN relay might change the IP observed by the destination. Anti-DPI packet-shaping itself does not provide an external IP. Consequently it **cannot promise to reach a Windscribe server whose address is blocked independently of SNI/protocol**, and it cannot turn a failed raw OpenVPN TCP tunnel into a successful VPN on its own.
 
