@@ -115,6 +115,7 @@ type windscribeMonitor struct {
 	connectedOnce bool
 	proxy         *smartproxy.Proxy
 	nextReconnect time.Time
+	disconnectedSamples int
 }
 
 func (m *windscribeMonitor) State() windscribeState {
@@ -184,10 +185,19 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	if state == windscribeConnected {
 		m.connectedOnce = true
 	}
+	if state == windscribeDisconnected {
+		m.disconnectedSamples++
+	} else {
+		m.disconnectedSamples = 0
+	}
+	// Windscribe mode never enables foreign exits. Wait for a stable
+	// disconnected state and an available LOCAL ByeDPI path; otherwise the
+	// CLI would keep restarting an unreachable VPN every few seconds.
 	shouldReconnect := m.autoReconnect && state == windscribeDisconnected &&
-		p != nil && p.HasVerifiedExit() && !time.Now().Before(m.nextReconnect)
+		m.disconnectedSamples >= 3 && p != nil && p.HasLocalBypass() &&
+		!time.Now().Before(m.nextReconnect)
 	if shouldReconnect {
-		m.nextReconnect = time.Now().Add(60 * time.Second)
+		m.nextReconnect = time.Now().Add(3 * time.Minute)
 	}
 	m.mu.Unlock()
 	if changed {
@@ -195,7 +205,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		case windscribeConnected:
 			m.t.Line(toneOK, "Windscribe connected (CLI): standby; leaving VPN routing, IP and firewall to Windscribe")
 		case windscribeDisconnected:
-			m.t.Line(toneWarn, "Windscribe disconnected (CLI): ktest resumes exit discovery and TCP bootstrap")
+			m.t.Line(toneWarn, "Windscribe disconnected (CLI): ktest local anti-DPI TCP bootstrap ready; NO Psiphon/Aether or foreign exit")
 		case windscribeConnecting:
 			m.t.Note("Windscribe is connecting or validating its tunnel; no duplicate reconnect command")
 		default:
@@ -203,7 +213,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		}
 	}
 	if shouldReconnect {
-		m.t.Note("Verified exit available; asking Windscribe CLI to reconnect last selected location (cooldown 60s)")
+		m.t.Note("Local anti-DPI TCP proxy ready; requesting last Windscribe location (cooldown 3min, no IP-changing ktest exits)")
 		_, e := m.command(ctx, "connect", "-n")
 		if e != nil && ctx.Err() == nil {
 			m.t.Note("Windscribe reconnect command failed: %v", e)
