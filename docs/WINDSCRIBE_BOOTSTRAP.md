@@ -31,6 +31,18 @@ If `10801` is in use, SOCKS5 still works and Connect reports that the HTTP proxy
 
 **Note:** Windscribe may change routes or apply its own firewall during connection. If its firewall prevents the bootstrap proxy from being reached, diagnose that specific stage; do not permanently turn off the firewall as a "fix".
 
+## Optional external exit if Windscribe server IPs remain blocked
+
+If you already have a **working local SOCKS5 exit** from Tor, Psiphon, or a user-owned Cloudflare Worker (e.g. the independently deployed `bnkrr/cf-socks` agent), enable it as an additional **late fallback**:
+
+```powershell
+.\ktest.exe connect -exit-socks 127.0.0.1:10820
+```
+
+The `-exit-socks` argument must point to the already-running local SOCKS5 service, **not** ktest's own 10800/10801 ports. It does not download or deploy a Worker, Tor bridge, or Psiphon itself. The external exit is attempted when ordinary ktest paths fail or take too long (or when learned as the best route), and it is still **TCP-only**. Test the exit on its own first; a listener existing does not prove Internet access. Avoid proxy loops: an external proxy that itself forwards to ktest must not be registered this way.
+
+For the serverless route, see the reference implementation at https://github.com/bnkrr/cf-socks . Running a Worker requires your own Cloudflare account, an authenticated deployment, and a domain/Worker hostname reachable from your network. It is not guaranteed to work on a particular ISP.
+
 ## Prove the bootstrap path separately
 
 From a second PowerShell session:
