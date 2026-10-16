@@ -68,9 +68,6 @@ type Upstream struct {
 	// destination themselves via the user's network, never via a foreign exit.
 	// It is NOT inferred from a loopback address, which can hide a VPN.
 	LocalBypass bool
-	// LocalBypass means this is a ktest-managed, loopback-only DPI-evasion
-	// SOCKS core making direct connections, never a foreign exit.
-	LocalBypass bool
 	// Late keeps the path out of the race until every other path has failed or
 	// lateAfter has passed, unless it is the remembered first choice. An exit
 	// that carries everything through a third party should be the last resort,
@@ -424,66 +421,11 @@ func (p *Proxy) ResetBootstrapPin() {
 	p.mu.Unlock()
 }
 
-// HasLocalBypass reports a registered locally-run anti-DPI SOCKS strategy.
-// Port readiness is not proof that it can carry the VPN's entire handshake.
-func (p *Proxy) HasLocalBypass() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, u := range p.ups {
-		if u.LocalBypass && !u.Exit && u.Addr != "" && u.Takeover == nil {
-			return true
-		}
-	}
-	return false
-}
-
-// DialWindscribeLocal permits raw OpenVPN TCP only through a locally-run
-// anti-DPI SOCKS core. It never falls back to direct/plain, a remote exit,
-// TLS MITM/fronting takeover or a domain-specific service proxy. CONNECT 200
-// means the local anti-DPI core established TCP, NOT that OpenVPN worked.
+// DialWindscribeLocal is retained as a compatibility alias for existing
+// callers and tests. All policy checks and recovery rotation live in one
+// strict, loopback-only local anti-DPI implementation.
 func (p *Proxy) DialWindscribeLocal(ctx context.Context, host, port string) (net.Conn, error) {
-	p.mu.Lock()
-	pinned := p.bootstrapPinned
-	p.mu.Unlock()
-	var candidates []*upstreamState
-	for _, u := range p.order(host) {
-		if !u.LocalBypass || u.Exit || u.Addr == "" || u.Takeover != nil ||
-			(pinned != "" && pinned != u.Name) {
-			continue
-		}
-		candidates = append(candidates, u)
-	}
-	if len(candidates) == 0 {
-		return nil, errors.New("Windscribe: no local IP-preserving anti-DPI TCP path is available")
-	}
-	var lastErr error
-	for _, u := range candidates {
-		began := time.Now()
-		conn, err := p.dial(ctx, u.Upstream, host, port)
-		if err != nil {
-			p.record(u, host, false, time.Since(began))
-			lastErr = err
-			continue
-		}
-		p.mu.Lock()
-		if p.bootstrapPinned == "" {
-			p.bootstrapPinned = u.Name
-		}
-		accepted := p.bootstrapPinned == u.Name
-		p.mu.Unlock()
-		if !accepted {
-			_ = conn.Close()
-			continue
-		}
-		p.record(u, host, true, time.Since(began))
-		p.logf("Windscribe TCP %s:%s through local anti-DPI %s (no foreign exit)", host, port, u.Name)
-		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
-		return conn, nil
-	}
-	if lastErr != nil {
-		return nil, fmt.Errorf("Windscribe local bypass TCP failed: %w", lastErr)
-	}
-	return nil, errors.New("Windscribe local bypass was not usable")
+	return p.DialLocalBypass(ctx, host, port)
 }
 
 // DialVerifiedExit is for raw TCP carried by Windscribe's local HTTP proxy.
