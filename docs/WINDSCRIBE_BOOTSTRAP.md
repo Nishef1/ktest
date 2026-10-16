@@ -2,6 +2,15 @@
 
 The goal is **not** to replace Windscribe. It is to give the installed Windscribe desktop client an initial TCP path through ktest's existing censorship-circumvention methods. Once Windscribe establishes its own tunnel, Windscribe is the primary VPN and supplies the external IP.
 
+## Important diagnosis from the October 16 Windscribe log
+
+- An OpenVPN TCP CONNECT to the HTTP proxy received `HTTP/1.1 200 Connection Established`, **but OpenVPN did not complete a tunnel**; it waited and received a connection reset. This means the proxy listener worked, not that the Windscribe server IP was reachable for a VPN handshake.
+- A `sing-tun Tunnel` adapter was the Windows default route. This is ktest whole-PC mode and **must be stopped before using Windscribe**; the `windscribe` profile now refuses an active ktest sing-tun.
+- Windscribe explicitly logged `LAN proxy setting ignored because the connection protocol is not TCP` for its WireGuard attempt. TCP/443 OpenVPN, Stealth or WStunnel must be tested separately.
+- **HTTP** refers to how Windscribe connects to ktest on `127.0.0.1:10801`. It does **not** imply that Windscribe's actual server port should be 80: for WStunnel and the first OpenVPN TCP test, use 443.
+
+Run `ktest connect -mode windscribe` (without `-tun`) and make sure a real foreign exit comes up if the Windscribe server's IP is filtered. If no exit is ready, an HTTP CONNECT success alone is insufficient. Keep Windscribe Firewall in Automatic for initial troubleshooting, and use its own Always On only when the bootstrap/reconnect path has been verified. The ktest app does not manage Windscribe's firewall.
+
 ## Start ktest first
 
 Run from an extracted portable release, with Windscribe disconnected:
