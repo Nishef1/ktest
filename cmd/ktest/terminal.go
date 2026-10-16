@@ -397,7 +397,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 // offered first when domain fronting would need it. It reports false when stdin
 // closed.
 func (t *terminal) connectFromMenu(base string, lines <-chan string, readLine func() (string, bool), tun bool, mode ConnectionMode) bool {
-	if state := certState(); state != "ok" && !t.certDeclined && mode != ModeVPN && mode != ModeTor {
+	if state := certState(); state != "ok" && !t.certDeclined && mode != ModeVPN && mode != ModeTor && mode != ModeWindscribe {
 		why := map[string]string{
 			"missing":   "Domain fronting (YouTube, X, Instagram, Reddit ...) needs a local certificate that is not set up.",
 			"outdated":  "The local certificate predates sites this ktest can front.",
