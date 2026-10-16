@@ -33,24 +33,27 @@ func main() {
 
 const usageText = `ktest: free access toolkit
 
-Everyday use (from the extracted portable folder):
-  ktest               menu: Connect, Diagnose, Advanced
-  ktest connect       connect now: balanced routes; AI hostnames require foreign exit
-  ktest connect -mode fast        fastest reachable route; IP can vary
-  ktest connect -mode windscribe  Windscribe TCP bootstrap; no ktest TUN
-  ktest connect -mode vpn         verified foreign exit only, sticky per session
-  ktest connect -mode tor         only Tor via bundled Aether, or -exit-socks
-  ktest doctor        diagnose this network and the package; changes nothing
+  ktest                    menu
+  ktest connect            Balanced: every method races; AI sites only via a foreign exit
+    -mode fast             fastest working route per site; public IP may change
+    -mode vpn              one verified foreign exit, pinned for the session
+    -mode tor              Tor circuit only
+    -mode windscribe       carry the Windscribe app (OpenVPN TCP over WStunnel)
+    -tun                   whole PC (Windows, Administrator)
+    -v                     log every decision (ktest connect -h lists every flag)
+  ktest doctor             diagnose this network and the package; changes nothing
 
-Other commands:
-  ktest ca            set up (or remove) the local CA that enables domain fronting
-  ktest warp          enable the WARP exit (Cloudflare) for Telegram and sites blocked by address
-  ktest strategies    list or write the editable ByeDPI strategy file
-  ktest scan          bounded Cloudflare IP candidate check
-  ktest revive        run one Xray profile:  -xray -profile -variant -assets
-  ktest access        domain-scoped CONNECT proxy backed by SNI-Spoofing-Go
-  ktest path          DNS / TCP / TLS stage diagnosis
-  ktest probe|compare|edges|echo   controlled-origin experiments (see docs/)
+Setup
+  ktest ca                 domain-fronting certificate (-install, -renew, -uninstall, -delete)
+  ktest warp               WARP/Psiphon exit for Telegram and sites blocked by address
+  ktest strategies         list or write the editable ByeDPI strategy file
+
+Tools and experiments (see docs/)
+  ktest scan               find Cloudflare IPs this network reaches
+  ktest path               DNS / TCP / TLS stage diagnosis of one URL
+  ktest revive             run one Xray profile on its own
+  ktest access             domain-scoped proxy backed by SNI-Spoofing-Go
+  ktest probe | compare | edges | echo    controlled-origin experiments
 `
 
 func run(args []string) int {
@@ -87,45 +90,39 @@ func run(args []string) int {
 		fmt.Println(string(cfg))
 		return 0
 	}
-	if len(args) > 0 && args[0] == "scan" {
-		return runQuickScan(args[1:])
-	}
 	if len(args) == 0 {
 		return interactiveMenu()
 	}
 	switch args[0] {
-	case "doctor":
-		return runDoctor(args[1:])
+	case "menu":
+		return interactiveMenu()
 	case "connect", "smart":
 		return runConnect(args[1:])
-	case "strategies":
-		return runStrategies(args[1:])
+	case "doctor":
+		return runDoctor(args[1:])
 	case "ca":
 		return runCA(args[1:])
 	case "warp":
 		return runWarp(args[1:])
-	case "menu":
-		return interactiveMenu()
+	case "strategies":
+		return runStrategies(args[1:])
+	case "scan":
+		return runQuickScan(args[1:])
+	case "path":
+		return runPath(args[1:])
+	case "revive":
+		return runRevive(args[1:])
+	case "access":
+		return runAccess(args[1:])
+	case "edges":
+		return runEdges(args[1:])
+	case "echo":
+		return runEcho(args[1:])
+	case "probe", "compare":
 	case "help", "-h", "-help", "--help":
 		fmt.Print(usageText)
 		return 0
-	}
-	if len(args) > 0 && args[0] == "edges" {
-		return runEdges(args[1:])
-	}
-	if len(args) > 0 && args[0] == "revive" {
-		return runRevive(args[1:])
-	}
-	if len(args) > 0 && args[0] == "access" {
-		return runAccess(args[1:])
-	}
-	if len(args) > 0 && args[0] == "path" {
-		return runPath(args[1:])
-	}
-	if len(args) > 0 && args[0] == "echo" {
-		return runEcho(args[1:])
-	}
-	if len(args) == 0 || (args[0] != "probe" && args[0] != "compare") {
+	default:
 		fmt.Fprint(os.Stderr, usageText)
 		return 2
 	}

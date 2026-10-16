@@ -2,62 +2,54 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-func TestMenuExitWithoutCore(t *testing.T) {
+func menuOutput(t *testing.T, input string) string {
+	t.Helper()
 	var out bytes.Buffer
-	if code := runInteractive(strings.NewReader("0\n"), &out, t.TempDir()); code != 0 {
+	if code := runInteractive(strings.NewReader(input), &out, t.TempDir()); code != 0 {
 		t.Fatal(code)
 	}
-	if !strings.Contains(out.String(), "Status: disconnected") {
-		t.Fatal(out.String())
+	return out.String()
+}
+
+func TestMenuExits(t *testing.T) {
+	for _, in := range []string{"0\n", "q\n", ""} { // "" is stdin closed
+		if !strings.Contains(menuOutput(t, in), "Select >") {
+			t.Fatalf("no menu for %q", in)
+		}
 	}
 }
 
-func TestMenuSwitchErrorsDoNotPreventExit(t *testing.T) {
-	var out bytes.Buffer
-	if code := runInteractive(strings.NewReader("5\n1\n7\n0\n0\n"), &out, t.TempDir()); code != 0 {
-		t.Fatal(code)
-	}
-	if !strings.Contains(out.String(), "missing ") {
-		t.Fatal(out.String())
-	}
-	if !strings.Contains(out.String(), "No active mode to stop") {
-		t.Fatal(out.String())
-	}
-}
-
-func TestMenuSelectingKnownFileStillRequiresFullBundle(t *testing.T) {
-	base := t.TempDir()
-	err := os.MkdirAll(filepath.Join(base, "cores"), 0700)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, _, err = terminalMode("1", base, &bytes.Buffer{})
-	if err == nil {
-		t.Fatal("should refuse partial bundles")
-	}
-}
-
-func TestCancelledProbeIsCancelled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if ctx.Err() == nil {
-		t.Fatal("cancelled context unexpectedly live")
+func TestMenuKeysAreUniqueAndContiguous(t *testing.T) {
+	want := 1
+	for _, s := range menuSections {
+		for _, it := range s.items {
+			if it.key != strconv.Itoa(want) || it.action == nil {
+				t.Fatalf("item %q (%s): want key %d with an action", it.key, it.name, want)
+			}
+			want++
+		}
 	}
 }
 
 func TestBlankInputNeverShownAsInvalidChoice(t *testing.T) {
-	var out bytes.Buffer
-	if code := runInteractive(strings.NewReader("\n0\n"), &out, t.TempDir()); code != 0 {
-		t.Fatal(code)
+	if out := menuOutput(t, "\n0\n"); strings.Contains(out, "Unknown option") {
+		t.Fatalf("empty line incorrectly rejected: %s", out)
 	}
-	if strings.Contains(out.String(), "Unknown option") {
-		t.Fatalf("empty line incorrectly rejected: %s", out.String())
+}
+
+func TestUnknownOptionNamesTheRange(t *testing.T) {
+	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, `Unknown option "42". Select 1-9`) {
+		t.Fatal(out)
+	}
+}
+
+func TestSetupLineShowsState(t *testing.T) {
+	if out := menuOutput(t, "0\n"); !strings.Contains(out, "certificate: ") || !strings.Contains(out, "exit paths (WARP/Psiphon): off") {
+		t.Fatal(out)
 	}
 }

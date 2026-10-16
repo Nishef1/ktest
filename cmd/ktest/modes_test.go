@@ -71,7 +71,7 @@ func TestModesVisibleInMainMenu(t *testing.T) {
 	if code := runInteractive(strings.NewReader("0\n"), &b, t.TempDir()); code != 0 {
 		t.Fatal(code)
 	}
-	for _, name := range []string{"Windscribe", "VPN / exit-only", "Tor only", "Fast / flexible"} {
+	for _, name := range []string{"Balanced", "Fast", "VPN exit", "Tor", "Windscribe"} {
 		if !strings.Contains(b.String(), name) {
 			t.Errorf("missing menu item %q", name)
 		}

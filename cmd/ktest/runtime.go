@@ -12,11 +12,8 @@ import (
 	"github.com/Nishef1/ktest/internal/quickcheck"
 )
 
-// Local proxy ports the bundled cores listen on.
-const (
-	xrayPort   = 10808
-	byeDPIPort = 10809
-)
+// xrayPort is where Connect's main Xray profile listens.
+const xrayPort = 10808
 
 // portFree reports an actionable error when something already listens on the
 // loopback port. Without this a foreign proxy (v2rayN also defaults to 10808

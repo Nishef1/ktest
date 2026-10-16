@@ -3,7 +3,7 @@
 The everyday path needs no options and no knowledge of the methods behind it.
 
 ```
-.\ktest.exe                 menu: Connect, Connect whole PC, Diagnose, Setup, Advanced
+.\ktest.exe                 menu: five connection modes, Whole PC, Diagnose, Setup, CDN scan
 .\ktest.exe connect         connect now
 .\ktest.exe connect -cert   set up or renew the fronting certificate, then connect
 .\ktest.exe connect -tun    the same for every application on the PC (asks for Administrator)
@@ -103,9 +103,19 @@ Telegram and other non-HTTPS protocols are carried like any TCP connection, but 
 
 Not verified on a real network: this mode changes Windows routes. It was checked for configuration validity (`sing-box check`) and by unit tests only.
 
-## 8. Advanced
+## 8. The menu
 
-Single methods (Xray fragment B/A on `127.0.0.1:10808`, ByeDPI on `127.0.0.1:10809`), the Cloudflare IP candidate scan and the experimental system-wide TCP TUN (Windows, Administrator, explicit `YES`). Connect makes these unnecessary for everyday use. The research commands (`probe`, `compare`, `edges`, `path`, `echo`, `access`, `revive`) are unchanged; see `ktest help`.
+```
+CONNECT                                   TOOLS
+ 1 Balanced    (= ktest connect)           7 Diagnose  (= ktest doctor)
+ 2 Fast        (-mode fast)                8 Setup     certificate, WARP/Psiphon exits
+ 3 VPN exit    (-mode vpn)                 9 CDN scan  (= ktest scan)
+ 4 Tor         (-mode tor)                 0 Exit
+ 5 Windscribe  (-mode windscribe)
+ 6 Whole PC    (-tun, Administrator)
+```
+
+Every item runs in the foreground; Enter or Ctrl+C ends it and returns to the menu. Ctrl+C on the idle menu exits. The Setup line shows the certificate and exit-path state. The former Advanced screen is gone: its single Xray/ByeDPI methods are part of every Connect race, and its system-wide TUN is Whole PC. To run one Xray profile on its own use `ktest revive`; the research commands (`probe`, `compare`, `edges`, `path`, `echo`, `access`) are unchanged; see `ktest help`.
 
 ## 9. What is, and is not, possible
 
@@ -126,4 +136,4 @@ Colors, box drawing and the in-place progress line are used only on an interacti
 
 ## Options of `ktest connect`
 
-None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-front`, `-front`, `-no-warp`, `-tun`, `-cert`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`.
+None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-front`, `-front`, `-no-warp`, `-tun`, `-cert`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`. Windscribe mode: `-windscribe-wstunnel`, `-windscribe-wstunnel-sni`, `-windscribe-wstunnel-ip`, `-windscribe-cdn`, `-windscribe-cdn-sni`, `-windscribe-cdn-edge`, `-windscribe-auto-reconnect`, `-windscribe-cli` (see [WINDSCRIBE_BOOTSTRAP.md](WINDSCRIBE_BOOTSTRAP.md)).

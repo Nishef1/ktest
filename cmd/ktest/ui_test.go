@@ -74,30 +74,20 @@ func TestBarClampsAndWrapTextRespectsWidth(t *testing.T) {
 	}
 }
 
-func TestMainMenuListsTheThreeActionsOnly(t *testing.T) {
+func TestMainMenuListsModesAndTools(t *testing.T) {
 	var out bytes.Buffer
 	if code := runInteractive(strings.NewReader("0\n"), &out, t.TempDir()); code != 0 {
 		t.Fatal(code)
 	}
 	text := out.String()
-	for _, want := range []string{"Connect", "Diagnose", "Advanced", "Exit", "Status: disconnected"} {
+	for _, want := range []string{"CONNECT", "TOOLS", "Whole PC", "Diagnose", "Setup", "CDN scan", "Exit"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("menu lacks %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "Fragment B") {
-		t.Fatalf("single methods belong in Advanced:\n%s", text)
-	}
-}
-
-func TestMainMenuOffersWholePCAndCertificate(t *testing.T) {
-	var out bytes.Buffer
-	if code := runInteractive(strings.NewReader("0\n"), &out, t.TempDir()); code != 0 {
-		t.Fatal(code)
-	}
-	for _, want := range []string{"Connect, whole PC", "Setup", "Diagnose", "Advanced"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("menu lacks %q:\n%s", want, out.String())
+	for _, gone := range []string{"Advanced", "Fragment B", "Status:"} {
+		if strings.Contains(text, gone) {
+			t.Fatalf("removed item %q still shown:\n%s", gone, text)
 		}
 	}
 }

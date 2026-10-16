@@ -35,6 +35,18 @@ type wsOptions struct {
 
 func (o wsOptions) enabled() bool { return o.direct || o.cdnHost != "" }
 
+// describe names the WStunnel carriers for the connect summary.
+func (o wsOptions) describe() string {
+	var parts []string
+	if o.cdnHost != "" {
+		parts = append(parts, "CDN "+o.cdnHost)
+	}
+	if o.direct {
+		parts = append(parts, "SNI "+strings.Join(splitList(o.sni), ","))
+	}
+	return "WStunnel (" + strings.Join(parts, "; ") + ")"
+}
+
 func validHostname(h string) bool {
 	if h == "" || len(h) > 253 || net.ParseIP(h) != nil || strings.ContainsAny(h, "/:@ \t\r\n\\") || !strings.Contains(h, ".") {
 		return false

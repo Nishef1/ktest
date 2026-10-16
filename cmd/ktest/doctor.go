@@ -127,7 +127,7 @@ func runDoctorView(u *term, base string, noNet bool) (failed bool) {
 	for _, p := range []struct {
 		port int
 		name string
-	}{{connectPort, "Connect"}, {xrayPort, "Xray"}, {byeDPIPort, "ByeDPI"}} {
+	}{{connectPort, "Connect SOCKS"}, {connectHTTPPort, "Connect HTTP"}, {xrayPort, "Xray"}} {
 		if err := portFree(p.port); err != nil {
 			line(toneWarn, fmt.Sprintf("Port %d (%s)", p.port, p.name), "in use: another ktest, v2rayN or a leftover core (netstat -ano | findstr :"+fmt.Sprint(p.port)+")")
 		} else {

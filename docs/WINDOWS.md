@@ -1,6 +1,6 @@
 # Windows portable — managed CLI (2026-10-15)
 
-> **2026-10-16:** `docs/USAGE.md` is now the entry point. The menu has three screens (Connect, Diagnose, Advanced); the numbered list below describes the **Advanced** screen. `ktest auto` was removed (Connect replaces it) and `ktest smart` is now `ktest connect` (the old name still works). Later sections of this file are dated notes written while those features were built; where they differ, USAGE.md is current.
+> **2026-10-16:** `docs/USAGE.md` is now the entry point. The menu was later reorganised (see USAGE.md, section 8); the Advanced screen described below no longer exists. `ktest auto` was removed (Connect replaces it) and `ktest smart` is now `ktest connect` (the old name still works). Later sections of this file are dated notes written while those features were built; where they differ, USAGE.md is current.
 
 Use the latest successful `windows-portable` GitHub Actions artifact `ktest-windows-portable`; extract both ZIP layers fully. The complete folder includes `ktest.exe`, `cores/xray.exe`, `cores/ciadpi.exe`, `cores/sing-box.exe`, `cores/wintun.dll`, `profiles/Serverless-for-Iran.json`, and third-party license texts. Do not run just the executable extracted from the generic `verify` workflow.
 

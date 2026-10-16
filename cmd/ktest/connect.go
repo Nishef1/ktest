@@ -30,6 +30,7 @@ const (
 	connectListenDefault = "127.0.0.1:10800"
 	connectHTTPDefault   = "127.0.0.1:10801"
 	connectPort          = 10800
+	connectHTTPPort      = 10801
 	connectXrayBPort     = xrayPort // 10808
 	connectXrayAPort     = 10811
 	connectByeDPIBase    = 10812
@@ -667,14 +668,17 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 5. The result.
 	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
 	if o.mode == ModeWindscribe {
-		title = "LOCAL ANTI-DPI CANDIDATES; WINDSCRIBE VPN NOT VERIFIED"
-		if !proxy.HasLocalBypass() {
+		title = "WINDSCRIBE BRIDGE READY; VPN NOT YET VERIFIED"
+		if !proxy.HasLocalBypass() && !o.ws.enabled() {
 			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}
 	}
 	pathsDesc := fmt.Sprintf("%d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)) + frontSuffix(fronter)
 	if o.mode == ModeWindscribe {
-		pathsDesc = fmt.Sprintf("%d local-only anti-DPI paths; NO plain or foreign exits", len(ups))
+		pathsDesc = fmt.Sprintf("%d local anti-DPI paths; no plain or foreign exits", len(ups))
+		if o.ws.enabled() {
+			pathsDesc = o.ws.describe() + " + " + pathsDesc
+		}
 	}
 	lines := []string{
 		t.Bold("Proxy   ") + "  socks5://" + l.Addr().String() + t.Dim("   (turn on \"proxy DNS\" / remote DNS in the app)"),
@@ -683,7 +687,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if httpAddr != "" {
 		lines = append(lines, t.Bold("HTTP    ")+"  http://"+httpAddr+t.Dim("   (Windscribe Proxy Settings; TCP only)"))
 		if o.mode == ModeWindscribe {
-			lines = append(lines, t.Bold("VPN TCP ")+"  "+t.Yellow("Local Xray TCP fragmentation + ByeDPI; 502 if unavailable. HTTP 200 does NOT prove VPN handshake."))
+			lines = append(lines, t.Bold("VPN     ")+"  "+t.Yellow("Windscribe on OpenVPN TCP 443; only Windscribe can confirm the VPN connected"))
 		}
 	}
 	if frontNote != "" {
@@ -693,7 +697,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	lines = append(lines, t.Bold("Mode    ")+"  "+t.Dim(o.mode.message()))
 	switch {
 	case o.mode == ModeWindscribe:
-		lines = append(lines, t.Bold("Result  ")+"  "+t.Dim("Windscribe CLI checks the VPN; no foreign exit or direct fallback is allowed"))
+		lines = append(lines, t.Bold("Result  ")+"  "+t.Dim("ktest watches windscribe-cli status; Windscribe owns the public IP"))
 	case bypassed > 0:
 		lines = append(lines, t.Bold("Result  ")+"  "+t.Green(fmt.Sprintf("%d site(s) blocked on this network are open through ktest", bypassed)))
 	case passed == len(proxied) && passed > 0:
@@ -721,7 +725,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Box(title, verdict, lines)
 	t.Println("")
 	if o.mode == ModeWindscribe {
-		t.Println("  " + t.Dim("TCP attempts (new connections rotate local methods per destination; only Windscribe verifies the VPN)"))
+		t.Println("  " + t.Dim("Windscribe connections (each new attempt rotates the carrier; only Windscribe verifies the VPN)"))
 	} else {
 		t.Println("  " + t.Dim("Live connections (a site is listed when its winning path is known or changes)"))
 	}
