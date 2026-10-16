@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -36,6 +37,9 @@ func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.Doma
 	case ModeFast, ModeWindscribe:
 		cfg.ExitOnly = nil
 		cfg.PreferVerifiedExit = m == ModeWindscribe
+		if m == ModeFast {
+			cfg.Stagger = 125 * time.Millisecond
+		}
 	case ModeVPN, ModeTor:
 		cfg.ExitOnly = func(string) bool { return true }
 	}
