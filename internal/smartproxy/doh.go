@@ -31,6 +31,11 @@ type DoHEndpoint struct {
 	Accept     string // optional Accept header
 	Addr       string // optional IP:port to dial instead of resolving the URL host
 	ServerName string // certificate name when Addr is used (default: URL host)
+	// FrontSNI, when set, is sent as the TLS server name instead of ServerName
+	// (a decoy a filter does not block); the certificate is still verified for
+	// ServerName and VerifyNames. The service routes by the HTTP Host, not by SNI.
+	FrontSNI    string
+	VerifyNames []string
 }
 
 // DefaultDoH lists two independent public resolvers, each reachable by several
@@ -44,6 +49,9 @@ var DefaultDoH = []DoHEndpoint{
 	{URL: "https://dns.google/resolve", Addr: "8.8.8.8:443", ServerName: "dns.google"},
 	{URL: "https://dns.google/resolve", Addr: "8.8.4.4:443", ServerName: "dns.google"},
 	{URL: "https://dns.google/resolve"},
+	// The reference MITM-DomainFronting project asks 1.1.1.1 under a decoy name.
+	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "1.1.1.1:443", ServerName: "cloudflare-dns.com", FrontSNI: "www.microsoft.com", VerifyNames: []string{"one.one.one.one"}},
+	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "1.0.0.1:443", ServerName: "cloudflare-dns.com", FrontSNI: "www.microsoft.com", VerifyNames: []string{"one.one.one.one"}},
 }
 
 type dohAnswer struct {
@@ -138,6 +146,14 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 	for i, ep := range endpoints {
 		ep := ep
 		cfg := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: ep.ServerName}
+		if ep.FrontSNI != "" {
+			cfg.ServerName = ep.FrontSNI
+			cfg.InsecureSkipVerify = true // replaced by the check below, which uses the real names
+			names := append([]string{ep.ServerName}, ep.VerifyNames...)
+			cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
+				return verifyAnyName(raw, names, roots)
+			}
+		}
 		transport := &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				if ep.Addr != "" {
@@ -236,4 +252,33 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 		return nil, 0, last
 	}
 	return cachedResolver(lookup, 12*time.Second)
+}
+
+// verifyAnyName accepts a certificate chain that is valid for at least one of
+// names, checked against roots (nil: the system roots).
+func verifyAnyName(raw [][]byte, names []string, roots *x509.CertPool) error {
+	if len(raw) == 0 {
+		return errors.New("no certificate")
+	}
+	certs := make([]*x509.Certificate, 0, len(raw))
+	for _, r := range raw {
+		c, err := x509.ParseCertificate(r)
+		if err != nil {
+			return err
+		}
+		certs = append(certs, c)
+	}
+	inter := x509.NewCertPool()
+	for _, c := range certs[1:] {
+		inter.AddCert(c)
+	}
+	var first error
+	for _, n := range names {
+		if _, err := certs[0].Verify(x509.VerifyOptions{DNSName: n, Roots: roots, Intermediates: inter}); err == nil {
+			return nil
+		} else if first == nil {
+			first = err
+		}
+	}
+	return first
 }

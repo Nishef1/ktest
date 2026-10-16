@@ -63,6 +63,8 @@ func shortErr(err error) string {
 		return "refused"
 	case strings.Contains(s, "certificate"):
 		return "bad cert"
+	case strings.Contains(s, "poisoned"):
+		return "no trusted address (DNS poisoned)"
 	}
 	if len(s) > 18 {
 		s = s[:18]
@@ -204,6 +206,8 @@ func probeNetwork(ctx context.Context, step func(done int)) netReport {
 		r.verdict, r.verdictText = toneOK, "YouTube's SNI is filtered but a cut ClientHello gets through: the cutting paths in Connect can work here."
 	case okAt(0, 0) && !okAt(1, 0) && !anyCut(1) && !anyCut(0):
 		r.verdict, r.verdictText = toneWarn, "YouTube's SNI is filtered AND every cut ClientHello fails even for the unblocked name: this network punishes cutting. Xray fragment, ByeDPI split/slice and the built-in cutting paths cannot work; only methods that do not cut (fake packets with a low TTL, IPv6, QUIC) remain."
+	case okAt(0, 0) && !okAt(1, 0) && !anyCut(1):
+		r.verdict, r.verdictText = toneWarn, "YouTube's SNI is filtered and no cutting shape gets through: cuts across TCP segments are reassembled by the filter, and cuts across TLS records are dropped (even for Google). Xray fragment, ByeDPI split/slice and the built-in cuts will not help here; domain fronting and fake-packet strategies are what remain."
 	default:
 		r.verdict, r.verdictText = toneWarn, "YouTube's SNI is filtered and cutting helps only partly; see the table."
 	}

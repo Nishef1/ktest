@@ -41,7 +41,7 @@ There is no manual choice to make. Censorship differs per site and per network, 
 Name resolution is the first thing a censor poisons, so it is not left to the system resolver alone:
 
 1. The system answer is used when it is a real address. Private or reserved addresses are treated as poisoning and never dialed.
-2. Otherwise encrypted DNS is asked by IP literal (so no DNS is needed to find the resolver): Cloudflare `104.16.248.249`, `104.16.249.249`, `1.1.1.1` and Google `8.8.8.8`, `8.8.4.4`. All are tried at once, through every working path and the direct route, and the first answer wins. After three failures in a row encrypted DNS is skipped for five minutes, because it is itself filtered on many networks.
+2. Otherwise encrypted DNS is asked by IP literal (so no DNS is needed to find the resolver): Cloudflare `104.16.248.249`, `104.16.249.249`, `1.1.1.1` and Google `8.8.8.8`, `8.8.4.4`. All are tried at once, through every working path and the direct route, and the first answer wins. After three failures in a row encrypted DNS is skipped for five minutes, because it is itself filtered on many networks. Cloudflare's 1.1.1.1 and 1.0.0.1 are also asked under a decoy server name (`www.microsoft.com`), as the MITM-DomainFronting project does; the certificate is still verified for Cloudflare's real names.
 3. The Xray paths receive the trusted address too (they would otherwise need their own DNS, which is filtered the same way); if no trusted address exists they fall back to the name and use their own DNS.
 4. For Google-owned names (youtube.com, ytimg.com, googlevideo.com, gstatic.com, ...) the address of `www.google.com` stands in, since Google front ends serve them; a path that cannot is simply a lost race.
 
@@ -74,6 +74,8 @@ What ktest does to keep this safe:
 * The connection to the edge is made and verified (certificate chain to the system roots, valid for the front, the site or the family) **before** the application is answered. If it fails, the application gets nothing and the other paths race as usual.
 * Connect enables it only when the system reports the CA as trusted (`-front` forces it, `-no-front` forbids it). If applications keep refusing the certificate (Firefox has its own store: set `security.enterprise_roots.enabled` to true in about:config), fronting switches itself off after three refusals so nothing breaks.
 * Several fronts are tried per family and ranked by what worked on your network, because a server name that is open on one operator is closed on the next. Add your own in `profiles/fronts.txt`: one line `family sni [dial]` (`-` = no SNI, `@own` = the site's own address). Diagnose tests every front without any certificate and shows which ones this network allows.
+
+When no trusted address for a site exists at all (system DNS poisoned and encrypted DNS filtered, as in a field log from a filtered network), a family may carry edge address hints (Meta does): any address of the family's edge serves every site of the family. Google needs no DNS: the address of `www.google.com` serves YouTube and the rest.
 
 Limits: only HTTPS on port 443 for the listed families; applications that pin certificates refuse it; Google may still refuse sanctioned content for an Iranian address, and fronting does not change your IP.
 

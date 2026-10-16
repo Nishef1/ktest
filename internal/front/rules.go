@@ -43,6 +43,11 @@ type Family struct {
 	Verify []string
 	// H1Only are domains whose traffic must stay on HTTP/1.1 through the front.
 	H1Only []string
+	// Hints are edge addresses used only when no trusted address for the site
+	// can be had (system DNS poisoned, encrypted DNS filtered). Any address of
+	// the family's edge serves every site of the family, so a stale hint still
+	// works as long as it is an edge address at all.
+	Hints []string
 }
 
 // Match reports whether host belongs to the family.
@@ -92,7 +97,7 @@ func DefaultFamilies() []Family {
 				{SNI: "www.google.com"},
 				{SNI: "www.google.com", Dial: "www.google.com"},
 				{SNI: "www.gstatic.com", Dial: "www.google.com"},
-				{SNI: "", Dial: "www.google.com"},
+				{SNI: "www.googleapis.com", Dial: "www.google.com"},
 			},
 			Verify: []string{"www.google.com", "www.youtube.com", "www.googlevideo.com", "www.gstatic.com", "www.googleapis.com", "dns.google"},
 			// The video servers were kept on HTTP/1.1 in the reference project.
@@ -109,6 +114,7 @@ func DefaultFamilies() []Family {
 				{SNI: ""},
 				{SNI: "www.microsoft.com", Dial: "www.facebook.com"},
 			},
+			Hints: []string{"57.144.194.34", "57.144.200.1", "57.144.194.141"},
 			Verify: []string{
 				"www.facebook.com", "www.instagram.com", "www.whatsapp.com", "www.whatsapp.net", "www.fb.com",
 				"www.meta.com", "www.messenger.com", "www.fbcdn.net", "www.cdninstagram.com", "www.oculus.com",

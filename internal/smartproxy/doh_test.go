@@ -2,6 +2,7 @@ package smartproxy
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"net"
 	"net/http"
@@ -77,5 +78,38 @@ func TestDesyncFamiliesIncludeIPv6Twins(t *testing.T) {
 	}
 	if v6 != 2 {
 		t.Fatalf("expected 2 IPv6 families, got %d", v6)
+	}
+}
+
+func TestDoHDecoySNIIsSentButTheCertificateIsStillVerified(t *testing.T) {
+	var seen atomic.Value
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"Status":0,"Answer":[{"type":1,"TTL":60,"data":"142.250.1.1"}]}`))
+	}))
+	srv.TLS = &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
+		seen.Store(h.ServerName)
+		return nil, nil
+	}}
+	srv.StartTLS()
+	defer srv.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}
+	ep := DoHEndpoint{URL: "https://example.com/resolve", ServerName: "example.com", FrontSNI: "decoy.test"}
+	ips, err := NewDoH([]DoHEndpoint{ep}, dial, pool)(context.Background(), "youtube.com")
+	if err != nil || len(ips) != 1 {
+		t.Fatalf("ips=%v err=%v", ips, err)
+	}
+	if got, _ := seen.Load().(string); got != "decoy.test" {
+		t.Fatalf("the wire carried SNI %q", got)
+	}
+	// A certificate that is not valid for the real service name is refused even
+	// though the decoy name was what the handshake asked for.
+	bad := ep
+	bad.ServerName = "other.example"
+	if _, err := NewDoH([]DoHEndpoint{bad}, dial, pool)(context.Background(), "youtube.com"); err == nil {
+		t.Fatal("certificate for another name accepted")
 	}
 }

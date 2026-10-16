@@ -447,6 +447,21 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	case passed == 0:
 		lines = append(lines, t.Bold("Result  ")+"  "+t.Red("no tested site was reachable; run `ktest doctor` to see why"))
 	}
+	if verdict != toneOK && fronter == nil && !o.noFront && ctx.Err() == nil {
+		// The paths that need no certificate did not reach everything. If fronting
+		// would, say so now instead of leaving the user with a red result.
+		fctx, fcancel := context.WithTimeout(ctx, 8*time.Second)
+		var reach []string
+		for _, c := range probeFronts(fctx) {
+			if c.working() > 0 {
+				reach = append(reach, c.family)
+			}
+		}
+		fcancel()
+		if len(reach) > 0 {
+			lines = append(lines, t.Bold("Next    ")+"  "+t.Yellow("domain fronting reaches "+strings.Join(reach, ", ")+" here: run `ktest ca -install`, then Connect again"))
+		}
+	}
 	lines = append(lines, t.Bold("Stop    ")+"  "+o.stopHint)
 	t.Println("")
 	t.Box(title, verdict, lines)

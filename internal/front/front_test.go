@@ -415,3 +415,27 @@ func TestProbeReportsEveryFront(t *testing.T) {
 		t.Fatalf("no front answered: %+v", res)
 	}
 }
+
+func TestFrontUsesEdgeHintsWhenNoTrustedAddressExists(t *testing.T) {
+	ca := testCA(t)
+	e := startEdge(t, "www.microsoft.com", "www.facebook.com", "www.instagram.com")
+	var dialed atomic.Value
+	f := New(Config{
+		CA: ca, Roots: e.roots, HedgeDelay: 30 * time.Millisecond,
+		// Every name resolves to a block-page address: DNS is poisoned and DoH is dead.
+		Resolve: func(context.Context, string) ([]string, error) { return []string{"10.10.34.36"}, nil },
+		dial: func(ctx context.Context, addr string) (net.Conn, error) {
+			dialed.Store(addr)
+			return (&net.Dialer{}).DialContext(ctx, "tcp", e.ln.Addr().String())
+		},
+	})
+	proxy := startProxy(t, f, make(chan smartproxy.Event, 8))
+	conn, err := socksVia(t, proxy, "www.instagram.com", ca.Pool())
+	if err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	conn.Close()
+	if addr, _ := dialed.Load().(string); !strings.HasPrefix(addr, "57.144.") {
+		t.Fatalf("dialed %q, want one of the family's hints", addr)
+	}
+}

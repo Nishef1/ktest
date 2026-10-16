@@ -367,6 +367,10 @@ func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, p
 		dialName = name
 	}
 	ips, err := f.addrs(ctx, dialName)
+	if err != nil && fr.Dial == "" && len(fam.Hints) > 0 {
+		f.logf("front: no trusted address for %s (%v); using the family's edge hints", dialName, err)
+		ips, err = fam.Hints, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("address of %s: %w", dialName, err)
 	}
