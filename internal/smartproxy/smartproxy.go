@@ -61,6 +61,9 @@ type Upstream struct {
 	// so for traffic that is not TLS these are the only paths besides the direct
 	// one worth trying.
 	Exit bool
+	// AIEligible means the remote exit IP was independently checked as non-Iran.
+	// An external SOCKS listener opening is not sufficient to set this flag.
+	AIEligible bool
 	// Late keeps the path out of the race until every other path has failed or
 	// lateAfter has passed, unless it is the remembered first choice. An exit
 	// that carries everything through a third party should be the last resort,
@@ -88,6 +91,9 @@ type Session interface {
 
 type Config struct {
 	Upstreams []Upstream
+	// ExitOnly forces matched names to use only verified foreign exits.
+	// If none is present, fail closed instead of silently revealing the ISP IP.
+	ExitOnly func(string) bool
 	// Stagger is how long the best path gets alone before the next one joins.
 	Stagger time.Duration
 	// ConnectTimeout bounds dial plus SOCKS handshake; FirstByteTimeout bounds
@@ -159,6 +165,7 @@ type Proxy struct {
 	mu  sync.Mutex
 	ups []*upstreamState
 	mem map[string]memo
+	aiPinned string // first working AI exit stays selected until this session ends
 }
 
 func New(cfg Config) (*Proxy, error) {
@@ -215,10 +222,15 @@ func (p *Proxy) order(host string) []*upstreamState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	list := make([]*upstreamState, 0, len(p.ups))
+	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
 	for _, u := range p.ups {
-		if u.Match == nil || u.Match(host) {
-			list = append(list, u)
+		if u.Match != nil && !u.Match(host) {
+			continue
 		}
+		if protected && (!u.Exit || !u.AIEligible || (p.aiPinned != "" && u.Name != p.aiPinned)) {
+			continue // No plain/Xray/ByeDPI/fronting fallback for AI.
+		}
+		list = append(list, u)
 	}
 	remembered := ""
 	if m, ok := p.mem[siteKey(host)]; ok && time.Since(m.at) < p.cfg.MemoryTTL {
@@ -260,6 +272,10 @@ func (p *Proxy) record(u *upstreamState, host string, ok bool, took time.Duratio
 		return
 	}
 	u.wins++
+	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) && u.Exit && u.AIEligible && p.aiPinned == "" {
+		p.aiPinned = u.Name
+		p.logf("AI exit pinned for this session: %s", u.Name)
+	}
 	ms := float64(took.Milliseconds())
 	if u.ewmaMS == 0 {
 		u.ewmaMS = ms
@@ -337,6 +353,13 @@ func (p *Proxy) nameFor(host string, flight []byte) string {
 		return host
 	}
 	if sni, _, ok := ParseClientHello(flight); ok && sni != "" && net.ParseIP(sni) == nil {
+		if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(sni) {
+			p.logf("%s uses protected AI SNI %s; enforcing foreign exit", host, sni)
+			return sni
+		}
+		if !Bogus(ip) {
+			return host
+		}
 		p.logf("%s is a block-page address; using the SNI %s instead", host, sni)
 		return sni
 	}
@@ -376,7 +399,7 @@ func (w winner) release() {
 func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (winner, error) {
 	order := p.order(host)
 	if len(order) == 0 {
-		return winner{}, errors.New("no path applies to this site")
+		return winner{}, fmt.Errorf("%s: no permitted foreign exit; protected site blocked (fail-closed)", host)
 	}
 	// Late paths go to the back, behind a gate that opens when everything else
 	// has failed or after lateAfter.
