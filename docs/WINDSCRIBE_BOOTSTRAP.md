@@ -23,7 +23,7 @@ The local HTTP proxy is just a loopback bridge. **HTTP does NOT mean Windscribe'
 
 ## WStunnel bridge: chosen SNI, optional own CDN
 
-Set Windscribe to **OpenVPN TCP** (port 443) with the HTTP proxy above. Windscribe then sends `CONNECT <OpenVPN TCP IP>:443` to ktest. ktest waits for the first bytes: TLS/HTTP (Windscribe API) keeps the local anti-DPI dialer; anything else is OpenVPN and is re-wrapped exactly like Windscribe's own **WStunnel** protocol ([source](https://github.com/Windscribe/wstunnel)): TLS, then a WebSocket upgrade to `/tcp/127.0.0.1/1194`, then binary messages. The Windscribe node forwards that to its own OpenVPN server, so credentials, encryption and the public exit stay Windscribe's. Differences from the official client: a Chrome-like TLS ClientHello offering only `http/1.1`, and a **chosen SNI**.
+Set Windscribe to **OpenVPN TCP** (port 443) with the HTTP proxy above. Windscribe then sends `CONNECT <OpenVPN TCP IP>:443` to ktest. ktest waits for the first bytes: TLS/HTTP (Windscribe API) uses the existing SOCKS response selector across permitted local anti-DPI paths; anything else is OpenVPN and is re-wrapped exactly like Windscribe's own **WStunnel** protocol ([source](https://github.com/Windscribe/wstunnel)): TLS, then a WebSocket upgrade to `/tcp/127.0.0.1/1194`, then binary messages. The Windscribe node forwards that to its own OpenVPN server, so credentials, encryption and the public exit stay Windscribe's. Differences from the official client: a Chrome-like TLS ClientHello offering only `http/1.1`, and a **chosen SNI**.
 
 ### How a carrier is chosen (Shir-o-Khorshid style, Windscribe instead of Psiphon)
 
@@ -42,7 +42,7 @@ The race lasts at most 25 seconds and retains at most 1 MiB before any carrier a
 
 Every TLS carrier runs twice: straight, and with its TCP leg through local Xray/ByeDPI (`+anti-DPI`). The direct carriers accept only a certificate naming a `*.windscribe.com` host. Default SNIs: `www.speedtest.net,www.digikala.com,www.aparat.com`. A carrier whose VPN stayed up ≥1 min with ≥64 KiB is launched first next time; one whose stream died within 20 s is launched last for ten minutes. `-windscribe-wstunnel=false` disables WStunnel and Stealth. The live feed prints `Windscribe OpenVPN server answered via …`; the Windscribe login itself is still checked by Windscribe.
 
-Measured on 2026-10-16 on the author's ISP with Windscribe disconnected: Windscribe's own WStunnel client failed against `68.67.118.162` (timeout / `tls: illegal parameter`), while this bridge with SNI `www.speedtest.net` got HTTP 101 from `68.67.118.162` and `198.44.157.27`, and a tls-auth-signed OpenVPN `P_CONTROL_HARD_RESET_CLIENT_V2` sent through it was answered with `P_CONTROL_HARD_RESET_SERVER_V2` by both. A full Windscribe login and sustained data transfer through the bridge is **not yet verified**.
+Measured on 2026-10-16 on the author's ISP with Windscribe disconnected: Windscribe's own WStunnel client failed against `68.67.118.162` (timeout / `tls: illegal parameter`), while this bridge with SNI `www.speedtest.net` got HTTP 101 from `68.67.118.162` and `198.44.157.27`, and a tls-auth-signed OpenVPN `P_CONTROL_HARD_RESET_CLIENT_V2` sent through it was answered with `P_CONTROL_HARD_RESET_SERVER_V2` by both. A later installed-Windows test with Windscribe 2.25.4 reached `Logged in`, `Connected` and `TCP:443` through `WStunnel sni=www.speedtest.net` with **J - Iran Junk Packets enabled**, after fixing API response selection and applying the loopback routing setting below. This is evidence for that tested location/network, not every carrier or ISP.
 
 ### Optional: your own Cloudflare hostname
 
@@ -68,6 +68,8 @@ Xray in this mode uses **only ktest-generated configuration**, with one loopback
 **Forbidden by code policy:** Aether (any profile), Psiphon (including CDN Fronting), WARP, Tor, remote/externally operated SOCKS5 and Workers, Xray subscription profiles with unknown external outbounds, **plain/no-method** paths, general CDN Fronting/HTTP takeover (the only CDN use is the WStunnel carrier to your own hostname) and the optional whole-PC TUN. A `-exit-socks` argument is rejected. The core router also refuses initial or dynamically added foreign exits and unapproved routes. The Windscribe mode does not prompt to install a MITM certificate.
 
 This conservative design intentionally avoids claiming an unchanged public identity when a third-party CDN relay might change the IP observed by the destination. Anti-DPI packet-shaping itself does not provide an external IP. Consequently it **cannot promise to reach a Windscribe server whose address is blocked independently of SNI/protocol**, and it cannot turn a failed raw OpenVPN TCP tunnel into a successful VPN on its own.
+
+Windscribe API TLS requests use the same first-response selection as the SOCKS listener, including permitted built-in ClientHello methods. This avoids pinning API/login traffic to an Xray/ByeDPI method that accepts TCP but never returns TLS. Opaque carrier TCP legs still use the strict local-core dialer.
 
 A local SOCKS CONNECT acknowledgement proves that the local core accepted the request; some cores acknowledge before dialing the destination. It does not prove destination TCP establishment, OpenVPN handshake or sustained VPN data transfer. The final Windscribe state is always owned by Windscribe.
 
@@ -108,6 +110,20 @@ The live feed labels these events **TCP proxy accepted; VPN handshake not verifi
 - No real-ISP or installed Windscribe end-to-end test has been performed in CI. Successful Go builds/tests alone do not mean Windscribe's VPN completed authentication and data transfer.
 
 ## Troubleshooting
+
+### Windows loopback proxy: `CONNECTED,ROUTE_ERROR`
+
+If OpenVPN logs `Initialization Sequence Completed` but its management state is `CONNECTED,ROUTE_ERROR`, inspect the preceding route commands. In the live Windows test, OpenVPN attempted `route ADD 127.0.0.1 MASK 255.255.255.255 0.0.0.0 IF 1` and reported that gateway `0.0.0.0` was unreachable. Windscribe stayed Connecting and retried despite successful authentication and momentary data transfer. Its [OpenVPN connector](https://github.com/Windscribe/Desktop-App/blob/master/src/client/engine/engine/connectionmanager/connectors/openvpn/openvpnconnection.cpp) recognizes `CONNECTED,SUCCESS` as a completed connection.
+
+For this loopback-proxy failure, add this line to Windscribe's **Advanced Parameters**, preserving existing entries:
+
+```text
+redirect-gateway def1 autolocal
+```
+
+OpenVPN's documented [`autolocal` flag](https://openvpn.net/community-docs/community-articles/openvpn-2-7-manual.html) detects a local transport endpoint and skips the unnecessary remote-host exception route. The installed test then logged `ROUTE remote_host is LOCAL` and `CONNECTED,SUCCESS`. Windscribe stores Advanced Parameters in `%LOCALAPPDATA%\Windscribe\Windscribe2\windscribe_extra.conf`; it may need to be restarted to apply them. ktest does not automatically edit that file or change system routes. To undo the setting, remove only that line from Advanced Parameters.
+
+### Other checks
 
 ```powershell
 go run ./cmd/ktest connect -mode windscribe -v

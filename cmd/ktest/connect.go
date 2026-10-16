@@ -597,7 +597,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				if logf == nil {
 					logf = func(string, ...any) {}
 				}
-				bridge := newWSBridge(o.ws, proxy.DialWindscribeLocal, cfg.OnEvent, logf)
+				// API TLS must use the existing first-response race: a local
+				// SOCKS acknowledgement alone can select a silent Xray path.
+				apiDial := func(ctx context.Context, host, port string) (net.Conn, error) {
+					return smartproxy.DialVia(ctx, l.Addr().String(), host, port, 8*time.Second)
+				}
+				bridge := newWSBridge(o.ws, apiDial, cfg.OnEvent, logf)
 				bridge.carrierLocal = proxy.DialWindscribeCarrier
 				bridge.note = func(f string, a ...any) { t.Line(toneInfo, f, a...) }
 				if o.ws.cdnHost != "" && o.ws.cdnEdges == "" {
