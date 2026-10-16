@@ -21,7 +21,7 @@ func TestConnectionModes(t *testing.T) {
 	}{
 		{"balanced", true, false, false},
 		{"fast", false, false, false},
-		{"windscribe", false, false, true},
+		{"windscribe", false, false, false},
 		{"vpn", true, true, false},
 		{"tor", true, true, false},
 	} {
@@ -35,6 +35,9 @@ func TestConnectionModes(t *testing.T) {
 		ordinary := cfg.ExitOnly != nil && cfg.ExitOnly("example.org")
 		if ai != c.ai || ordinary != c.ordinary || cfg.PreferVerifiedExit != c.prefer {
 			t.Errorf("%s: ai=%v, ordinary=%v, prefer=%v", c.mode, ai, ordinary, cfg.PreferVerifiedExit)
+		}
+		if cfg.RejectExits != (mode == ModeWindscribe) {
+			t.Errorf("%s: RejectExits=%v; Windscribe must reject all foreign egress", c.mode, cfg.RejectExits)
 		}
 	}
 	if _, err := parseConnectionMode("unknown"); err == nil {
