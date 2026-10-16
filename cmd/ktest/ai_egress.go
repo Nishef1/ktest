@@ -67,7 +67,7 @@ func parseForeignTrace(body string) (ip, country string, err error) {
 	if parsed == nil || !parsed.IsGlobalUnicast() || parsed.IsPrivate() {
 		return "", "", errors.New("geo-check did not return a public egress IP")
 	}
-	if len(country) != 2 || country == "IR" || country == "XX" || country == "T1" || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' || country[1] > 'Z' {
+	if len(country) != 2 || (country == "IR" || country == "RU") || country == "XX" || country == "T1" || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' || country[1] > 'Z' {
 		return ip, country, fmt.Errorf("egress location %q not verified outside Iran", country)
 	}
 	return ip, country, nil
