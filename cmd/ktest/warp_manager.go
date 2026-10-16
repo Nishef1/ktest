@@ -321,7 +321,7 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 					m.t.Note("%s: AI protection rejects this exit until non-Iran egress is verified (%v)", p.Label, geoErr)
 				}
 				err := m.proxy.Add(smartproxy.Upstream{
-					Name: "Exit: " + p.Label, Addr: exitAddr, Rank: rank, Exit: true, AIEligible: geoErr == nil, Late: true,
+					Name: "Exit: " + p.Label, Addr: exitAddr, Rank: rank, Exit: true, AIEligible: geoErr == nil, Late: m.o.mode != ModeFast,
 				})
 				mu.Lock()
 				found = append(found, &warpFound{p: p, port: aetherPort(i), rc: rc})
@@ -332,6 +332,9 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 						_ = os.WriteFile(lastGoodFile(), []byte(p.Label), 0o600)
 					}
 					m.t.Line(toneOK, "Exit ready: %s %s", p.Label, m.t.Dim("("+shortDur(time.Since(began))+"). Telegram and sites blocked by address can open now"))
+					if m.o.mode == ModeWindscribe {
+						m.t.Note("Verified TCP exit discovered. Retry Windscribe with OpenVPN TCP/443 or WStunnel/443, not WireGuard via HTTP proxy.")
+					}
 					if geoErr == nil {
 						m.t.Line(toneOK, "AI foreign exit verified and available: %s (%s)", ip, country)
 					}
