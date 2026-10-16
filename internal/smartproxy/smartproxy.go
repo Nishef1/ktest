@@ -64,6 +64,10 @@ type Upstream struct {
 	// AIEligible means the remote exit IP was independently checked as non-Iran.
 	// An external SOCKS listener opening is not sufficient to set this flag.
 	AIEligible bool
+	// LocalBypass is reserved for local anti-DPI SOCKS cores that dial the
+	// destination themselves via the user's network, never via a foreign exit.
+	// It is NOT inferred from a loopback address, which can hide a VPN.
+	LocalBypass bool
 	// LocalBypass means this is a ktest-managed, loopback-only DPI-evasion
 	// SOCKS core making direct connections, never a foreign exit.
 	LocalBypass bool
@@ -100,6 +104,9 @@ type Config struct {
 	// PreferVerifiedExit is useful for bootstrapping TCP VPN protocols: try an
 	// already checked foreign proxy before a misleading raw TCP/IP connection.
 	PreferVerifiedExit bool
+	// RejectExits is defense-in-depth for Windscribe's local-only mode.
+	// Both initial and dynamically added foreign routes are refused.
+	RejectExits bool
 	// Stagger is how long the best path gets alone before the next one joins.
 	Stagger time.Duration
 	// ConnectTimeout bounds dial plus SOCKS handshake; FirstByteTimeout bounds
@@ -184,6 +191,9 @@ func New(cfg Config) (*Proxy, error) {
 	p := &Proxy{cfg: cfg, mem: map[string]memo{}}
 	seen := map[string]bool{}
 	for _, u := range cfg.Upstreams {
+		if cfg.RejectExits && u.Exit {
+			return nil, fmt.Errorf("foreign exit %q prohibited by local-only mode", u.Name)
+		}
 		if u.Name == "" || seen[u.Name] {
 			return nil, fmt.Errorf("upstream names must be unique and non-empty (%q)", u.Name)
 		}
@@ -412,6 +422,68 @@ func (p *Proxy) ResetBootstrapPin() {
 	p.bootstrapSkip = p.bootstrapPinned
 	p.bootstrapPinned = ""
 	p.mu.Unlock()
+}
+
+// HasLocalBypass reports a registered locally-run anti-DPI SOCKS strategy.
+// Port readiness is not proof that it can carry the VPN's entire handshake.
+func (p *Proxy) HasLocalBypass() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, u := range p.ups {
+		if u.LocalBypass && !u.Exit && u.Addr != "" && u.Takeover == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// DialWindscribeLocal permits raw OpenVPN TCP only through a locally-run
+// anti-DPI SOCKS core. It never falls back to direct/plain, a remote exit,
+// TLS MITM/fronting takeover or a domain-specific service proxy. CONNECT 200
+// means the local anti-DPI core established TCP, NOT that OpenVPN worked.
+func (p *Proxy) DialWindscribeLocal(ctx context.Context, host, port string) (net.Conn, error) {
+	p.mu.Lock()
+	pinned := p.bootstrapPinned
+	p.mu.Unlock()
+	var candidates []*upstreamState
+	for _, u := range p.order(host) {
+		if !u.LocalBypass || u.Exit || u.Addr == "" || u.Takeover != nil ||
+			(pinned != "" && pinned != u.Name) {
+			continue
+		}
+		candidates = append(candidates, u)
+	}
+	if len(candidates) == 0 {
+		return nil, errors.New("Windscribe: no local IP-preserving anti-DPI TCP path is available")
+	}
+	var lastErr error
+	for _, u := range candidates {
+		began := time.Now()
+		conn, err := p.dial(ctx, u.Upstream, host, port)
+		if err != nil {
+			p.record(u, host, false, time.Since(began))
+			lastErr = err
+			continue
+		}
+		p.mu.Lock()
+		if p.bootstrapPinned == "" {
+			p.bootstrapPinned = u.Name
+		}
+		accepted := p.bootstrapPinned == u.Name
+		p.mu.Unlock()
+		if !accepted {
+			_ = conn.Close()
+			continue
+		}
+		p.record(u, host, true, time.Since(began))
+		p.logf("Windscribe TCP %s:%s through local anti-DPI %s (no foreign exit)", host, port, u.Name)
+		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
+		return conn, nil
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("Windscribe local bypass TCP failed: %w", lastErr)
+	}
+	return nil, errors.New("Windscribe local bypass was not usable")
 }
 
 // DialVerifiedExit is for raw TCP carried by Windscribe's local HTTP proxy.
@@ -960,6 +1032,9 @@ func (p *Proxy) Add(u Upstream) error {
 	defer p.mu.Unlock()
 	if u.Name == "" {
 		return errors.New("upstream name is required")
+	}
+	if p.cfg.RejectExits && u.Exit {
+		return errors.New("foreign exit is prohibited by local-only Windscribe mode")
 	}
 	for _, x := range p.ups {
 		if x.Name == u.Name {
