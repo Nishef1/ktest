@@ -15,9 +15,19 @@ type Front struct {
 	// Dial is the name whose address is connected to. Empty means the address
 	// of the site itself (what the application asked for).
 	Dial string
+	// ECH, when set, is the public name of an Encrypted Client Hello service
+	// (Cloudflare's is cloudflare-ech.com): the wire shows that name and the real
+	// one travels encrypted. SNI is then unused.
+	ECH string
 }
 
 func (f Front) String() string {
+	if f.ECH != "" {
+		if f.Dial == "" {
+			return "ECH (" + f.ECH + ")"
+		}
+		return "ECH (" + f.ECH + ") @ " + f.Dial
+	}
 	sni := f.SNI
 	if sni == "" {
 		sni = "no SNI"
@@ -121,6 +131,29 @@ func DefaultFamilies() []Family {
 			},
 		},
 		{
+			// X's static files and video are on Fastly, on addresses that serve only
+			// their own customer, so the site's own address (or these hints) is needed;
+			// the edge answers with its *.twimg.com certificate whatever the SNI is.
+			Name:    "twimg",
+			Domains: []string{"abs.twimg.com", "abs-0.twimg.com", "video.twimg.com", "ton.twimg.com"},
+			Fronts:  []Front{{SNI: "pypi.org"}, {SNI: "www.python.org"}},
+			Hints:   []string{"146.75.104.159", "146.75.104.158"},
+			Verify:  []string{"twimg.com", "abs.twimg.com"},
+		},
+		{
+			// Cloudflare refuses a request whose Host differs from the SNI, so plain
+			// fronting is impossible here. Encrypted Client Hello hides the real name
+			// instead. Any Cloudflare address serves any Cloudflare site, so the hints
+			// make this work without any DNS.
+			Name: "cloudflare",
+			Domains: []string{
+				"x.com", "twitter.com", "t.co", "twimg.com", "discord.com", "discord.gg",
+				"discordapp.com", "medium.com", "npmjs.com",
+			},
+			Fronts: []Front{{ECH: CloudflareECH}},
+			Hints:  []string{"162.159.140.229", "172.66.0.227", "188.114.99.0", "172.66.157.237", "104.18.37.127"},
+		},
+		{
 			Name: "fastly",
 			Domains: []string{
 				"reddit.com", "redd.it", "redditmedia.com", "redditstatic.com", "redditspace.com",
@@ -141,6 +174,9 @@ func DefaultFamilies() []Family {
 	}
 }
 
+// CloudflareECH is the public name Cloudflare's Encrypted Client Hello uses.
+const CloudflareECH = "cloudflare-ech.com"
+
 // PermittedDomains is what the CA's name constraints are built from.
 func PermittedDomains(fams []Family) []string {
 	seen := map[string]bool{}
@@ -156,7 +192,7 @@ func PermittedDomains(fams []Family) []string {
 	return out
 }
 
-// Lookup returns the family that covers host, or nil.
+// Lookup returns the first family that covers host, or nil.
 func Lookup(fams []Family, host string) *Family {
 	for i := range fams {
 		if fams[i].Match(host) {
@@ -164,6 +200,34 @@ func Lookup(fams []Family, host string) *Family {
 		}
 	}
 	return nil
+}
+
+// LookupAll returns every family that covers host: a site such as twimg.com is
+// served by more than one CDN, and each has its own way in.
+func LookupAll(fams []Family, host string) []*Family {
+	var out []*Family
+	for i := range fams {
+		if fams[i].Match(host) {
+			out = append(out, &fams[i])
+		}
+	}
+	return out
+}
+
+// Uncovered lists the domains of fams that a CA's constraints do not permit,
+// which is what a CA created by an older ktest looks like.
+func Uncovered(fams []Family, permitted []string) []string {
+	have := map[string]bool{}
+	for _, p := range permitted {
+		have[p] = true
+	}
+	var out []string
+	for _, d := range PermittedDomains(fams) {
+		if !have[d] {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // ParseFronts reads user-supplied fronts, one per line:

@@ -101,3 +101,11 @@ What the sources say, and what ktest took from them:
 - **Field state per the channel (unverified here):** fragmentation fully blocked on MCI (even IPv6); Irancell: fragment plus a Python-like cipher-suite fingerprint works for Cloudflare, ECH has strongly limited upload; MASQUE-H2 reported open everywhere. Fronting to Google/Meta/Fastly edges does not depend on any of these, but it can be closed by an operator that whitelists by IP, which is what Diagnose measures.
 
 Live checks on a development machine with unfiltered access (so these prove the mechanism, not the bypass): through the proxy with only the front path enabled, www.youtube.com, www.google.com, www.instagram.com (no SNI), www.reddit.com and pypi.org (SNI pypi.org) all answered with the certificate chain verified, and a Go HTTP/2 client fetched the YouTube home page, a thumbnail from i.ytimg.com, Google, Reddit and Instagram over h2 end to end.
+
+## 2026-10-16: field log 2 and ECH without DNS
+
+The second field log (a network with poisoned DNS, every DoH address reset, and cut ClientHellos punished or reassembled) showed domain fronting answering for Google, Fastly and Meta, and, after `ktest ca -install`, YouTube opened through Connect with the bypass confirmed. The user stated that YouTube and X are filtered domestically, not sanctioned, which is why Google's sanction caveats do not apply to them.
+
+X is behind Cloudflare, which rejects SNI/Host mismatches (checked: 403 for any other SNI, and no-SNI fails), so classic fronting cannot work there. The channel's answer for the MCI firewall is ECH; the DNS-free variant was found and verified live: a dummy ECHConfigList for `cloudflare-ech.com` makes the edge return retry_configs; the retry handshake is accepted (`ECHAccepted`), the certificate is verified for the inner name, and `x.com` answers 200 over h2 through ktest, as do discord.com and the other listed Cloudflare sites. Measured on an unfiltered machine; whether a given operator lets `cloudflare-ech.com` through is what Diagnose now measures (the channel reports it greyed with throttled upload on the Irancell firewall).
+
+X's static hosts use Fastly addresses that serve only their own customer (421 elsewhere); with the site's own address (hints: 146.75.104.158/159) any SNI is answered with the `*.twimg.com` certificate, so a decoy SNI works there.

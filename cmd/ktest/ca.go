@@ -41,6 +41,7 @@ const caUsage = `usage: ktest ca [-install | -uninstall | -delete]
   -install    create the CA if needed and trust it for your Windows user
               (Windows shows its own confirmation dialog)
   -uninstall  stop trusting it; the files stay
+  -renew      replace the CA by a new one that covers every site this ktest can front
   -delete     stop trusting it and delete the CA and its key
 `
 
@@ -50,6 +51,7 @@ func runCA(args []string) int {
 	install := fs.Bool("install", false, "")
 	uninstall := fs.Bool("uninstall", false, "")
 	del := fs.Bool("delete", false, "")
+	renew := fs.Bool("renew", false, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, caUsage) }
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return 2
@@ -57,6 +59,11 @@ func runCA(args []string) int {
 	u := newTerm(os.Stdout)
 	switch {
 	case *install:
+		return caInstall(u)
+	case *renew:
+		if code := caRemove(u, true); code != 0 {
+			return code
+		}
 		return caInstall(u)
 	case *uninstall:
 		return caRemove(u, false)
@@ -85,6 +92,10 @@ func caStatus(u *term) {
 	u.Line(toneInfo, "CA folder    %s", dir)
 	u.Line(toneInfo, "Thumbprint   %s   expires %s", ca.Fingerprint(), ca.Expires().Format("2006-01-02"))
 	u.Line(toneInfo, "Limited to   %d domains (it cannot vouch for any other site, even if its key leaks)", len(ca.Permitted()))
+	if missing := caMissing(ca); len(missing) > 0 {
+		u.Line(toneWarn, "This CA predates %d site(s) this ktest can front: %s", len(missing), strings.Join(firstN(missing, 6), ", "))
+		u.Note("`ktest ca -renew` replaces it by one that covers them (a CA's constraints cannot be extended).")
+	}
 	if ca.TrustedBySystem() {
 		u.Line(toneOK, "Trusted by this system: Connect will use domain fronting for Google, YouTube, Meta and Fastly-hosted sites.")
 		u.Note("Firefox keeps its own store: set security.enterprise_roots.enabled to true in about:config, or import %s.", ca.CertPath())
@@ -172,6 +183,18 @@ func loadOrCreateCA(dir string) (*front.CA, error) {
 	return front.Create(dir, front.PermittedDomains(front.DefaultFamilies()))
 }
 
+// caMissing lists the domains this ktest can front that the CA may not sign.
+func caMissing(ca *front.CA) []string {
+	return front.Uncovered(front.DefaultFamilies(), ca.Permitted())
+}
+
+func firstN(s []string, n int) []string {
+	if len(s) > n {
+		return append(s[:n:n], "...")
+	}
+	return s
+}
+
 func lastLines(s string, n int) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	if len(lines) > n {
@@ -187,6 +210,13 @@ func (t *terminal) frontSetup(readLine func() (string, bool)) {
 	caStatus(u)
 	ca, trusted := loadFrontCA()
 	switch {
+	case ca != nil && trusted && len(caMissing(ca)) > 0:
+		u.Printf("  Type RENEW to replace the CA by one covering every site (Windows asks you to confirm), or press Enter to keep it > ")
+		if ans, ok := readLine(); ok && ans == "RENEW" {
+			if caRemove(u, true) == 0 {
+				caInstall(u)
+			}
+		}
 	case ca != nil && trusted:
 		u.Printf("  Type REMOVE to stop trusting and delete the CA, or press Enter to keep it > ")
 		if ans, ok := readLine(); ok && ans == "REMOVE" {

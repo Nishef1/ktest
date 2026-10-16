@@ -35,6 +35,7 @@ func probeFronts(ctx context.Context) []frontCheck {
 		{"www.youtube.com", "/generate_204"},
 		{"www.instagram.com", "/"},
 		{"www.reddit.com", "/"},
+		{"x.com", "/"},
 	}
 	out := make([]frontCheck, len(sites))
 	var wg sync.WaitGroup

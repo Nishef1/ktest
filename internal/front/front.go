@@ -69,6 +69,7 @@ type Fronter struct {
 
 	mu       sync.Mutex
 	scores   map[string]*score
+	ech      map[string][]byte // learned ECH configurations by public name
 	accepted int
 	refused  int // consecutive refusals since the last accepted connection
 	disabled string
@@ -230,47 +231,65 @@ func (f *Fronter) prepare(ctx context.Context, host, port string, flight []byte)
 	if name == "" || net.ParseIP(name) != nil {
 		name = normalize(host)
 	}
-	fam := Lookup(f.cfg.Families, name)
-	if fam == nil || !f.cfg.CA.Permits(name) {
+	fams := LookupAll(f.cfg.Families, name)
+	if len(fams) == 0 || !f.cfg.CA.Permits(name) {
 		return nil, fmt.Errorf("%s is not a fronted site", name)
 	}
-	protos, err := chooseALPN(fam, name, offered)
+	protos, err := chooseALPN(fams[0], name, offered)
 	if err != nil {
 		return nil, err
 	}
-	conn, fr, err := f.connect(ctx, fam, name, protos)
+	conn, rt, err := f.connect(ctx, fams, name, protos)
 	if err != nil {
 		return nil, err
 	}
-	f.logf("front: %s reached with %s", name, fr)
-	return &session{f: f, up: conn, name: name, protos: protos, fam: fam, fr: fr}, nil
+	f.logf("front: %s reached with %s", name, rt.fr)
+	return &session{f: f, up: conn, name: name, protos: protos, fam: rt.fam, fr: rt.fr}, nil
+}
+
+// route is one way in: a front of one family.
+type route struct {
+	fam *Family
+	fr  Front
 }
 
 type attemptResult struct {
-	conn *utls.UConn
-	fr   Front
+	conn net.Conn
+	rt   route
 	err  error
 }
 
-// connect tries the family's fronts, the best one first and the next ones
-// after a short delay or at once when the earlier one failed, and returns the
-// first verified connection.
-func (f *Fronter) connect(ctx context.Context, fam *Family, name string, protos []string) (*utls.UConn, Front, error) {
-	fronts := f.ordered(fam)
+// connect tries the fronts of every family that covers the site, the best one
+// first and the next ones after a short delay or at once when the earlier one
+// failed, and returns the first verified connection.
+func (f *Fronter) connect(ctx context.Context, fams []*Family, name string, protos []string) (net.Conn, route, error) {
+	var routes []route
+	for _, fam := range fams {
+		for _, fr := range f.ordered(fam) {
+			routes = append(routes, route{fam, fr})
+		}
+	}
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results := make(chan attemptResult, len(fronts))
+	results := make(chan attemptResult, len(routes))
 	launched := 0
 	launch := func() {
-		if launched >= len(fronts) {
+		if launched >= len(routes) {
 			return
 		}
-		fr := fronts[launched]
+		rt := routes[launched]
 		launched++
 		go func() {
-			c, err := f.try(cctx, fam, fr, name, protos)
-			results <- attemptResult{c, fr, err}
+			c, err := f.try(cctx, rt.fam, rt.fr, name, protos)
+			results <- attemptResult{c, rt, err}
 		}()
+	}
+	closeLosers := func(left int) {
+		for ; left > 0; left-- {
+			if x := <-results; x.conn != nil {
+				_ = x.conn.Close()
+			}
+		}
 	}
 	launch()
 	timer := time.NewTimer(f.cfg.HedgeDelay)
@@ -280,7 +299,7 @@ func (f *Fronter) connect(ctx context.Context, fam *Family, name string, protos 
 	for pending > 0 {
 		select {
 		case <-timer.C:
-			if launched < len(fronts) {
+			if launched < len(routes) {
 				launch()
 				pending++
 				timer.Reset(f.cfg.HedgeDelay)
@@ -288,41 +307,29 @@ func (f *Fronter) connect(ctx context.Context, fam *Family, name string, protos 
 		case r := <-results:
 			pending--
 			if r.err == nil {
-				f.note(fam, r.fr, true)
+				f.note(r.rt.fam, r.rt.fr, true)
 				cancel()
-				go func(left int) {
-					for ; left > 0; left-- {
-						if x := <-results; x.conn != nil {
-							_ = x.conn.Close()
-						}
-					}
-				}(pending)
-				return r.conn, r.fr, nil
+				go closeLosers(pending)
+				return r.conn, r.rt, nil
 			}
 			if ctx.Err() == nil {
-				f.note(fam, r.fr, false)
+				f.note(r.rt.fam, r.rt.fr, false)
 			}
-			lastErr = fmt.Errorf("%s: %w", r.fr, r.err)
+			lastErr = fmt.Errorf("%s: %w", r.rt.fr, r.err)
 			f.logf("front: %s %v", name, lastErr)
-			if launched < len(fronts) {
+			if launched < len(routes) {
 				launch()
 				pending++
 			}
 		case <-ctx.Done():
-			go func(left int) {
-				for ; left > 0; left-- {
-					if x := <-results; x.conn != nil {
-						_ = x.conn.Close()
-					}
-				}
-			}(pending)
-			return nil, Front{}, ctx.Err()
+			go closeLosers(pending)
+			return nil, route{}, ctx.Err()
 		}
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no front")
 	}
-	return nil, Front{}, lastErr
+	return nil, route{}, lastErr
 }
 
 // addrs returns the addresses to connect to for a name, never a block-page one.
@@ -359,7 +366,7 @@ func (f *Fronter) clean(ips []string) ([]string, error) {
 }
 
 // try makes one verified connection to the edge using one front.
-func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, protos []string) (*utls.UConn, error) {
+func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, protos []string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, f.cfg.DialTimeout)
 	defer cancel()
 	dialName := fr.Dial
@@ -369,22 +376,30 @@ func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, p
 	ips, err := f.addrs(ctx, dialName)
 	if err != nil && fr.Dial == "" && len(fam.Hints) > 0 {
 		f.logf("front: no trusted address for %s (%v); using the family's edge hints", dialName, err)
-		ips, err = fam.Hints, nil
+		ips, err = shuffled(fam.Hints), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("address of %s: %w", dialName, err)
 	}
-	var raw net.Conn
-	for i, ip := range ips {
-		if i == 2 {
-			break
+	connect := func() (net.Conn, error) {
+		var last error
+		for i, ip := range ips {
+			if i == 2 {
+				break
+			}
+			raw, err := f.cfg.dial(ctx, net.JoinHostPort(ip, "443"))
+			if err == nil {
+				return raw, nil
+			}
+			last = err
 		}
-		raw, err = f.cfg.dial(ctx, net.JoinHostPort(ip, "443"))
-		if err == nil {
-			break
-		}
+		return nil, last
 	}
-	if raw == nil {
+	if fr.ECH != "" {
+		return f.tryECH(ctx, fr, name, protos, connect)
+	}
+	raw, err := connect()
+	if err != nil {
 		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
@@ -508,7 +523,7 @@ func (f *Fronter) acceptedOne() {
 
 type session struct {
 	f      *Fronter
-	up     *utls.UConn
+	up     net.Conn
 	name   string
 	protos []string
 	fam    *Family

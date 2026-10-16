@@ -622,7 +622,10 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 		CA: ca, Families: fams, Resolve: resolve, Logf: logf,
 		OnTrouble: func(msg string) { t.Line(toneWarn, "%s", msg) },
 	})
-	return f, "on - Google, YouTube, Meta and Fastly-hosted sites can use domain fronting"
+	if missing := caMissing(ca); len(missing) > 0 {
+		return f, "on, but the CA predates " + strings.Join(firstN(missing, 3), ", ") + " - run `ktest ca -renew` to cover them"
+	}
+	return f, "on - Google, YouTube, X, Meta, Discord and Fastly-hosted sites can use fronting / ECH"
 }
 
 func frontSuffix(f *front.Fronter) string {

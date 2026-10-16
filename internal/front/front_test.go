@@ -103,13 +103,13 @@ func TestFamilyMatchAndFrontsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := WithFronts(fams, extra)
-	if g := got[2].Fronts[0]; g.SNI != "www.example-front.test" || g.Dial != "www.example-front.test" {
+	if g := byName(got, "fastly").Fronts[0]; g.SNI != "www.example-front.test" || g.Dial != "www.example-front.test" {
 		t.Fatalf("fastly front %+v", g)
 	}
-	if g := got[0].Fronts[0]; g.SNI != "" || g.Dial != "" {
+	if g := byName(got, "google").Fronts[0]; g.SNI != "" || g.Dial != "" {
 		t.Fatalf("google front %+v", g)
 	}
-	if g := got[1].Fronts[0]; g.SNI != "www.x.test" || g.Dial != "" {
+	if g := byName(got, "meta").Fronts[0]; g.SNI != "www.x.test" || g.Dial != "" {
 		t.Fatalf("meta front %+v", g)
 	}
 	if _, err := ParseFronts("onlyone"); err == nil {
@@ -438,4 +438,13 @@ func TestFrontUsesEdgeHintsWhenNoTrustedAddressExists(t *testing.T) {
 	if addr, _ := dialed.Load().(string); !strings.HasPrefix(addr, "57.144.") {
 		t.Fatalf("dialed %q, want one of the family's hints", addr)
 	}
+}
+
+func byName(fams []Family, name string) Family {
+	for _, f := range fams {
+		if f.Name == name {
+			return f
+		}
+	}
+	panic("no family " + name)
 }
