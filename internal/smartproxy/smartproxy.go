@@ -305,6 +305,26 @@ func (p *Proxy) HasVerifiedExit() bool {
 	return false
 }
 
+// Remove unregisters a dead external exit without breaking active sessions
+// which already own a net.Conn. Future connections can no longer select it.
+func (p *Proxy) Remove(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, u := range p.ups {
+		if u.Name == name {
+			p.ups = append(p.ups[:i], p.ups[i+1:]...)
+			break
+		}
+	}
+	for host, m := range p.mem {
+		if m.name == name {
+			delete(p.mem, host)
+		}
+	}
+	// The AI policy must not silently jump between identities; it remains
+	// pinned and fails closed if a previously chosen exit disappeared.
+}
+
 // ResetBootstrapPin is allowed only when the authoritative Windscribe CLI
 // reports a disconnected session. Live TCP streams are not touched.
 func (p *Proxy) ResetBootstrapPin() {
