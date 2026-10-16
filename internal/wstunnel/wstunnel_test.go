@@ -18,6 +18,15 @@ import (
 	"time"
 )
 
+func TestDialReportsTCPFailureWithoutLosingCause(t *testing.T) {
+	blocked := errors.New("destination blocked")
+	_, err := Dial(context.Background(), Config{Addr: "203.0.113.1:443", Host: "203.0.113.1", Dial: func(context.Context, string) (net.Conn, error) { return nil, blocked }})
+	var stage *StageError
+	if !errors.Is(err, blocked) || !errors.As(err, &stage) || stage.Stage != "tcp" {
+		t.Fatalf("TCP stage and cause must survive: %v", err)
+	}
+}
+
 // readClientFrame reads one masked client frame.
 func readClientFrame(r *bufio.Reader) (byte, []byte, error) {
 	var h [2]byte
@@ -136,6 +145,10 @@ func TestUpgradeRefusedIsAnError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("want HTTP 404 error, got %v", err)
 	}
+	var stage *StageError
+	if !errors.As(err, &stage) || stage.Stage != "websocket" {
+		t.Fatalf("wrong failure boundary: %v", err)
+	}
 }
 
 func TestVerifyRejectsUntrustedCertificate(t *testing.T) {
@@ -152,6 +165,10 @@ func TestVerifyPeerDecides(t *testing.T) {
 	_, err := Dial(context.Background(), Config{Addr: srv.Listener.Addr().String(), Host: "x", VerifyPeer: refuse, Dial: dialTCP})
 	if err == nil || !strings.Contains(err.Error(), "not windscribe") {
 		t.Fatalf("VerifyPeer ignored: %v", err)
+	}
+	var stage *StageError
+	if !errors.As(err, &stage) || stage.Stage != "tls" {
+		t.Fatalf("wrong failure boundary: %v", err)
 	}
 	seen := 0
 	accept := func(certs []*x509.Certificate) error { seen = len(certs); return nil }

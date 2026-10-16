@@ -57,6 +57,23 @@ type Config struct {
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+// StageError identifies the boundary that failed, preserving the original
+// error for errors.Is/errors.As and timeout diagnostics.
+type StageError struct {
+	Stage string
+	Err   error
+}
+
+func (e *StageError) Error() string { return e.Stage + ": " + e.Err.Error() }
+func (e *StageError) Unwrap() error { return e.Err }
+
+func stageError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &StageError{Stage: stage, Err: err}
+}
+
 // Dial opens the TCP leg, completes TLS and the WebSocket upgrade, and
 // returns a stream whose Read/Write carry the raw tunneled bytes. HTTP 101
 // proves a WStunnel server answered; it does not prove the VPN handshake.
@@ -82,14 +99,14 @@ func Dial(ctx context.Context, c Config) (net.Conn, error) {
 	defer cancel()
 	raw, err := c.Dial(dctx, c.Addr)
 	if err != nil {
-		return nil, err
+		return nil, stageError("tcp", err)
 	}
 	stop := context.AfterFunc(dctx, func() { _ = raw.Close() })
 	conn, br, err := handshake(dctx, raw, c, path)
 	if !stop() || err != nil {
 		_ = raw.Close()
 		if err == nil {
-			err = dctx.Err()
+			err = stageError("websocket", dctx.Err())
 		}
 		return nil, err
 	}
@@ -111,14 +128,15 @@ func DialStealth(ctx context.Context, c Config) (net.Conn, error) {
 	defer cancel()
 	raw, err := c.Dial(dctx, c.Addr)
 	if err != nil {
-		return nil, err
+		return nil, stageError("tcp", err)
 	}
 	stop := context.AfterFunc(dctx, func() { _ = raw.Close() })
 	conn, err := clientTLS(dctx, raw, c)
+	err = stageError("tls", err)
 	if !stop() || err != nil {
 		_ = raw.Close()
 		if err == nil {
-			err = dctx.Err()
+			err = stageError("tls", dctx.Err())
 		}
 		return nil, err
 	}
@@ -164,7 +182,7 @@ func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error)
 func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Conn, *bufio.Reader, error) {
 	u, err := clientTLS(ctx, raw, c)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, stageError("tls", err)
 	}
 	keyBytes := make([]byte, 16)
 	if _, err := rand.Read(keyBytes); err != nil {
@@ -173,18 +191,18 @@ func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Co
 	key := base64.StdEncoding.EncodeToString(keyBytes)
 	req := "GET " + path + " HTTP/1.1\r\nHost: " + c.Host + "\r\nUser-Agent: Go-http-client/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
 	if _, err := io.WriteString(u, req); err != nil {
-		return nil, nil, err
+		return nil, nil, stageError("websocket", err)
 	}
 	br := bufio.NewReaderSize(u, 32<<10)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("upgrade: %w", err)
+		return nil, nil, stageError("websocket", fmt.Errorf("upgrade: %w", err))
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return nil, nil, fmt.Errorf("upgrade refused: HTTP %d", resp.StatusCode)
+		return nil, nil, stageError("websocket", fmt.Errorf("upgrade refused: HTTP %d", resp.StatusCode))
 	}
 	if !strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") || resp.Header.Get("Sec-WebSocket-Accept") != acceptKey(key) {
-		return nil, nil, errors.New("upgrade: not a WebSocket server")
+		return nil, nil, stageError("websocket", errors.New("upgrade: not a WebSocket server"))
 	}
 	return u, br, nil
 }

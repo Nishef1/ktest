@@ -26,7 +26,7 @@ import (
 type wsOptions struct {
 	direct   bool
 	sni      string // comma-separated SNIs for direct mode
-	serverIP string // explicit WStunnel server IP; default: OpenVPN TCP IP - 1
+	serverIP string // explicit WStunnel server IP; otherwise provider node list
 	path     string
 	cdnHost  string // user's CDN hostname whose origin is a Windscribe WStunnel IP
 	cdnSNI   string
@@ -115,8 +115,10 @@ func (o wsOptions) validate() error {
 
 // wsCarrier is one way to carry a Windscribe OpenVPN TCP stream.
 type wsCarrier struct {
-	name string
-	open func(ctx context.Context, host, port string) (net.Conn, error)
+	name   string
+	open   func(ctx context.Context, host, port string) (net.Conn, error)
+	addr   string
+	source string
 }
 
 // wsBridge decides, per HTTP CONNECT from Windscribe, how to carry it. Names
@@ -133,6 +135,7 @@ type wsBridge struct {
 	logf         func(string, ...any)
 	note         func(string, ...any) // always shown (edge scan progress)
 	stagger      time.Duration
+	catalog      *wsNodeCatalog
 	// candidates overrides the carrier list (tests).
 	candidates func(host string) []wsCarrier
 
@@ -142,8 +145,8 @@ type wsBridge struct {
 	bad   map[string]map[string]time.Time // destination -> carrier -> demoted until
 }
 
-// windscribeServerCert accepts only certificates naming a windscribe.com
-// host, so the direct carriers can only ever end at a Windscribe server.
+// windscribeServerCert rejects certificates without a Windscribe hostname.
+// The inner OpenVPN client performs the authenticated server verification.
 func windscribeServerCert(certs []*x509.Certificate) error {
 	if len(certs) == 0 {
 		return errors.New("no certificate")
@@ -155,30 +158,6 @@ func windscribeServerCert(certs []*x509.Certificate) error {
 		}
 	}
 	return errors.New("server is not a Windscribe node")
-}
-
-// neighbourIP returns ip+delta in the same /24. Windscribe numbers a node's
-// addresses consecutively: WStunnel/IKEv2 = OpenVPN TCP - 1, Stealth/WireGuard
-// = OpenVPN TCP + 1 (observed: 68.67.118.162/.163/.164, 198.44.157.27/.28/.29).
-// The Windscribe certificate check and the OpenVPN answer confirm every guess.
-func neighbourIP(openvpnIP string, delta int) (string, bool) {
-	ip := net.ParseIP(openvpnIP).To4()
-	if ip == nil {
-		return "", false
-	}
-	last := int(ip[3]) + delta
-	if last < 1 || last > 254 {
-		return "", false
-	}
-	return net.IPv4(ip[0], ip[1], ip[2], byte(last)).String(), true
-}
-
-// wstunnelIP is the node's WStunnel address, or the explicit override.
-func wstunnelIP(openvpnIP, override string) (string, bool) {
-	if override != "" {
-		return override, true
-	}
-	return neighbourIP(openvpnIP, -1)
 }
 
 func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.Conn, error), report func(smartproxy.Event), logf func(string, ...any)) *wsBridge {
@@ -237,7 +216,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		}
 		for _, leg := range legs {
 			for _, edge := range edges {
-				out = append(out, wsCarrier{name: "CDN " + o.cdnHost + "@" + edge + leg.suffix, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				out = append(out, wsCarrier{name: "CDN " + o.cdnHost + "@" + edge + leg.suffix, addr: edge, source: "configured CDN", open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					return wstunnel.Dial(ctx, wstunnel.Config{Addr: edge, SNI: sni, Host: o.cdnHost, Path: b.path, Verify: true, Dial: leg.dial})
 				}})
 			}
@@ -248,30 +227,36 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		if len(snis) == 0 {
 			snis = []string{""}
 		}
-		ws, wsOK := wstunnelIP(host, o.serverIP)
-		st, stOK := neighbourIP(host, +1)
+		endpoints := b.catalog.endpoints(host)
+		if len(endpoints) == 0 && o.serverIP == "" {
+			b.logf("Windscribe %s: no fresh provider node mapping; no IP neighbours guessed; raw destination retained", host)
+		}
 		for _, leg := range legs {
 			for _, sni := range snis {
 				label := sni
 				if label == "" {
 					label = "none"
 				}
-				if wsOK {
-					addr := net.JoinHostPort(ws, "443")
-					out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
-						return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: ws, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial})
+				wsEndpoints := endpoints
+				if o.serverIP != "" {
+					wsEndpoints = []wsEndpoint{{o.serverIP, "explicit override"}}
+				}
+				for _, endpoint := range wsEndpoints {
+					addr := net.JoinHostPort(endpoint.ip, "443")
+					out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " @" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial})
 					}})
 				}
-				if stOK {
-					addr := net.JoinHostPort(st, "443")
-					out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				for _, endpoint := range endpoints {
+					addr := net.JoinHostPort(endpoint.ip, "443")
+					out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " @" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 						return wstunnel.DialStealth(ctx, wstunnel.Config{Addr: addr, SNI: sni, VerifyPeer: windscribeServerCert, Dial: leg.dial})
 					}})
 				}
 			}
 		}
 	}
-	return append(out, wsCarrier{name: "raw OpenVPN +anti-DPI", open: b.carrierLocal})
+	return append(out, wsCarrier{name: "raw OpenVPN +anti-DPI", open: b.carrierLocal, source: "client CONNECT"})
 }
 
 // isWindscribeCarrier tells the live feed that a path name is a carrier.
@@ -353,6 +338,14 @@ type raceResult struct {
 // rather than this bridge, authenticates the server's OpenVPN response.
 func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
 	key := net.JoinHostPort(host, port)
+	if b.catalog != nil && b.opts.serverIP == "" && len(b.catalog.endpoints(host)) == 0 {
+		select {
+		case <-b.catalog.ready:
+		case <-time.After(3 * time.Second):
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
 	cs := b.ordered(key, b.carriersFor(host))
 	live, stopLive := context.WithCancel(ctx)
 	rctx, cancel := context.WithTimeout(live, 25*time.Second)
@@ -383,13 +376,23 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
 	var lastErr error
+	failures := make(map[string]int)
 	fail := func(c wsCarrier, err error) {
+		stage := "tcp"
+		var staged *wstunnel.StageError
+		if errors.As(err, &staged) {
+			stage = staged.Stage
+		}
 		errMu.Lock()
+		failures[stage]++
 		lastErr = fmt.Errorf("%s: %w", c.name, err)
 		errMu.Unlock()
-		b.logf("Windscribe %s: %s failed: %v", key, c.name, err)
+		b.logf("Windscribe %s: %s destination=%s source=%s failed stage=%s: %v", key, c.name, c.addr, c.source, stage, err)
 	}
 	for i, c := range cs {
+		if c.addr == "" {
+			c.addr = key
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -400,7 +403,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 			conn, err := c.open(rctx, host, port)
 			if err != nil {
-				if rctx.Err() == nil {
+				if ctx.Err() == nil && rctx.Err() != context.Canceled {
 					fail(c, err)
 				}
 				return
@@ -427,8 +430,8 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				if err == nil {
 					err = errors.New("no answer")
 				}
-				if rctx.Err() == nil {
-					fail(c, err)
+				if ctx.Err() == nil && rctx.Err() != context.Canceled {
+					fail(c, &wstunnel.StageError{Stage: "openvpn", Err: err})
 				}
 				return
 			}
@@ -452,6 +455,13 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		stopLive()
 		errMu.Lock()
 		err := lastErr
+		var parts []string
+		for _, stage := range []string{"tcp", "tls", "websocket", "openvpn"} {
+			if failures[stage] > 0 {
+				parts = append(parts, fmt.Sprintf("%s=%d", stage, failures[stage]))
+			}
+		}
+		summary := strings.Join(parts, ", ")
 		errMu.Unlock()
 		if err == nil {
 			err = raceErr
@@ -459,9 +469,15 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				err = errors.New("no carrier")
 			}
 		}
-		return nil, nil, fmt.Errorf("no Windscribe carrier answered: %w", err)
+		if b.catalog != nil && len(b.catalog.endpoints(host)) == 0 && b.opts.serverIP == "" {
+			summary = "no fresh node mapping; " + summary
+		}
+		if b.report != nil && ctx.Err() == nil {
+			b.report(smartproxy.Event{Host: host, Site: host, Err: "Windscribe race failed [" + summary + "]"})
+		}
+		return nil, nil, fmt.Errorf("no Windscribe carrier answered (%s): %w", summary, err)
 	}
-	b.logf("Windscribe %s carried by %s; OpenVPN server answered in %s", key, r.c.name, shortDur(r.took))
+	b.logf("Windscribe %s carried by %s source=%s; tunneled data returned in %s (authentication remains with Windscribe)", key, r.c.name, r.c.source, shortDur(r.took))
 	if b.report != nil {
 		b.report(smartproxy.Event{Host: host, Site: host, Path: r.c.name, Took: r.took, TCPOnly: true})
 	}

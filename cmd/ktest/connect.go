@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -130,7 +132,7 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
 	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: race WStunnel and Stealth straight to the Windscribe node with chosen SNIs")
 	fs.StringVar(&o.ws.sni, "windscribe-wstunnel-sni", o.ws.sni, "comma-separated TLS SNIs raced on the direct carriers")
-	fs.StringVar(&o.ws.serverIP, "windscribe-wstunnel-ip", "", "Windscribe WStunnel server IP (default: the OpenVPN TCP IP minus one, as Windscribe numbers its nodes)")
+	fs.StringVar(&o.ws.serverIP, "windscribe-wstunnel-ip", "", "explicit Windscribe WStunnel server IP (default: addresses advertised for the same node by Windscribe)")
 	fs.StringVar(&o.ws.path, "windscribe-wstunnel-path", "", "WStunnel path (default "+wstunnel.DefaultPath+")")
 	fs.StringVar(&o.ws.cdnHost, "windscribe-cdn", "", "your Cloudflare hostname whose proxied DNS record points at a Windscribe WStunnel IP; tried first")
 	fs.StringVar(&o.ws.cdnSNI, "windscribe-cdn-sni", "", "TLS SNI for the CDN carrier (default: -windscribe-cdn)")
@@ -217,7 +219,7 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
 		if isWindscribeCarrier(e.Path) {
-			t.Line(toneOK, "%-26s Windscribe OpenVPN server answered via %s (%s); login is up to Windscribe", e.Host, e.Path, shortDur(e.Took))
+			t.Line(toneInfo, "%-26s Windscribe carrier returned data via %s (%s); VPN not yet verified", e.Host, e.Path, shortDur(e.Took))
 			return
 		}
 		t.Line(toneInfo, "%-26s TCP proxy accepted via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
@@ -604,6 +606,21 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				}
 				bridge := newWSBridge(o.ws, apiDial, cfg.OnEvent, logf)
 				bridge.carrierLocal = proxy.DialWindscribeCarrier
+				bridge.catalog = newWSNodeCatalog()
+				cachePath := filepath.Join(o.base, "cache", "windscribe-nodes.json")
+				bridge.catalog.load(cachePath)
+				catalogTransport := &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+					host, port, err := net.SplitHostPort(addr)
+					if err != nil {
+						return nil, err
+					}
+					return apiDial(ctx, host, port)
+				}}
+				defer catalogTransport.CloseIdleConnections()
+				catalogClient := &http.Client{Transport: catalogTransport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+					return errors.New("Windscribe node-list redirects are not accepted")
+				}}
+				go bridge.catalog.run(ctx, catalogClient, cachePath, logf)
 				bridge.note = func(f string, a ...any) { t.Line(toneInfo, f, a...) }
 				if o.ws.cdnHost != "" && o.ws.cdnEdges == "" {
 					if ips, err := edges.CloudflareCandidates(300); err == nil {

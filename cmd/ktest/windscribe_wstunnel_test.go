@@ -14,19 +14,23 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/smartproxy"
+	"github.com/Nishef1/ktest/internal/wstunnel"
 )
 
-func TestWStunnelIPIsOneBelowOpenVPNTCP(t *testing.T) {
-	for in, want := range map[string]string{"68.67.118.163": "68.67.118.162", "198.44.157.28": "198.44.157.27"} {
-		if got, ok := wstunnelIP(in, ""); !ok || got != want {
-			t.Fatalf("%s -> %s, want %s", in, got, want)
+func TestUnknownWindscribeNodeDoesNotInventNeighbourAddresses(t *testing.T) {
+	b := newWSBridge(wsOptions{direct: true, sni: "www.speedtest.net"}, nil, nil, func(string, ...any) {})
+	cs := b.carriersFor("203.0.113.101")
+	if len(cs) != 1 || cs[0].name != "raw OpenVPN +anti-DPI" {
+		t.Fatalf("unknown node must keep only its original raw destination; got %+v", cs)
+	}
+}
+
+func TestExplicitWStunnelOverrideDoesNotInventStealth(t *testing.T) {
+	b := newWSBridge(wsOptions{direct: true, sni: "www.speedtest.net", serverIP: "203.0.113.9"}, nil, nil, func(string, ...any) {})
+	for _, c := range b.carriersFor("203.0.113.101") {
+		if strings.HasPrefix(c.name, "Stealth ") || (strings.HasPrefix(c.name, "WStunnel ") && c.addr != "203.0.113.9:443") {
+			t.Fatalf("invalid override route: %+v", c)
 		}
-	}
-	if got, _ := wstunnelIP("68.67.118.163", "203.0.113.9"); got != "203.0.113.9" {
-		t.Fatal("explicit -windscribe-wstunnel-ip ignored")
-	}
-	if _, ok := wstunnelIP("10.0.0.1", ""); ok {
-		t.Fatal("x.x.x.1 has no lower neighbour")
 	}
 }
 
@@ -73,16 +77,6 @@ func TestLooksTLSorHTTP(t *testing.T) {
 	}
 	if looksTLSorHTTP([]byte{0x00, 0x2a, 0x38, 1, 2}) { // OpenVPN TCP hard reset
 		t.Fatal("OpenVPN mistaken for TLS")
-	}
-}
-
-// fakeConn answers with a label so tests can tell which dialer carried it.
-func TestStealthIsOneAboveOpenVPNTCP(t *testing.T) {
-	if got, ok := neighbourIP("68.67.118.163", +1); !ok || got != "68.67.118.164" {
-		t.Fatalf("got %s", got)
-	}
-	if _, ok := neighbourIP("10.0.0.254", +1); ok {
-		t.Fatal("x.x.x.255 is not a node address")
 	}
 }
 
@@ -393,6 +387,35 @@ func TestRaceFailsWhenNothingAnswers(t *testing.T) {
 	}
 }
 
+func TestRaceReportsEachFailureBoundary(t *testing.T) {
+	b := testBridge(&dialLog{})
+	b.candidates = func(string) []wsCarrier {
+		var cs []wsCarrier
+		for _, stage := range []string{"tcp", "tls", "websocket"} {
+			cs = append(cs, wsCarrier{name: stage, addr: "203.0.113.9:443", source: "global/ip", open: func(context.Context, string, string) (net.Conn, error) {
+				return nil, &wstunnel.StageError{Stage: stage, Err: errors.New("probe failure")}
+			}})
+		}
+		cs = append(cs, wsCarrier{name: "no VPN response", open: func(context.Context, string, string) (net.Conn, error) {
+			a, z := net.Pipe()
+			_ = z.Close()
+			return a, nil
+		}})
+		return cs
+	}
+	var events []smartproxy.Event
+	b.report = func(e smartproxy.Event) { events = append(events, e) }
+	_, _, err := b.race(context.Background(), "203.0.113.100", "443", openvpnReset, nil)
+	if err == nil || len(events) != 1 {
+		t.Fatalf("missing race failure: events=%+v err=%v", events, err)
+	}
+	for _, stage := range []string{"tcp=1", "tls=1", "websocket=1", "openvpn=1"} {
+		if !strings.Contains(events[0].Err, stage) {
+			t.Fatalf("missing %s in %+v", stage, events[0])
+		}
+	}
+}
+
 func TestRaceOrderLearnsFromStreamLifetime(t *testing.T) {
 	b := testBridge(&dialLog{}, carrierSpec{name: "a"}, carrierSpec{name: "b"}, carrierSpec{name: "c"})
 	key := "68.67.118.163:443"
@@ -431,6 +454,10 @@ func TestBridgeReportsAnsweredCarrier(t *testing.T) {
 
 func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 	b := newWSBridge(wsOptions{direct: true, sni: "a.example,b.example", cdnHost: "ws.example.com"}, nil, nil, func(string, ...any) {})
+	b.catalog = newWSNodeCatalog()
+	if err := b.catalog.replace("global", []byte(`{"data":[{"nodes":[{"ip":"68.67.118.162","ip2":"68.67.118.163","ip3":"68.67.118.164","hostname":"se.example.com"}]}]}`), time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	var names []string
 	for _, c := range b.carriersFor("68.67.118.163") {
 		names = append(names, c.name)
@@ -441,7 +468,7 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}
 	}
-	if len(names) != 2+2*2*2+1 {
+	if len(names) != 2+2*2*2*2+1 {
 		t.Fatalf("%d carriers:\n%s", len(names), all)
 	}
 }
