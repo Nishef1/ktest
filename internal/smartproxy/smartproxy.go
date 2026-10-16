@@ -56,6 +56,16 @@ type Upstream struct {
 	// path that only works for some sites (domain fronting) stays out of the way
 	// of all the others.
 	Match func(host string) bool
+	// Exit marks a path that leaves from another address (a WARP or VPN exit).
+	// Cutting or fronting cannot help a destination that is blocked by address,
+	// so for traffic that is not TLS these are the only paths besides the direct
+	// one worth trying.
+	Exit bool
+	// Late keeps the path out of the race until every other path has failed or
+	// lateAfter has passed, unless it is the remembered first choice. An exit
+	// that carries everything through a third party should be the last resort,
+	// not a competitor of the paths that reach the site directly.
+	Late bool
 	// Takeover, when set, replaces the relay: the path speaks TLS to the
 	// application itself (it terminates the connection and re-originates it
 	// toward the site). Prepare must do everything that can fail without the
@@ -368,12 +378,28 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	if len(order) == 0 {
 		return winner{}, errors.New("no path applies to this site")
 	}
+	// Late paths go to the back, behind a gate that opens when everything else
+	// has failed or after lateAfter.
+	remembered := p.rememberedName(host)
+	var ordered, late []*upstreamState
+	for _, u := range order {
+		if u.Late && u.Name != remembered {
+			late = append(late, u)
+		} else {
+			ordered = append(ordered, u)
+		}
+	}
+	if len(ordered) == 0 { // nothing but last resorts exists: they are the race
+		ordered, late = late, nil
+	}
+	limit := len(ordered)
+	order = append(ordered, late...)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	results := make(chan outcome, len(order))
 	next, pending := 0, 0
 	launch := func(n int) {
-		for ; n != 0 && next < len(order); n-- {
+		for ; n != 0 && next < limit; n-- {
 			u := order[next]
 			next++
 			pending++
@@ -388,12 +414,21 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	launch(1)
 	timer := time.NewTimer(wave)
 	defer timer.Stop()
+	lateGate := time.NewTimer(lateAfter)
+	defer lateGate.Stop()
 	var lastErr error
 	for pending > 0 || next < len(order) {
+		if pending == 0 && next >= limit && limit < len(order) {
+			limit = len(order) // everything else failed: the last resort may go
+			launch(-1)
+		}
 		select {
 		case <-parent.Done():
 			go drain(results, pending)
 			return winner{}, parent.Err()
+		case <-lateGate.C:
+			limit = len(order)
+			launch(-1)
 		case <-timer.C:
 			launch(-1)
 		case r := <-results:
@@ -421,6 +456,9 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	return winner{}, lastErr
 }
 
+// lateAfter is how long a Late path waits behind the others at most.
+const lateAfter = 3 * time.Second
+
 // firstWave is how long the first path gets alone. It scales with that path's
 // own typical time to a TLS record: on an open network the plain path then
 // finishes before any duplicate flight is sent, while a blocked site still
@@ -440,6 +478,16 @@ func (p *Proxy) emit(e Event) {
 	if p.cfg.OnEvent != nil {
 		p.cfg.OnEvent(e)
 	}
+}
+
+// rememberedName is the path remembered for the site, or "".
+func (p *Proxy) rememberedName(host string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if m, ok := p.mem[siteKey(host)]; ok && time.Since(m.at) < p.cfg.MemoryTTL {
+		return m.name
+	}
+	return ""
 }
 
 func (p *Proxy) hasMemory(host string) bool {
@@ -529,32 +577,68 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 	return winner{conn: conn, first: header}, nil
 }
 
-// plain handles non-TLS traffic: no replay is possible, so use the best path
-// and fall through only on connection failure.
+// plain handles non-TLS traffic: no replay is possible and nothing cuts a
+// protocol it cannot parse, so only the direct route and exit paths are tried,
+// in learned order, falling through when the connection cannot be made. The
+// outcome is remembered per destination, so a destination blocked by address
+// (Telegram's) goes to the exit first the next time instead of timing out again.
 func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (net.Conn, error) {
-	var lastErr error
-	for _, u := range p.order(host) {
-		if u.Takeover != nil {
-			continue // it only speaks TLS
+	all := p.order(host)
+	var cands []*upstreamState
+	for _, u := range all {
+		if u.Takeover == nil && (u.Addr == "" || u.Exit) {
+			cands = append(cands, u)
 		}
-		conn, err := p.dial(ctx, u.Upstream, host, port)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if len(flight) > 0 {
-			if _, err := conn.Write(flight); err != nil {
-				_ = conn.Close()
-				lastErr = err
-				continue
+	}
+	if len(cands) == 0 { // no direct or exit path configured: use whatever relays
+		for _, u := range all {
+			if u.Takeover == nil {
+				cands = append(cands, u)
 			}
 		}
+	}
+	var lastErr error
+	for _, u := range cands {
+		began := time.Now()
+		conn, err := p.dial(ctx, u.Upstream, host, port)
+		if err == nil && len(flight) > 0 {
+			if _, werr := conn.Write(flight); werr != nil {
+				_ = conn.Close()
+				conn, err = nil, werr
+			}
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			p.record(u, host, false, time.Since(began))
+			lastErr = fmt.Errorf("%s: %w", u.Name, err)
+			continue
+		}
+		p.record(u, host, true, time.Since(began))
 		return conn, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no upstream")
 	}
 	return nil, lastErr
+}
+
+// Add joins an upstream to the race while the proxy runs, for paths that take
+// a while to come up (a tunnel that has to scan first).
+func (p *Proxy) Add(u Upstream) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if u.Name == "" {
+		return errors.New("upstream name is required")
+	}
+	for _, x := range p.ups {
+		if x.Name == u.Name {
+			return fmt.Errorf("upstream %q already exists", u.Name)
+		}
+	}
+	p.ups = append(p.ups, &upstreamState{Upstream: u})
+	return nil
 }
 
 func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Conn, error) {

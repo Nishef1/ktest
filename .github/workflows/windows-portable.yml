@@ -59,6 +59,12 @@ jobs:
           $driver = "build/wintun/wintun/bin/amd64/wintun.dll"
           if (-not (Test-Path $driver)) { throw "Official Wintun AMD64 signed DLL missing" }
           Copy-Item $driver portable/ktest/cores/wintun.dll
+          DownloadVerified "https://github.com/CluvexStudio/Aether/releases/download/v2.3.0/aether-windows-x86_64.zip" "build/aether.zip" "0cc32dd2d7573f91d2e55d4f427bfe4c6f6252342494e1b410d61b12d1e4dc79"
+          Expand-Archive -LiteralPath build/aether.zip -DestinationPath build/aether -Force
+          $ae = Get-ChildItem -Path build/aether -Filter aether.exe -File -Recurse | Select-Object -First 1
+          if ($null -eq $ae) { throw "Official Aether zip did not contain aether.exe" }
+          Copy-Item $ae.FullName portable/ktest/cores/aether.exe
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/CluvexStudio/Aether/v2.3.0/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Aether-AGPL-3.0.txt
           Copy-Item "build/wintun/wintun/LICENSE.txt" portable/ktest/THIRD_PARTY/Wintun-LICENSE.txt
       - name: Pin the offline profile and ship licenses
         shell: pwsh

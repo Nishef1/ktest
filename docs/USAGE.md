@@ -3,7 +3,7 @@
 The everyday path needs no options and no knowledge of the methods behind it.
 
 ```
-.\ktest.exe                 menu: Connect, Connect whole PC, Diagnose, Certificate, Advanced
+.\ktest.exe                 menu: Connect, Connect whole PC, Diagnose, Setup, Advanced
 .\ktest.exe connect         connect now
 .\ktest.exe connect -cert   set up or renew the fronting certificate, then connect
 .\ktest.exe connect -tun    the same for every application on the PC (asks for Administrator)
@@ -102,11 +102,21 @@ Telegram and other non-HTTPS protocols are carried like any TCP connection, but 
 
 Not verified on a real network: this mode changes Windows routes. It was checked for configuration validity (`sing-box check`) and by unit tests only.
 
-## 7. Advanced
+## 7. WARP exit (optional)
+
+Fronting and ECH reach sites on a few CDNs. Telegram, and anything blocked by IP address, needs a path that leaves from somewhere else. `ktest warp -enable` (menu 4, Setup, then 2) adds one: the open-source **Aether** core (AGPL-3.0, a separate process like Xray and ByeDPI) tunnels MASQUE over HTTP/2 to Cloudflare WARP and serves SOCKS5. Per the Patterniha channel MASQUE-H2 is the route that is open on every operator, and Aether fragments the ClientHello for the Irancell-type firewall and offers ECH for the MCI-type one, so two profiles run side by side.
+
+* **Opt-in.** Enabling downloads Aether v2.3.0 (about 24 MB, SHA-256 pinned, from the project's GitHub release) if `cores/aether.exe` is missing, then registers a free, anonymous WARP identity on this PC, the same thing the WARP app does. The registration tries the running ktest proxy first, then Aether's fragmented route, then ECH, because the WARP API's own name is filtered on some networks. The identity lives in your profile (`%AppData%\ktest\warp`) and `ktest warp -disable` deletes it.
+* **Last resort, not a competitor.** Connect starts Aether in the background (its scan takes up to a minute) and adds it to the race when its port opens. For TLS it joins a connection only after every other path failed or 3 seconds passed, unless it is the path remembered for that site. For traffic that is not TLS (Telegram) only the direct route and the exit are tried, the outcome is remembered per destination, so a blocked address goes to the exit first the next time.
+* **What it costs you.** Traffic that uses it passes through Cloudflare and leaves from a Cloudflare address (which also solves real sanctions, not the domestic filtering this tool is mostly about). `-no-warp` leaves it out of a session.
+
+Not verified on a real network: it needs a registered identity, which was not created while building this, so Aether was only checked for its command line (`aether help`), not run end to end.
+
+## 8. Advanced
 
 Single methods (Xray fragment B/A on `127.0.0.1:10808`, ByeDPI on `127.0.0.1:10809`), the Cloudflare IP candidate scan and the experimental system-wide TCP TUN (Windows, Administrator, explicit `YES`). Connect makes these unnecessary for everyday use. The research commands (`probe`, `compare`, `edges`, `path`, `echo`, `access`, `revive`) are unchanged; see `ktest help`.
 
-## 8. What is, and is not, possible
+## 9. What is, and is not, possible
 
 * Every path connects straight to the destination site. ktest needs no server of yours, and it does not change your public IP.
 * Changing a byte of the ClientHello (rewriting the SNI, changing its case) is not possible for a transparent relay: the TLS handshake transcript would no longer match and the handshake fails. ktest cuts the ClientHello, it does not edit it.
@@ -115,14 +125,14 @@ Single methods (Xray fragment B/A on `127.0.0.1:10808`, ByeDPI on `127.0.0.1:108
 * A site whose IP address itself is blocked cannot be reached by any of these methods.
 * No result in this repository comes from a measured Iranian ISP. `Diagnose` and the result box tell you what happens on **your** network, right now.
 
-## 9. Where ktest looks for its files
+## 10. Where ktest looks for its files
 
 `cores/` and `profiles/` are searched next to the executable, then in the working directory, `./dist/ktest-portable` and `./ktest-portable`. `KTEST_BASE` or `-base DIR` overrides it. `ktest strategies -write` creates the editable `profiles/byedpi-strategies.txt` (the packaged build ships it).
 
-## 10. Output
+## 11. Output
 
 Colors, box drawing and the in-place progress line are used only on an interactive terminal. In a pipe, a file, CI, with `NO_COLOR` or `TERM=dumb`, output is plain ASCII. Set `KTEST_ASCII=1` to force ASCII on a terminal that cannot show the glyphs.
 
 ## Options of `ktest connect`
 
-None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-front`, `-front`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`.
+None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-front`, `-front`, `-no-warp`, `-tun`, `-cert`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`.

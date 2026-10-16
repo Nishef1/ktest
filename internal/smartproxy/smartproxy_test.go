@@ -423,3 +423,73 @@ func TestSoftResolveFallsBackToTheNameWhereHardResolveSkipsThePath(t *testing.T)
 	case <-time.After(300 * time.Millisecond):
 	}
 }
+
+func TestNonTLSUsesOnlyDirectAndExitPathsAndRemembersBlockedDestinations(t *testing.T) {
+	dest := destination(t)
+	var cutHits, exitHits atomic.Int32
+	// A cutting path cannot help a protocol it cannot parse: it must stay unused.
+	cutting := Upstream{Name: "cut", Addr: fakeSocks(t, dest, true, &cutHits), Rank: 2}
+	p, addr := startProxy(t, []Upstream{{Name: "plain", Rank: 0}, cutting})
+	// An exit that joins while the proxy runs.
+	if err := p.Add(Upstream{Name: "exit", Addr: fakeSocks(t, dest, true, &exitHits), Rank: 5, Exit: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Add(Upstream{Name: "exit", Addr: "127.0.0.1:1"}); err == nil {
+		t.Fatal("duplicate name accepted")
+	}
+	// A destination that refuses direct connections, as one blocked by address does.
+	dead, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadAddr := dead.Addr().String()
+	dead.Close()
+	host, port, _ := net.SplitHostPort(deadAddr)
+	for i := 0; i < 3; i++ {
+		if got := viaProxy(t, addr, host, port, []byte("hello")); !bytes.Equal(got, serverHello) {
+			t.Fatalf("attempt %d: got %x", i, got)
+		}
+	}
+	if cutHits.Load() != 0 {
+		t.Fatalf("a cutting path carried non-TLS traffic (%d)", cutHits.Load())
+	}
+	if exitHits.Load() != 3 {
+		t.Fatalf("exit carried %d of 3 connections", exitHits.Load())
+	}
+	// After the first failure the direct route is no longer tried first.
+	st := p.Stats()
+	for _, s := range st {
+		if s.Name == "plain" && s.Failures != 1 {
+			t.Fatalf("direct failed %d times, want exactly 1 (then remembered)", s.Failures)
+		}
+	}
+}
+
+func TestLatePathIsALastResortNotACompetitor(t *testing.T) {
+	dest := destination(t)
+	var good, late atomic.Int32
+	_, addr := startProxy(t, []Upstream{
+		{Name: "good", Addr: fakeSocks(t, dest, true, &good), Rank: 1},
+		{Name: "late", Addr: fakeSocks(t, dest, true, &late), Rank: 0, Late: true}, // outranks it, yet must wait
+	})
+	_, port, _ := net.SplitHostPort(dest)
+	for i := 0; i < 3; i++ {
+		if got := viaProxy(t, addr, "site.example", port, clientHello()); !bytes.Equal(got, serverHello) {
+			t.Fatalf("got %x", got)
+		}
+	}
+	if late.Load() != 0 {
+		t.Fatalf("the late path competed %d times although a good path answered", late.Load())
+	}
+
+	// When every other path fails, it is tried at once, without waiting for the gate.
+	var bad, last atomic.Int32
+	_, addr2 := startProxy(t, []Upstream{
+		{Name: "bad", Addr: fakeSocks(t, dest, false, &bad), Rank: 1},
+		{Name: "late", Addr: fakeSocks(t, dest, true, &last), Rank: 5, Late: true},
+	})
+	began := time.Now()
+	if got := viaProxy(t, addr2, "blocked.example", port, clientHello()); !bytes.Equal(got, serverHello) {
+		t.Fatalf("got %x", got)
+	}
+	if took := time.Since(began); took > 2*time.Second || last.Load() != 1 {
+		t.Fatalf("last resort took %v, used %d times", took, last.Load())
+	}
+}

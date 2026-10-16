@@ -40,6 +40,7 @@ Everyday use (from the extracted portable folder):
 
 Other commands:
   ktest ca            set up (or remove) the local CA that enables domain fronting
+  ktest warp          enable the WARP exit (Cloudflare) for Telegram and sites blocked by address
   ktest strategies    list or write the editable ByeDPI strategy file
   ktest scan          bounded Cloudflare IP candidate check
   ktest revive        run one Xray profile:  -xray -profile -variant -assets
@@ -97,6 +98,8 @@ func run(args []string) int {
 		return runStrategies(args[1:])
 	case "ca":
 		return runCA(args[1:])
+	case "warp":
+		return runWarp(args[1:])
 	case "menu":
 		return interactiveMenu()
 	case "help", "-h", "-help", "--help":

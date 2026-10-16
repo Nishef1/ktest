@@ -71,6 +71,7 @@ type connectOptions struct {
 	noDoH      bool
 	noDirect   bool
 	noFront    bool
+	noWarp     bool
 	tun        bool
 	cert       bool
 	forceFront bool
@@ -101,6 +102,7 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.noDoH, "no-doh", false, "never use encrypted DNS (system DNS only)")
 	fs.BoolVar(&o.noDirect, "no-direct", false, "do not race the plain, uncut connection")
 	fs.BoolVar(&o.noFront, "no-front", false, "do not use domain fronting even if the ktest CA is trusted")
+	fs.BoolVar(&o.noWarp, "no-warp", false, "do not start the WARP exit even if it is enabled")
 	fs.BoolVar(&o.tun, "tun", false, "route the whole system through ktest (Windows; asks for Administrator)")
 	fs.BoolVar(&o.cert, "cert", false, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", false, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
@@ -407,6 +409,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	var lport int
 	fmt.Sscanf(portText, "%d", &lport)
 	go func() { _ = proxy.Serve(ctx, l) }()
+	warpNote, stopWarp := startWarp(ctx, o, proxy, &dns, t)
+	defer stopWarp()
 
 	// 4. Verify through the proxy, against the plain route.
 	vstep := t.Progress("Verifying YouTube and Google", 1)
@@ -451,6 +455,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if frontNote != "" {
 		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))
 	}
+	lines = append(lines, t.Bold("WARP    ")+"  "+t.Dim(warpNote))
 	switch {
 	case bypassed > 0:
 		lines = append(lines, t.Bold("Result  ")+"  "+t.Green(fmt.Sprintf("%d site(s) blocked on this network are open through ktest", bypassed)))

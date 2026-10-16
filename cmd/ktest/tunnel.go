@@ -42,7 +42,7 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 	}
 	step.Set(1, "interface "+nic)
 	exe, _ := os.Executable()
-	direct := []string{"xray.exe", "ciadpi.exe", strings.ToLower(filepath.Base(exe))}
+	direct := []string{"xray.exe", "ciadpi.exe", "aether.exe", strings.ToLower(filepath.Base(exe))}
 	logs := &tailBuffer{max: 4096}
 	if verbose {
 		logs.tee = os.Stderr
