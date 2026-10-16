@@ -184,6 +184,16 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		t.Note("public resolver 8.8.8.8 is unreachable (UDP and TCP), so it is not relied on")
 	}
 
+	// The listen address is needed at the end; find out now, not after the cores
+	// have been started.
+	if lis, err := net.Listen("tcp", o.listen); err != nil {
+		t.Println("")
+		t.Box("CANNOT LISTEN", toneFail, []string{o.listen + " is already in use.", "Close the other ktest or proxy using it, or pass -listen 127.0.0.1:<other port>."})
+		return 1
+	} else {
+		_ = lis.Close()
+	}
+
 	// 2. The cores that carry the external paths.
 	var cores []*pathCore
 	var skipped []string
@@ -206,7 +216,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			port    int
 		}{{"B", connectXrayBPort}, {"A", connectXrayAPort}} {
 			x := x
-			add("Xray fragment "+x.variant, x.port, false, func(w io.Writer) (launcher, error) { return xrayLauncher(o.base, x.variant, x.port, w) })
+			add("Xray fragment "+x.variant, x.port, true, func(w io.Writer) (launcher, error) { return xrayLauncher(o.base, x.variant, x.port, w) })
 		}
 	}
 	if o.strategies > 0 {
@@ -311,7 +321,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		ups = append(ups, smartproxy.PlainUpstreams()...)
 	}
 	for _, c := range up {
-		ups = append(ups, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port), LocalDNS: c.localDNS, Rank: 2})
+		ups = append(ups, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port), LocalDNS: c.localDNS, SoftResolve: strings.HasPrefix(c.name, "Xray"), Rank: 2})
 	}
 	if !o.noSelf {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)

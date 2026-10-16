@@ -1,0 +1,16 @@
+# ktest
+
+A Windows-first toolkit that tries to reach filtered sites **directly**, without a server of your own and without changing your public IP. One action does it: **Connect** starts every available method at once behind a single local SOCKS5 address and, for each TLS connection, keeps the path that really answers. **Diagnose** tells you what your network does (DNS poisoning, filtered resolvers, whether cutting packets is punished).
+
+```
+go run ./cmd/ktest            # menu: Connect / Diagnose / Advanced
+go run ./cmd/ktest connect    # connect now
+go run ./cmd/ktest doctor     # diagnose, changes nothing
+```
+
+or `.\ktest.exe` from the portable ZIP built by the `windows-portable` workflow.
+
+* Start here: [docs/USAGE.md](docs/USAGE.md)
+* Honest scope: no result in this repository comes from a measured Iranian ISP. The tool reports what happens on **your** network, right now.
+* Nothing is changed outside ktest: no system proxy, DNS, route, firewall or certificate (the optional TUN is explicit and off by default).
+* Third-party cores (Xray, ByeDPI, sing-box, Wintun) keep their own licenses: [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md).

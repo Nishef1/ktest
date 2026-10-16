@@ -45,6 +45,10 @@ type Upstream struct {
 	// Network is "tcp" (default) or "tcp6". IPv6 paths matter because some
 	// networks filter the IPv4 and IPv6 data planes differently.
 	Network string
+	// SoftResolve makes a failed or poisoned lookup non-fatal: the path then
+	// receives the name and resolves it itself (Xray has its own DNS and fake-IP
+	// routing), instead of being skipped like a path that can only use system DNS.
+	SoftResolve bool
 	// Rank is the static preference when two paths have the same track record:
 	// lower first. Plain connections are the least intrusive, cut ones the most.
 	Rank int
@@ -477,6 +481,8 @@ func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Co
 		switch {
 		case err == nil:
 			host = ip
+		case u.SoftResolve && ctx.Err() == nil:
+			p.logf("%s: no trusted address (%v); %s resolves it itself", host, err, u.Name)
 		case errors.Is(err, ErrPoisoned):
 			// Connecting to a block-page address would only look like a
 			// network failure; say what it is and let other paths try.

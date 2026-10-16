@@ -25,7 +25,7 @@ The screen shows four phases with a percentage and a final state:
 
 After the box, a live list shows each site once, with the path that won (`youtube.com ← ByeDPI fake packet, low TTL 0.6s`), and a site that no path could reach. Enter or Ctrl+C disconnects and prints a session summary: the share of connections that were answered and which paths won how often.
 
-Nothing outside ktest is changed: no system proxy, DNS, route, firewall or certificate.
+Nothing outside ktest is changed: no system proxy, DNS, route, firewall or certificate. On Windows ktest runs inside a kill-on-close job object, so closing the window or killing ktest also ends every core and frees the ports.
 
 ## 2. How the methods are chosen
 
@@ -42,7 +42,8 @@ Name resolution is the first thing a censor poisons, so it is not left to the sy
 
 1. The system answer is used when it is a real address. Private or reserved addresses are treated as poisoning and never dialed.
 2. Otherwise encrypted DNS is asked by IP literal (so no DNS is needed to find the resolver): Cloudflare `104.16.248.249`, `104.16.249.249`, `1.1.1.1` and Google `8.8.8.8`, `8.8.4.4`. All are tried at once, through every working path and the direct route, and the first answer wins. After three failures in a row encrypted DNS is skipped for five minutes, because it is itself filtered on many networks.
-3. For Google-owned names (youtube.com, ytimg.com, googlevideo.com, gstatic.com, ...) the address of `www.google.com` stands in, since Google front ends serve them; a path that cannot is simply a lost race.
+3. The Xray paths receive the trusted address too (they would otherwise need their own DNS, which is filtered the same way); if no trusted address exists they fall back to the name and use their own DNS.
+4. For Google-owned names (youtube.com, ytimg.com, googlevideo.com, gstatic.com, ...) the address of `www.google.com` stands in, since Google front ends serve them; a path that cannot is simply a lost race.
 
 ## 4. Diagnose
 

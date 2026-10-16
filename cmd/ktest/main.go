@@ -26,7 +26,10 @@ import (
 	"github.com/Nishef1/ktest/internal/systemtun"
 )
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() {
+	killChildrenOnExit()
+	os.Exit(run(os.Args[1:]))
+}
 
 const usageText = `ktest: free access toolkit
 

@@ -359,3 +359,67 @@ func TestOrderPrefersPlainWhenTrackRecordsAreEqualAndDemotesFailingPaths(t *test
 		t.Fatalf("failing plain path should rank last: %v", got)
 	}
 }
+
+func TestSoftResolveFallsBackToTheNameWhereHardResolveSkipsThePath(t *testing.T) {
+	dest := destination(t)
+	_, port, _ := net.SplitHostPort(dest)
+	seen := make(chan string, 4)
+	capture := func() string {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { l.Close() })
+		go func() {
+			for {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer c.Close()
+					host, _, err := socksRequest(c)
+					if err != nil {
+						return
+					}
+					seen <- host
+					_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+					d, err := net.Dial("tcp", dest)
+					if err != nil {
+						return
+					}
+					defer d.Close()
+					pipe(c, d)
+				}()
+			}
+		}()
+		return l.Addr().String()
+	}
+	poisoned := func(context.Context, string) ([]string, error) { return nil, ErrPoisoned }
+	run := func(u Upstream) []byte {
+		u.Addr = capture()
+		p, err := New(Config{Upstreams: []Upstream{u}, Resolve: poisoned, FirstByteTimeout: 500 * time.Millisecond})
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, _ := net.Listen("tcp", "127.0.0.1:0")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go p.Serve(ctx, l)
+		return viaProxy(t, l.Addr().String(), "blocked.example", port, clientHello())
+	}
+	if got := run(Upstream{Name: "soft", LocalDNS: true, SoftResolve: true}); !bytes.Equal(got, serverHello) {
+		t.Fatalf("soft path should still connect by name, got %x", got)
+	}
+	if h := <-seen; h != "blocked.example" {
+		t.Fatalf("soft path received %q, want the name", h)
+	}
+	if got := run(Upstream{Name: "hard", LocalDNS: true}); len(got) != 0 {
+		t.Fatalf("hard path must not connect to a poisoned name, got %x", got)
+	}
+	select {
+	case h := <-seen:
+		t.Fatalf("hard path contacted its upstream with %q", h)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
