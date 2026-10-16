@@ -455,8 +455,10 @@ func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *r
 			defer tick.Stop()
 			for {
 				select {
-				case <-watchEnd: return
-				case <-cctx.Done(): return
+				case <-watchEnd:
+					return
+				case <-cctx.Done():
+					return
 				case <-tick.C:
 					if m.monitor.Connected() {
 						rc.cancel()
