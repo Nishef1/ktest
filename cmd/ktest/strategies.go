@@ -170,8 +170,7 @@ func expandMethod(token, base string, output io.Writer) []method {
 // file once so users can add their own.
 func runStrategies(args []string) int {
 	fs := flag.NewFlagSet("strategies", flag.ContinueOnError)
-	exe, _ := os.Executable()
-	base := fs.String("base", filepath.Dir(exe), "portable folder holding cores/ and profiles/")
+	base := fs.String("base", defaultBase(), "portable folder holding cores/ and profiles/")
 	write := fs.Bool("write", false, "create profiles/byedpi-strategies.txt from the built-in list if it does not exist")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: ktest strategies [-write] [-base DIR]")

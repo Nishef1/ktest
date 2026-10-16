@@ -84,8 +84,7 @@ func defaultSmartOptions(base string) smartOptions {
 // listener in front of them that races the paths for every TLS connection.
 func runSmart(args []string) int {
 	fs := flag.NewFlagSet("smart", flag.ContinueOnError)
-	exe, _ := os.Executable()
-	o := defaultSmartOptions(filepath.Dir(exe))
+	o := defaultSmartOptions(defaultBase())
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
 	fs.StringVar(&o.listen, "listen", o.listen, "loopback SOCKS5 address for your applications")
 	fs.IntVar(&o.strategies, "strategies", o.strategies, "how many ByeDPI strategies from profiles/byedpi-strategies.txt to run (0 = none)")

@@ -70,3 +70,7 @@ Secondary, dated, per-operator reports; treat them as hypotheses to measure, not
 ### Menu item 9: Smart
 
 The interactive menu now has **9) Smart**, the same session as `ktest smart`: all Xray, ByeDPI and built-in paths start together and applications use one SOCKS5 address, `127.0.0.1:10800` (enable remote/proxy DNS). Items 1-4 remain for forcing a single method. Item 9 needs no server of your own: every path connects straight to the destination site and only changes how the first TLS flight is sent. Stopping (7, Ctrl+C or 0) prints which path won for which site, kept in memory only.
+
+### Running from source with `go run`
+
+`go run ./cmd/ktest` (or `go run ./cmd/ktest smart`, `doctor`, `auto`) works without building an exe. The portable folder (`cores/`, `profiles/`) is looked up next to the exe, then in the working directory, `./dist/ktest-portable` and `./ktest-portable`; `KTEST_BASE` or `-base DIR` overrides it. Use Windows Terminal in the repository folder.

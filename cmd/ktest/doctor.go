@@ -35,8 +35,7 @@ func fileOK(path string) bool {
 // changing anything, and says which layer to look at first.
 func runDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	exe, _ := os.Executable()
-	base := fs.String("base", filepath.Dir(exe), "portable folder holding cores/ and profiles/")
+	base := fs.String("base", defaultBase(), "portable folder holding cores/ and profiles/")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: ktest doctor [-base DIR]")
 		return 2

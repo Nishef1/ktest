@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -379,12 +378,7 @@ func runEdges(args []string) int {
 
 // interactiveMenu presents a managed, non-blocking CLI with auto-verification.
 func interactiveMenu() int {
-	path, err := os.Executable()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	return runInteractive(os.Stdin, os.Stdout, filepath.Dir(path))
+	return runInteractive(os.Stdin, os.Stdout, defaultBase())
 }
 
 // runQuickScan verifies selected CDN candidates through a real TLS connection.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -76,4 +78,30 @@ func proxiedPassCount(results []quickcheck.Result) int {
 		}
 	}
 	return n
+}
+
+// defaultBase finds the portable folder (the one holding cores/). The exe's
+// own folder is right for the packaged build, but `go run` builds the exe in a
+// temporary folder, so the working directory and ./dist/ktest-portable are
+// tried too. KTEST_BASE overrides everything.
+func defaultBase() string {
+	if env := os.Getenv("KTEST_BASE"); env != "" {
+		return env
+	}
+	var candidates []string
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Dir(exe))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, wd, filepath.Join(wd, "dist", "ktest-portable"), filepath.Join(wd, "ktest-portable"))
+	}
+	for _, dir := range candidates {
+		if info, err := os.Stat(filepath.Join(dir, "cores")); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return "."
 }

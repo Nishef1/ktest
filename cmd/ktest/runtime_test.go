@@ -152,3 +152,19 @@ func TestStrategiesWriteDoesNotOverwrite(t *testing.T) {
 		t.Fatalf("user file overwritten: %q", got)
 	}
 }
+
+func TestDefaultBaseHonoursEnvAndFindsCoresInWorkingDirectory(t *testing.T) {
+	t.Setenv("KTEST_BASE", "X:\custom")
+	if got := defaultBase(); got != "X:\custom" {
+		t.Fatalf("env override ignored: %q", got)
+	}
+	t.Setenv("KTEST_BASE", "")
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist", "ktest-portable", "cores"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	if got := defaultBase(); got != filepath.Join(dir, "dist", "ktest-portable") {
+		t.Fatalf("dist folder not found: %q", got)
+	}
+}

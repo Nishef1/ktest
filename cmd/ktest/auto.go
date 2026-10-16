@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -116,8 +115,7 @@ func (a autoAttempt) full() bool { return a.total > 0 && a.passed == a.total }
 // requests through its proxy, and keeps the first one that passes running.
 func runAuto(args []string) int {
 	fs := flag.NewFlagSet("auto", flag.ContinueOnError)
-	exe, _ := os.Executable()
-	base := fs.String("base", filepath.Dir(exe), "portable folder holding cores/ and profiles/")
+	base := fs.String("base", defaultBase(), "portable folder holding cores/ and profiles/")
 	methods := fs.String("methods", "1,2,s", "order to try: 1 Xray B, 2 Xray A, 3 ByeDPI adaptive, 4 ByeDPI TLS slicing, s every ByeDPI strategy in profiles/byedpi-strategies.txt")
 	hold := fs.Bool("hold", true, "keep the first working method running until Ctrl+C")
 	verbose := fs.Bool("v", false, "show core logs while trying")
