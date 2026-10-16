@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,6 +93,21 @@ func parseWindscribeProtocol(raw string) string {
 	return ""
 }
 
+// The CLI's VPN IP is the reported public exit, not the CONNECT target or
+// carrier entry. Never substitute an entry address when this field is absent.
+func parseWindscribeVPNIP(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if ok && strings.EqualFold(field, "VPN IP") {
+			ip := net.ParseIP(strings.TrimSpace(value))
+			if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+				return ip.String()
+			}
+		}
+	}
+	return ""
+}
+
 func windscribeCLIPath(override string) (string, error) {
 	if override != "" {
 		if !filepath.IsAbs(override) {
@@ -125,6 +141,7 @@ type windscribeMonitor struct {
 	mu                  sync.RWMutex
 	state               windscribeState
 	protocol            string
+	vpnIP               string
 	connectedOnce       bool
 	proxy               *smartproxy.Proxy
 	nextReconnect       time.Time
@@ -189,12 +206,21 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	previous := m.state
 	m.state = state
 	protocolChanged := false
+	previousIP := m.vpnIP
 	if err == nil && loggedIn {
 		protocol := parseWindscribeProtocol(string(out))
 		protocolChanged = protocol != m.protocol
 		m.protocol = protocol
+		m.vpnIP = ""
+		if state == windscribeConnected {
+			m.vpnIP = parseWindscribeVPNIP(string(out))
+		}
+	} else if state != windscribeConnected {
+		m.vpnIP = ""
 	}
 	protocol := m.protocol
+	vpnIP := m.vpnIP
+	ipChanged := vpnIP != previousIP
 	p := m.proxy
 	changed := state != previous
 	if state == windscribeConnected {
@@ -225,6 +251,13 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 			m.t.Note("Windscribe is connecting or validating its tunnel; no duplicate reconnect command")
 		default:
 			m.t.Note("Windscribe state unavailable; cannot safely auto-reconnect (check CLI/login)")
+		}
+	}
+	if state == windscribeConnected && (changed || ipChanged) {
+		if vpnIP != "" {
+			m.t.Note("Windscribe VPN IP (CLI): %s; reported exit IP, may differ from requested/entry addresses", vpnIP)
+		} else {
+			m.t.Note("Windscribe VPN IP (CLI): unavailable; requested/entry addresses are not the VPN exit IP")
 		}
 	}
 	if (changed || protocolChanged) && (state == windscribeConnecting || state == windscribeConnected) &&

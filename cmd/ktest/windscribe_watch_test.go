@@ -20,6 +20,24 @@ func TestParseWindscribeProtocol(t *testing.T) {
 	}
 }
 
+func TestParseWindscribeVPNIP(t *testing.T) {
+	for _, tc := range []struct{ status, want string }{
+		{"Login state: Logged in\r\nConnect state: Connected: Ashburn\r\nVPN IP: 152.233.50.185\r\n", "152.233.50.185"},
+		{"vpn ip: 2001:4860:4860::8888", "2001:4860:4860::8888"},
+		{"VPN IP: 10.0.0.1", ""},
+		{"VPN IP: 127.0.0.1", ""},
+		{"VPN IP: 0.0.0.0", ""},
+		{"VPN IP: fe80::1", ""},
+		{"VPN IP: not an address", ""},
+		{"VPN IP: N/A", ""},
+		{"Protocol: TCP:443\nConnect state: Connected: Ashburn", ""},
+	} {
+		if got := parseWindscribeVPNIP(tc.status); got != tc.want {
+			t.Errorf("status %q: got VPN IP %q, want %q", tc.status, got, tc.want)
+		}
+	}
+}
+
 func TestWindscribeTCPEstablishmentDoesNotCountAsAnsweredOrFailed(t *testing.T) {
 	var output bytes.Buffer
 	feed := &siteEvents{t: plainTerm(&output)}

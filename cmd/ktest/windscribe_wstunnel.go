@@ -217,7 +217,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		}
 		for _, leg := range legs {
 			for _, edge := range edges {
-				out = append(out, wsCarrier{name: "CDN " + o.cdnHost + "@" + edge + leg.suffix, addr: edge, source: "configured CDN", open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				out = append(out, wsCarrier{name: "CDN " + o.cdnHost + " entry=" + edge + leg.suffix, addr: edge, source: "configured CDN", open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					return wstunnel.Dial(ctx, wstunnel.Config{Addr: edge, SNI: sni, Host: o.cdnHost, Path: b.path, Verify: true, Dial: leg.dial})
 				}})
 			}
@@ -244,13 +244,13 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 				}
 				for _, endpoint := range wsEndpoints {
 					addr := net.JoinHostPort(endpoint.ip, "443")
-					out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " @" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " entry=" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 						return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial})
 					}})
 				}
 				for _, endpoint := range endpoints {
 					addr := net.JoinHostPort(endpoint.ip, "443")
-					out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " @" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " entry=" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 						// Provider-advertised Stealth endpoints can present a generic
 						// certificate. Like Windscribe's own wrapper, authentication
 						// belongs to inner OpenVPN, not the outer TLS name.

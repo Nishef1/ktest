@@ -579,7 +579,7 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 		names = append(names, c.name)
 	}
 	all := strings.Join(names, "\n")
-	for _, want := range []string{"CDN ws.example.com@ws.example.com:443", "WStunnel sni=a.example", "Stealth sni=b.example +anti-DPI", "raw OpenVPN +anti-DPI"} {
+	for _, want := range []string{"CDN ws.example.com entry=ws.example.com:443", "WStunnel sni=a.example", "Stealth sni=b.example +anti-DPI", "raw OpenVPN +anti-DPI"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}

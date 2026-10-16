@@ -219,10 +219,14 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
 		if isWindscribeCarrier(e.Path) {
-			t.Line(toneInfo, "%-26s Windscribe carrier returned data via %s (%s); VPN not yet verified", e.Host, e.Path, shortDur(e.Took))
+			path := e.Path
+			if strings.HasPrefix(path, "raw OpenVPN") {
+				path += " entry=" + e.Host
+			}
+			t.Line(toneInfo, "Windscribe requested=%s | %s (%s); carrier returned data; VPN not yet verified", e.Host, path, shortDur(e.Took))
 			return
 		}
-		t.Line(toneInfo, "%-26s TCP proxy accepted via %s (%s); VPN handshake not verified", e.Host, e.Path, shortDur(e.Took))
+		t.Line(toneInfo, "TCP proxy requested=%s entry=%s via %s (%s); VPN handshake not verified", e.Host, e.Host, e.Path, shortDur(e.Took))
 		return
 	}
 	if e.Rejected {
@@ -758,6 +762,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Println("")
 	if o.mode == ModeWindscribe {
 		t.Println("  " + t.Dim("Windscribe connections (each new attempt rotates the carrier; only Windscribe verifies the VPN)"))
+		t.Note("requested = Windscribe's target; entry = carrier address; VPN IP = Windscribe-reported exit, shown separately by CLI")
 	} else {
 		t.Println("  " + t.Dim("Live connections (a site is listed when its winning path is known or changes)"))
 	}
