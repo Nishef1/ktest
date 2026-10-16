@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -250,7 +251,10 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 				for _, endpoint := range endpoints {
 					addr := net.JoinHostPort(endpoint.ip, "443")
 					out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " @" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
-						return wstunnel.DialStealth(ctx, wstunnel.Config{Addr: addr, SNI: sni, VerifyPeer: windscribeServerCert, Dial: leg.dial})
+						// Provider-advertised Stealth endpoints can present a generic
+						// certificate. Like Windscribe's own wrapper, authentication
+						// belongs to inner OpenVPN, not the outer TLS name.
+						return wstunnel.DialStealth(ctx, wstunnel.Config{Addr: addr, SNI: sni, Dial: leg.dial})
 					}})
 				}
 			}
@@ -333,9 +337,41 @@ type raceResult struct {
 	took  time.Duration
 }
 
+// readOpenVPNReply requires a complete TCP-framed server control packet before
+// selecting a carrier. TLS/HTTP error pages must not beat the real VPN server.
+// This checks framing and opcode only; Windscribe still checks authentication.
+func readOpenVPNReply(r io.Reader) ([]byte, error) {
+	var header [3]byte // two-byte TCP length, then opcode/key ID
+	if _, err := io.ReadFull(r, header[:]); err != nil {
+		return nil, err
+	}
+	if string(header[:]) == "HTT" {
+		return nil, errors.New("HTTP response instead of OpenVPN")
+	}
+	size := int(binary.BigEndian.Uint16(header[:2]))
+	opcode := header[2] >> 3
+	minimum := 14 // opcode, session ID, ACK count and control packet ID
+	switch opcode {
+	case 5: // P_ACK_V1 has no control packet ID
+		minimum = 10
+	case 2, 3, 4, 8: // server reset/control packets (ssl_pkt.h)
+	default:
+		return nil, fmt.Errorf("unexpected initial OpenVPN server opcode %d", opcode)
+	}
+	if size < minimum {
+		return nil, fmt.Errorf("short OpenVPN control packet: %d", size)
+	}
+	packet := make([]byte, 2+size) // bounded by the 16-bit wire length
+	copy(packet, header[:])
+	if _, err := io.ReadFull(r, packet[3:]); err != nil {
+		return nil, err
+	}
+	return packet, nil
+}
+
 // race replays the client stream (including junk and later handshake writes)
-// over every carrier and keeps the first one that returns data. Windscribe,
-// rather than this bridge, authenticates the server's OpenVPN response.
+// over every carrier and keeps the first complete OpenVPN-shaped reply.
+// Windscribe, rather than this bridge, authenticates the server's response.
 func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
 	key := net.JoinHostPort(host, port)
 	if b.catalog != nil && b.opts.serverIP == "" && len(b.catalog.endpoints(host)) == 0 {
@@ -423,9 +459,8 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				_ = replay.send(wctx, conn)
 				_ = conn.Close()
 			}()
-			buf := make([]byte, 2048)
-			n, err := conn.Read(buf)
-			if n == 0 || !stop() {
+			reply, err := readOpenVPNReply(conn)
+			if err != nil || !stop() {
 				_ = conn.Close()
 				if err == nil {
 					err = errors.New("no answer")
@@ -440,7 +475,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				taken = true
 				keep = true
 				replay.selectWinner(conn)
-				winner <- raceResult{conn: conn, reply: buf[:n], c: c, took: time.Since(began)}
+				winner <- raceResult{conn: conn, reply: reply, c: c, took: time.Since(began)}
 			})
 			if !taken {
 				_ = conn.Close()

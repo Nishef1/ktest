@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -100,7 +101,7 @@ func fakeServer(label string, delay time.Duration, silent bool, closed chan<- st
 			return
 		}
 		time.Sleep(delay)
-		if _, err := b.Write([]byte(label)); err != nil {
+		if _, err := b.Write(serverControlPacket(label)); err != nil {
 			return
 		}
 		_, _ = b.Read(buf) // keep the stream open until closed
@@ -150,7 +151,16 @@ func testBridge(log *dialLog, specs ...carrierSpec) *wsBridge {
 	return b
 }
 
-// roundTrip writes first and returns what the carrier answered.
+// serverControlPacket supplies realistic server framing for race tests. The
+// label sits in the opaque payload, which is left for Windscribe to verify.
+func serverControlPacket(label string) []byte {
+	packet := append([]byte{0, 0, 0x40}, make([]byte, 13)...)
+	packet = append(packet, label...)
+	binary.BigEndian.PutUint16(packet[:2], uint16(len(packet)-2))
+	return packet
+}
+
+// roundTrip writes first and returns the label in the carrier's reply.
 func roundTrip(t *testing.T, b *wsBridge, host string, first []byte) (string, net.Conn) {
 	t.Helper()
 	c, err := b.Dial(context.Background(), host, "443")
@@ -162,13 +172,18 @@ func roundTrip(t *testing.T, b *wsBridge, host string, first []byte) (string, ne
 		return "error: " + err.Error(), nil
 	}
 	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
-	buf := make([]byte, 64)
-	n, err := c.Read(buf)
-	if n == 0 && err != nil {
+	var header [2]byte
+	_, err = io.ReadFull(c, header[:])
+	if err != nil {
 		c.Close()
 		return "error: " + err.Error(), nil
 	}
-	return string(buf[:n]), c
+	buf := make([]byte, int(binary.BigEndian.Uint16(header[:])))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		c.Close()
+		return "error: " + err.Error(), nil
+	}
+	return string(buf[14:]), c
 }
 
 var openvpnReset = []byte{0x00, 0x0e, 0x38, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0}
@@ -206,7 +221,7 @@ func TestRaceReplaysJunkAndLaterWritesToLateCarrier(t *testing.T) {
 					if _, err := io.ReadFull(z, buf); err != nil || !bytes.Equal(buf, want) {
 						return
 					}
-					if _, err := z.Write([]byte("answered")); err == nil {
+					if _, err := z.Write(serverControlPacket("answered")); err == nil {
 						_, _ = io.Copy(z, z) // verify the stream continues after selection
 					}
 				}()
@@ -245,8 +260,8 @@ func TestRaceReplaysJunkAndLaterWritesToLateCarrier(t *testing.T) {
 		t.Fatal("active carrier did not receive the complete client stream")
 	}
 	close(releaseLate)
-	reply := make([]byte, 8)
-	if _, err := io.ReadFull(c, reply); err != nil || string(reply) != "answered" {
+	reply := make([]byte, len(serverControlPacket("answered")))
+	if _, err := io.ReadFull(c, reply); err != nil || !bytes.Equal(reply, serverControlPacket("answered")) {
 		t.Fatalf("late carrier did not replay junk and handshake: %q, %v", reply, err)
 	}
 	if _, err := c.Write([]byte("after selection")); err != nil {
@@ -376,6 +391,57 @@ func TestRaceTakesFirstAnswerNotFirstSocket(t *testing.T) {
 			losers[name] = true
 		case <-timeout:
 			t.Fatalf("losers not closed: %v", losers)
+		}
+	}
+}
+
+// A TLS listener speaking HTTP is reachable, but cannot carry OpenVPN.
+// Also exercise TCP segmentation: an incomplete valid header must not win.
+func TestRaceRejectsHTTPAndIncompleteOpenVPNBeforeSelectingCompleteReply(t *testing.T) {
+	b := testBridge(&dialLog{})
+	packet := append([]byte{0, 14, 0x40}, make([]byte, 13)...)
+	b.candidates = func(string) []wsCarrier {
+		var cs []wsCarrier
+		for _, reply := range [][]byte{[]byte("HTTP/1.1 501 Not Implemented\r\n\r\n"), packet[:3], packet} {
+			cs = append(cs, wsCarrier{name: "probe", open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				a, z := net.Pipe()
+				go func() {
+					defer z.Close()
+					if _, err := io.ReadFull(z, make([]byte, len(openvpnReset))); err != nil {
+						return
+					}
+					// First byte arrives by itself, as it can on a TCP stream.
+					if _, err := z.Write(reply[:1]); err != nil {
+						return
+					}
+					if _, err := z.Write(reply[1:]); err != nil {
+						return
+					}
+					_, _ = io.Copy(z, z)
+				}()
+				return a, nil
+			}})
+		}
+		return cs
+	}
+	c, _, err := b.race(context.Background(), "203.0.113.100", "443", openvpnReset, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetReadDeadline(time.Now().Add(time.Second))
+	got := make([]byte, len(packet))
+	if _, err := io.ReadFull(c, got); err != nil || !bytes.Equal(got, packet) {
+		t.Fatalf("race selected HTTP/incomplete data or lost the valid prefix: %x err=%v", got, err)
+	}
+}
+
+func TestInitialOpenVPNReplyRejectsClientAndDataPackets(t *testing.T) {
+	for _, opcode := range []byte{7, 10, 11, 6, 9} {
+		packet := serverControlPacket("opaque")
+		packet[2] = opcode << 3
+		if _, err := readOpenVPNReply(bytes.NewReader(packet)); err == nil {
+			t.Fatalf("client/data opcode %d selected as an initial server reply", opcode)
 		}
 	}
 }

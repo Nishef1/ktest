@@ -129,3 +129,29 @@ func TestCarriersActuallyDialAdvertisedNonNeighbourAddresses(t *testing.T) {
 		t.Fatalf("wrong carrier destinations: %v, want %v", targets, want)
 	}
 }
+
+func TestAdvertisedStealthEndpointDoesNotRequireWStunnelCertificateName(t *testing.T) {
+	// The official Stealth wrapper authenticates the inner OpenVPN server;
+	// its outer TLS certificate need not name a windscribe.com host.
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	b := newWSBridge(wsOptions{direct: true, sni: "www.speedtest.net"}, nil, nil, func(string, ...any) {})
+	b.catalog = newWSNodeCatalog()
+	if err := b.catalog.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	b.carrierLocal = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", srv.Listener.Addr().String())
+	}
+	for _, carrier := range b.carriersFor("203.0.113.100") {
+		if strings.HasPrefix(carrier.name, "Stealth ") && strings.Contains(carrier.name, "+anti-DPI") && carrier.addr == "192.0.2.210:443" {
+			c, err := carrier.open(context.Background(), "203.0.113.100", "443")
+			if err != nil {
+				t.Fatalf("provider-advertised Stealth endpoint rejected by outer TLS name: %v", err)
+			}
+			_ = c.Close()
+			return
+		}
+	}
+	t.Fatal("advertised Stealth carrier missing")
+}
