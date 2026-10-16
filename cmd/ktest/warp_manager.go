@@ -174,13 +174,13 @@ func lastGoodFirst(ps []aetherProfile, last string) []aetherProfile {
 func aetherPort(i int) int { return aetherBasePort + i }
 
 type warpManager struct {
-	o      connectOptions
-	proxy  *smartproxy.Proxy
-	dns    *dnscheck.Result
-	t      *term
-	profs  []aetherProfile
-	logsMu sync.Mutex
-	files  []*os.File
+	o       connectOptions
+	proxy   *smartproxy.Proxy
+	dns     *dnscheck.Result
+	t       *term
+	profs   []aetherProfile
+	logsMu  sync.Mutex
+	files   []*os.File
 	monitor *windscribeMonitor
 }
 
@@ -222,7 +222,9 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	_ = os.MkdirAll(warpDir(), 0o700)
 	last, _ := os.ReadFile(lastGoodFile())
 	m := &warpManager{o: o, proxy: proxy, dns: dns, t: t, profs: lastGoodFirst(profs, strings.TrimSpace(string(last)))}
-	if len(monitors) > 0 { m.monitor = monitors[0] }
+	if len(monitors) > 0 {
+		m.monitor = monitors[0]
+	}
 	mctx, stopManager := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -250,7 +252,8 @@ func (m *warpManager) waitWhileConnected(ctx context.Context) bool {
 	defer ticker.Stop()
 	for m.monitor != nil && m.monitor.Connected() {
 		select {
-		case <-ctx.Done(): return false
+		case <-ctx.Done():
+			return false
 		case <-ticker.C:
 		}
 	}
@@ -268,11 +271,17 @@ func (m *warpManager) waitRetry(ctx context.Context) bool {
 	sawConnected := m.monitor != nil && m.monitor.Connected()
 	for {
 		select {
-		case <-ctx.Done(): return false
-		case <-timer.C: return true
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
 		case <-tick.C:
-			if m.monitor == nil { continue }
-			if m.monitor.Connected() { sawConnected = true }
+			if m.monitor == nil {
+				continue
+			}
+			if m.monitor.Connected() {
+				sawConnected = true
+			}
 			if sawConnected && m.monitor.State() == windscribeDisconnected {
 				return true
 			}
@@ -285,10 +294,14 @@ func (m *warpManager) waitRetry(ctx context.Context) bool {
 // Dead transports are removed immediately rather than advertised as healthy.
 func (m *warpManager) run(ctx context.Context) {
 	for ctx.Err() == nil {
-		if !m.waitWhileConnected(ctx) { return }
+		if !m.waitWhileConnected(ctx) {
+			return
+		}
 		found := m.search(ctx)
 		if len(found) == 0 {
-			if !m.waitRetry(ctx) { return }
+			if !m.waitRetry(ctx) {
+				return
+			}
 			continue
 		}
 		done := make(chan *warpFound, len(found))
@@ -296,7 +309,8 @@ func (m *warpManager) run(ctx context.Context) {
 			go func(w *warpFound) {
 				select {
 				case <-ctx.Done():
-				case <-w.rc.done: done <- w
+				case <-w.rc.done:
+					done <- w
 				}
 			}(w)
 		}
@@ -304,7 +318,10 @@ func (m *warpManager) run(ctx context.Context) {
 		for remaining > 0 {
 			select {
 			case <-ctx.Done():
-				for _, w := range found { w.rc.cancel(); w.rc.stop() }
+				for _, w := range found {
+					w.rc.cancel()
+					w.rc.stop()
+				}
 				return
 			case ended := <-done:
 				remaining--
@@ -348,7 +365,9 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 		go func() {
 			defer wg.Done()
 			for ctx.Err() == nil {
-				if m.monitor != nil && m.monitor.Connected() { return }
+				if m.monitor != nil && m.monitor.Connected() {
+					return
+				}
 				i, ok := take()
 				if !ok {
 					return
