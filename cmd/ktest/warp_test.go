@@ -178,8 +178,12 @@ func TestLastGoodProfileGoesFirstAndWarpStateAndRegisterOrder(t *testing.T) {
 }
 
 func TestWindscribeCannotLaunchAetherOrPsiphon(t *testing.T) {
-	note,stop:=startWarp(context.Background(),connectOptions{mode:ModeWindscribe},nil,nil,nil)
-	if stop==nil{t.Fatal("expected no-op teardown")}
+	note, stop := startWarp(context.Background(), connectOptions{mode: ModeWindscribe}, nil, nil, nil)
+	if stop == nil {
+		t.Fatal("expected no-op teardown")
+	}
 	defer stop()
-	if !strings.Contains(note,"prohibited"){t.Fatalf("Aether not rejected: %s",note)}
+	if !strings.Contains(note, "prohibited") {
+		t.Fatalf("Aether not rejected: %s", note)
+	}
 }
