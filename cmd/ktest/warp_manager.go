@@ -315,8 +315,13 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 				if p.psiphon() {
 					rank = 6
 				}
+				exitAddr := fmt.Sprintf("127.0.0.1:%d", aetherPort(i))
+				ip, country, geoErr := probeForeignExit(ctx, exitAddr)
+				if geoErr != nil {
+					m.t.Note("%s: AI protection rejects this exit until non-Iran egress is verified (%v)", p.Label, geoErr)
+				}
 				err := m.proxy.Add(smartproxy.Upstream{
-					Name: "Exit: " + p.Label, Addr: fmt.Sprintf("127.0.0.1:%d", aetherPort(i)), Rank: rank, Exit: true, Late: true,
+					Name: "Exit: " + p.Label, Addr: exitAddr, Rank: rank, Exit: true, AIEligible: geoErr == nil, Late: true,
 				})
 				mu.Lock()
 				found = append(found, &warpFound{p: p, port: aetherPort(i), rc: rc})
@@ -327,6 +332,9 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 						_ = os.WriteFile(lastGoodFile(), []byte(p.Label), 0o600)
 					}
 					m.t.Line(toneOK, "Exit ready: %s %s", p.Label, m.t.Dim("("+shortDur(time.Since(began))+"). Telegram and sites blocked by address can open now"))
+					if geoErr == nil {
+						m.t.Line(toneOK, "AI foreign exit verified and available: %s (%s)", ip, country)
+					}
 				}
 			}
 		}()
