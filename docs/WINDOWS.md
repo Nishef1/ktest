@@ -66,3 +66,7 @@ Secondary, dated, per-operator reports; treat them as hypotheses to measure, not
 - Irancell is reported to accept fragment + fingerprint for Cloudflare CDN routes, while throttling the ECH domain's upload.
 - Serverless v52 is described as needing IPv6, and only for YouTube-style access. This is why `ktest smart` now includes two IPv6 twins (`self6:`) of the record-splitting families, resolving AAAA records, and races them against the IPv4 paths. The machine used for development has no global IPv6, so these were unit-tested only and could not be exercised live.
 - ECH and Cloudflare-specific tunnel settings from the channel need a TLS-terminating client; a transparent relay like `smart` cannot add them. MITM-DomainFronting is the channel's suggestion for direct YouTube; ktest does not install a CA, so that stays out of scope.
+
+### Menu item 9: Smart
+
+The interactive menu now has **9) Smart**, the same session as `ktest smart`: all Xray, ByeDPI and built-in paths start together and applications use one SOCKS5 address, `127.0.0.1:10800` (enable remote/proxy DNS). Items 1-4 remain for forcing a single method. Item 9 needs no server of your own: every path connects straight to the destination site and only changes how the first TLS flight is sent. Stopping (7, Ctrl+C or 0) prints which path won for which site, kept in memory only.

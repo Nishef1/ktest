@@ -133,6 +133,16 @@ func terminalMode(choice string, base string, output io.Writer) (launcher, int, 
 			})
 		}, xrayPort, "Xray Fragment " + variant, nil
 	}
+	if choice == "9" {
+		o := defaultSmartOptions(base)
+		o.noSelfTest = true // the menu verifies websites itself
+		return func(ctx context.Context, dns *dnscheck.Result) error {
+			if code := smartSession(ctx, o, dns, output); code != 0 {
+				return fmt.Errorf("smart session ended with code %d", code)
+			}
+			return nil
+		}, smartPort, "Smart (race every method)", nil
+	}
 	if choice == "3" || choice == "4" {
 		bin := byeDPIBinary(base)
 		if info, err := os.Stat(bin); err != nil || info.IsDir() {
@@ -285,6 +295,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		t.print("3) ByeDPI adaptive        4) TLS record slicing\n")
 		t.print("5) CDN IP candidates      6) Toggle system-wide TUN (Windows/Admin)\n")
 		t.print("7) Stop active mode       8) Retest YouTube and Google\n")
+		t.print("9) Smart: race every method per connection (recommended) on 127.0.0.1:10800\n")
 		t.print("0) Exit (stops core)\n")
 		t.print("Select > ")
 		if !reader.Scan() {
@@ -293,7 +304,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		}
 		option := strings.TrimSpace(reader.Text())
 		switch option {
-		case "1", "2", "3", "4":
+		case "1", "2", "3", "4", "9":
 			t.start(option, base)
 		case "5":
 			t.print("Scanning up to 300 official Cloudflare IPs; Ctrl+C cancels.\n")
@@ -375,7 +386,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			}
 			return 0
 		default:
-			t.print("Unknown option. Select 1-8 or 0 to exit.\n")
+			t.print("Unknown option. Select 1-9 or 0 to exit.\n")
 		}
 	}
 }
