@@ -8,7 +8,7 @@ The menu also allows selecting each mode. CLI:
 | --- | --- | --- | --- |
 | `-mode balanced` | normal mixed access, **AI sites protected** | Ordinary sites may use own IP; AI via verified foreign exit | AI domains stop if foreign exit absent |
 | `-mode fast` | fastest usable destination path | Direct, fragment, fronting, or Psiphon may win; public IP may differ by destination | Can fall back to local ISP IP |
-| `-mode windscribe` | HTTP/SOCKS bootstrap to **installed Windscribe**, **not** a VPN replacement | Windscribe provides exit only after its own tunnel completes | Windscribe Firewall handles system protection; ktest has no global kill switch |
+| `-mode windscribe` | **strict local-only anti-DPI** HTTP/SOCKS bootstrap for installed Windscribe | No Psiphon/Aether/WARP/Tor, no foreign/unknown Xray exit, no Plain, no CDN relay; only Windscribe changes public VPN IP | Local ByeDPI attempted for Windscribe TCP, fails 502 when unavailable; Windscribe Firewall protects other apps |
 | `-mode vpn` | all traffic **sent through ktest's SOCKS/HTTP listeners** | One verified foreign SOCKS path is pinned after its first success in this session | Fail closed; never switch to direct/fragment/fronting |
 | `-mode tor` | all traffic **sent through ktest's SOCKS/HTTP listeners** | Tor-only, may use different exit IPs by circuit/site | Fail closed while Tor is unavailable |
 
@@ -23,7 +23,7 @@ go run ./cmd/ktest connect -mode balanced
 
 # Windscribe's LAN HTTP proxy in its Preferences: 127.0.0.1 / 10801
 # Windscribe's own actual VPN protocol: TCP/443 WStunnel/Stealth/OpenVPN TCP
-go run ./cmd/ktest connect -mode windscribe
+go run ./cmd/ktest connect -mode windscribe  # strictly local ByeDPI/packet manipulation, no foreign egress
 
 # Verified foreign exit only; Aether/Psiphon is searched in the background
 go run ./cmd/ktest connect -mode vpn
@@ -32,7 +32,7 @@ go run ./cmd/ktest connect -mode vpn
 go run ./cmd/ktest connect -mode tor
 ```
 
-An **already running** external SOCKS5 exit is also supported via `-exit-socks 127.0.0.1:PORT`. The Tor-only mode additionally checks that `https://check.torproject.org/api/ip` returns `IsTor: true`, not merely that a proxy is open. Both Tor and other strict exits are checked for non-Iran, non-Russia country before being used for protected routing.
+For modes other than Windscribe, an **already running** external SOCKS5 exit can be supplied via `-exit-socks 127.0.0.1:PORT`. **Windscribe mode explicitly rejects this option.** The Tor-only mode additionally checks that `https://check.torproject.org/api/ip` returns `IsTor: true`, not merely that a proxy is open. Both Tor and other strict exits are checked for non-Iran, non-Russia country before being used for protected routing.
 
 **IMPORTANT:** SOCKS/HTTP proxies do not capture applications that are not configured to use them. `ktest -tun` (whole-PC) is a separate optional Windows route mode. It currently supports TCP and drops most UDP. It is **not an OS-level persistent kill switch**; if ktest crashes, system routes can be restored and traffic might escape. For sensitive use requiring all-app leak prevention, rely on a real VPN plus Windscribe's Firewall or another independently tested system-level lock. **Never run Windscribe alongside ktest's whole-PC TUN**. The Windscribe mode refuses `-tun` and an active `sing-tun` network adapter.
 
