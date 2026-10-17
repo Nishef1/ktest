@@ -7,7 +7,7 @@ import (
 )
 
 func (t *terminal) chooseCoverage(in *input) bool {
-	t.ui.Heading("traffic coverage", "Choose coverage, then select a connection policy (1-4). Windscribe always uses its own app.")
+	t.ui.Heading("traffic coverage", "Choose coverage, then select a connection policy (1-4, 6). Windscribe always uses its own app.")
 	t.ui.Println("   1  Proxy apps: configure SOCKS5/HTTP in each app; other apps keep their route")
 	t.ui.Println("   2  Whole PC (TCP): TUN + chosen policy; Windows Administrator; LAN/helpers exempt")
 	t.ui.Note("Whole PC blocks most UDP. It is not a persistent VPN kill switch. Do not combine it with Windscribe.")

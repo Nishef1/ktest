@@ -144,6 +144,40 @@ func TestAetherRunArgsNeverPromptStayOnLoopbackAndDoNotRepeatFlags(t *testing.T)
 	}
 }
 
+func TestPsiphonModeSelectsOnlyPsiphonProfiles(t *testing.T) {
+	base := t.TempDir()
+	profiles, err := loadAetherProfiles(base, "CFG", "1.2.3.4", ModePsiphon)
+	if err != nil || len(profiles) != 2 {
+		t.Fatalf("default Psiphon profiles: %v, %v", profiles, err)
+	}
+	for _, p := range profiles {
+		if !p.psiphon() {
+			t.Fatalf("non-Psiphon profile selected: %v", p)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(base, "profiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{
+		"warp | --masque --h2\ntor | --tor-only\nmixed | --psiphon-only --wg\n",
+		"cdn | --psiphon-only --psiphon-mode cdn\nwarp | --masque --h2\n",
+	} {
+		if err := os.WriteFile(aetherProfilesFile(base), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		profiles, err := loadAetherProfiles(base, "CFG", "1.2.3.4", ModePsiphon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(text, "warp") && len(profiles) != 0 {
+			t.Fatalf("Psiphon mode fell back to another transport: %v", profiles)
+		}
+		if strings.HasPrefix(text, "cdn") && (len(profiles) != 1 || profiles[0].Label != "cdn") {
+			t.Fatalf("custom Psiphon profile not respected: %v", profiles)
+		}
+	}
+}
+
 func TestLastGoodProfileGoesFirstAndWarpStateAndRegisterOrder(t *testing.T) {
 	ps := []aetherProfile{{Label: "a"}, {Label: "b"}, {Label: "c"}}
 	got := lastGoodFirst(ps, "c")

@@ -310,7 +310,7 @@ func (t *terminal) setup(base string, readLine func() (string, bool)) {
 	for {
 		u.Heading("setup", "Prepare optional capabilities. Configured files/identity do not prove a working connection.")
 		u.Note("Certificate: HTTPS website fronting for Balanced/Fast (including their Whole PC coverage); it cannot authenticate or front raw OpenVPN.")
-		u.Note("Exit paths: used by Balanced/Fast/VPN exit. Windscribe prohibits them; Tor uses its separately verified Tor route.")
+		u.Note("Exit paths: used by Balanced/Fast/Aether/Psiphon. Windscribe prohibits them; Aether to Tor uses its separately verified Tor route.")
 		cert := map[string]string{
 			"ok": "set up", "missing": "not set up", "outdated": "outdated: renew it", "untrusted": "not trusted yet",
 		}[certState()]

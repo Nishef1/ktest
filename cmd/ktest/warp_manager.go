@@ -98,12 +98,22 @@ func aetherProfilesFile(base string) string {
 }
 
 // loadAetherProfiles reads the editable list when it exists, else the default.
-func loadAetherProfiles(base, ech, ip string) ([]aetherProfile, error) {
+func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProfile, error) {
 	text := defaultAetherProfiles
 	if b, err := os.ReadFile(aetherProfilesFile(base)); err == nil {
 		text = string(b)
 	}
-	return parseAetherProfiles(text, ech, ip)
+	profiles, err := parseAetherProfiles(text, ech, ip)
+	if err != nil || mode != ModePsiphon {
+		return profiles, err
+	}
+	var psiphon []aetherProfile
+	for _, p := range profiles {
+		if p.psiphon() && !p.has("--tor-only") && !p.has("--masque") && !p.has("--wg") {
+			psiphon = append(psiphon, p)
+		}
+	}
+	return psiphon, nil
 }
 
 // aetherRunArgs is the full command line of a profile on a local port. Every
@@ -198,13 +208,18 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	if warpState(o.base) == "no core" {
 		return "off - optional: `ktest warp -enable` adds exit paths (WARP, Psiphon) for Telegram and sites blocked by address", func() {}
 	}
-	ech, ip := "", ""
-	fctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	if cfg, addr, err := front.FetchCloudflareECH(fctx); err == nil {
-		ech, ip = base64.StdEncoding.EncodeToString(cfg), addr
+	if o.mode == ModePsiphon && !fileOK(psiphonCore(o.base)) {
+		return "Psiphon unavailable: helper missing; `ktest warp -enable` fetches it", func() {}
 	}
-	cancel()
-	profs, err := loadAetherProfiles(o.base, ech, ip)
+	ech, ip := "", ""
+	if o.mode != ModePsiphon {
+		fctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		if cfg, addr, err := front.FetchCloudflareECH(fctx); err == nil {
+			ech, ip = base64.StdEncoding.EncodeToString(cfg), addr
+		}
+		cancel()
+	}
+	profs, err := loadAetherProfiles(o.base, ech, ip, o.mode)
 	if err != nil || len(profs) == 0 {
 		msg := "no usable profile"
 		if err != nil {

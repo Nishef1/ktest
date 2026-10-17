@@ -43,7 +43,7 @@ func TestBlankInputNeverShownAsInvalidChoice(t *testing.T) {
 }
 
 func TestUnknownOptionNamesTheRange(t *testing.T) {
-	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, `Unknown option "42". Select 1-10`) {
+	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, `Unknown option "42". Select 1-11`) {
 		t.Fatal(out)
 	}
 }
@@ -55,7 +55,7 @@ func TestSetupLineShowsState(t *testing.T) {
 }
 
 func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
-	for _, mode := range []ConnectionMode{ModeBalanced, ModeFast, ModeVPN, ModeTor, ModeWindscribe} {
+	for _, mode := range []ConnectionMode{ModeBalanced, ModeFast, ModeAether, ModePsiphon, ModeTor, ModeWindscribe} {
 		for _, wholePC := range []bool{false, true} {
 			menu := &terminal{wholePC: wholePC}
 			o := menu.menuConnectOptions("example-base", mode)

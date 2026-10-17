@@ -2,11 +2,24 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
+
+func TestPsiphonModeRejectsUnidentifiedExternalExit(t *testing.T) {
+	if code := runConnect([]string{"-mode", "psiphon", "-exit-socks", "127.0.0.1:19000"}); code != 2 {
+		t.Fatalf("external SOCKS allowed in Psiphon mode: %d", code)
+	}
+	o := defaultConnectOptions(t.TempDir())
+	o.mode, o.exitSocks = ModePsiphon, "127.0.0.1:19000"
+	var output bytes.Buffer
+	if code := connectSession(context.Background(), o, nil, newTerm(&output)); code != 2 {
+		t.Fatalf("session bypassed Psiphon-only restriction: %d", code)
+	}
+}
 
 func TestConnectionModes(t *testing.T) {
 	r, err := smartproxy.NewAIDomainRules("")
@@ -23,6 +36,8 @@ func TestConnectionModes(t *testing.T) {
 		{"fast", false, false, false},
 		{"windscribe", false, false, false},
 		{"vpn", true, true, false},
+		{"aether", true, true, false},
+		{"psiphon", true, true, false},
 		{"tor", true, true, false},
 	} {
 		mode, err := parseConnectionMode(c.mode)
@@ -45,6 +60,9 @@ func TestConnectionModes(t *testing.T) {
 	}
 	if _, err := parseConnectionMode("unknown"); err == nil {
 		t.Fatal("unrecognized mode accepted")
+	}
+	if mode, err := parseConnectionMode(" VPN "); err != nil || mode != ModeAether {
+		t.Fatalf("legacy vpn alias: mode=%q err=%v", mode, err)
 	}
 }
 
@@ -71,7 +89,7 @@ func TestModesVisibleInMainMenu(t *testing.T) {
 	if code := runInteractive(strings.NewReader("0\n"), &b, t.TempDir()); code != 0 {
 		t.Fatal(code)
 	}
-	for _, name := range []string{"Balanced", "Fast", "VPN exit", "Tor", "Windscribe"} {
+	for _, name := range []string{"Balanced", "Fast", "Aether", "Aether to Psiphon", "Aether to Tor", "Windscribe"} {
 		if !strings.Contains(b.String(), name) {
 			t.Errorf("missing menu item %q", name)
 		}

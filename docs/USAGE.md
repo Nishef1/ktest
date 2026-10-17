@@ -3,7 +3,7 @@
 The everyday path needs no options and no knowledge of the methods behind it.
 
 ```
-.\ktest.exe                 menu: five policies, separate coverage, Diagnose, Setup, CDN/Windscribe tests
+.\ktest.exe                 menu: six policies, separate coverage, Diagnose, Setup, CDN/Windscribe tests
 .\ktest.exe connect         connect now
 .\ktest.exe connect -cert   set up or renew the fronting certificate, then connect
 .\ktest.exe connect -tun    Whole PC TCP coverage for the chosen policy (asks for Administrator)
@@ -89,7 +89,7 @@ Limits: only HTTPS on port 443 for the listed families; applications that pin ce
 
 ## 6. Whole PC (system-wide tunnel)
 
-Whole PC is coverage, not a sixth policy. Menu 6 selects Proxy apps or Whole PC TCP; then choose policy 1-4. CLI example: ktest connect -mode vpn -tun. The policy survives Administrator elevation. A sing-box/Wintun adapter forwards public TCP to the selected policy; LAN and helper processes are exempt. It does not create a fixed public IP or a persistent kill switch. Windscribe uses its own coverage and cannot share this TUN.
+Whole PC is coverage, separate from the six policies. Menu 7 selects Proxy apps or Whole PC TCP; then choose policy 1-4 or 6. CLI example: ktest connect -mode aether -tun. The policy survives Administrator elevation. A sing-box/Wintun adapter forwards public TCP to the selected policy; LAN and helper processes are exempt. It does not create a fixed public IP or a persistent kill switch. Windscribe uses its own coverage and cannot share this TUN.
 
 What it does to be safe:
 
@@ -108,15 +108,18 @@ Not verified on a real network: this mode changes Windows routes. It was checked
 ## 8. The menu
 
 ```
-CONNECTION POLICY                         TOOLS
- 1 Balanced    (= ktest connect)           7 Diagnose  general or Windscribe
- 2 Fast        (-mode fast)                8 Setup     configured capabilities
- 3 VPN exit    (-mode vpn)                 9 CDN scan  provider HTTPS or own CDN route
- 4 Tor         (-mode tor)                10 Windscribe test  SNIs or connected VPN
- 5 Windscribe  (-mode windscribe)
-TRAFFIC COVERAGE (for 1-4)                 0 Exit
- 6 Coverage    Proxy apps / Whole PC TCP
+CONNECTION POLICY                            TOOLS
+ 1 Balanced          (= ktest connect)         8 Diagnose  general or Windscribe
+ 2 Fast              (-mode fast)             9 Setup     configured capabilities
+ 3 Aether            (-mode aether)           10 CDN scan  provider HTTPS or own CDN route
+ 4 Aether to Tor     (-mode tor)              11 Windscribe test  SNIs or connected VPN
+ 5 Windscribe        (-mode windscribe)
+ 6 Aether to Psiphon  (-mode psiphon)
+TRAFFIC COVERAGE (for 1-4, 6)                  0 Exit
+ 7 Coverage          Proxy apps / Whole PC TCP
 ```
+
+`Aether` searches WARP/Psiphon profiles. `Aether to Psiphon` selects only the normal/CDN Psiphon profiles, while `Aether to Tor` uses Aether's Tor-only backend. These labels select Aether backends, not an extra VPN hop. The old `-mode vpn` command remains an alias for `-mode aether`.
 
 Network jobs run in the foreground; Enter/Ctrl+C cancels them and returns to the menu. Ctrl+C on the idle menu exits. Setup reports prepared capabilities, not a successful tunnel: its CA applies to supported website HTTPS fronting in Balanced/Fast; Windscribe prohibits foreign exits.
 

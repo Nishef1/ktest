@@ -26,18 +26,26 @@ const (
 	ModeBalanced   ConnectionMode = "balanced"   // current convenience: AI needs exit
 	ModeFast       ConnectionMode = "fast"       // fastest usable; identity may change
 	ModeWindscribe ConnectionMode = "windscribe" // bootstrap, real VPN is external
-	ModeVPN        ConnectionMode = "vpn"        // verified foreign exits only
+	ModeAether     ConnectionMode = "aether"     // verified WARP/Psiphon exits only
+	ModePsiphon    ConnectionMode = "psiphon"    // Aether's Psiphon profiles only
 	ModeTor        ConnectionMode = "tor"        // verified Tor exit only
 )
 
 func parseConnectionMode(v string) (ConnectionMode, error) {
 	m := ConnectionMode(strings.ToLower(strings.TrimSpace(v)))
+	if m == "vpn" { // Preserve existing commands and scripts.
+		m = ModeAether
+	}
 	switch m {
-	case ModeBalanced, ModeFast, ModeWindscribe, ModeVPN, ModeTor:
+	case ModeBalanced, ModeFast, ModeWindscribe, ModeAether, ModePsiphon, ModeTor:
 		return m, nil
 	default:
-		return "", fmt.Errorf("unknown -mode %q; use balanced, fast, windscribe, vpn, or tor", v)
+		return "", fmt.Errorf("unknown -mode %q; use balanced, fast, windscribe, aether (alias vpn), psiphon, or tor", v)
 	}
+}
+
+func (m ConnectionMode) exitOnly() bool {
+	return m == ModeAether || m == ModePsiphon || m == ModeTor
 }
 
 func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.DomainRules) {
@@ -52,7 +60,7 @@ func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.Doma
 		cfg.PreferVerifiedExit = false
 		cfg.RejectExits = true
 		cfg.LocalOnly = true
-	case ModeVPN, ModeTor:
+	case ModeAether, ModePsiphon, ModeTor:
 		cfg.ExitOnly = func(string) bool { return true }
 	}
 }
@@ -65,10 +73,12 @@ func (m ConnectionMode) message() string {
 		return "Speed first: direct, fronting, desync and VPN exits can win; public IP may change by site."
 	case ModeWindscribe:
 		return "OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI, optional own Cloudflare hostname) plus IP-preserving local anti-DPI (Xray TCP fragmentation, ByeDPI, TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."
-	case ModeVPN:
-		return "Exit-only: one verified foreign upstream pinned for this session; no direct fallback for managed apps."
+	case ModeAether:
+		return "Aether: search WARP/Psiphon profiles; one verified foreign upstream pinned for this session; no direct fallback for managed apps."
+	case ModePsiphon:
+		return "Aether to Psiphon: Psiphon profiles only; verified foreign exit required; no WARP, Tor or direct fallback for managed apps."
 	case ModeTor:
-		return "Tor-only: no direct fallback for managed apps. Different Tor circuits can use different public IPs."
+		return "Aether to Tor: Tor-only; no direct fallback for managed apps. Different Tor circuits can use different public IPs."
 	}
 	return "Unknown"
 }

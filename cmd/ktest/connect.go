@@ -127,7 +127,7 @@ func runConnect(args []string) int {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	o := defaultConnectOptions(defaultBase())
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
-	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, vpn (all exit-only), tor (Tor-only)")
+	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, aether (alias vpn), psiphon (Aether to Psiphon), tor (Aether to Tor)")
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", "", "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
 	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: race WStunnel and Stealth straight to the Windscribe node with chosen SNIs")
@@ -144,7 +144,7 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.noDoH, "no-doh", false, "never use encrypted DNS (system DNS only)")
 	fs.BoolVar(&o.noDirect, "no-direct", false, "do not race the plain, uncut connection")
 	fs.BoolVar(&o.noFront, "no-front", false, "do not use domain fronting even if the ktest CA is trusted")
-	fs.BoolVar(&o.noWarp, "no-warp", false, "do not start the WARP exit even if it is enabled")
+	fs.BoolVar(&o.noWarp, "no-warp", false, "do not start Aether's WARP/Psiphon exit search even if it is enabled")
 	fs.BoolVar(&o.noHTTP, "no-http", false, "disable the local HTTP proxy for Windscribe")
 	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
 	fs.StringVar(&o.exitSocks, "exit-socks", "", "optional loopback SOCKS5 exit (Tor, Psiphon or authorized Worker), TCP only")
@@ -172,6 +172,10 @@ func runConnect(args []string) int {
 		return 2
 	}
 	o.mode = mode
+	if o.mode == ModePsiphon && o.exitSocks != "" {
+		fmt.Fprintln(os.Stderr, "Aether to Psiphon forbids -exit-socks: only managed Psiphon profiles may be used")
+		return 2
+	}
 	if o.mode == ModeWindscribe && o.exitSocks != "" {
 		fmt.Fprintln(os.Stderr, "Windscribe mode forbids -exit-socks: no foreign proxy/VPN exit may be used")
 		return 2
@@ -267,6 +271,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("Coverage: %s", connectionCoverage(o))
 	t.Note("%s", o.mode.message())
+	if o.mode == ModePsiphon && o.exitSocks != "" {
+		t.Line(toneFail, "Aether to Psiphon forbids external SOCKS exits (-exit-socks)")
+		return 2
+	}
 	if o.mode == ModeWindscribe {
 		if o.exitSocks != "" {
 			t.Line(toneFail, "Windscribe local-only mode forbids external SOCKS exits (-exit-socks)")
@@ -356,7 +364,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		c.launch = l
 		cores = append(cores, c)
 	}
-	if !o.noXray && o.mode != ModeVPN && o.mode != ModeTor {
+	if !o.noXray && !o.mode.exitOnly() {
 		// Imported Xray profiles may contain foreign outbound proxies. Do
 		// not trust a filename containing "fragment" as identity-preserving.
 		for _, x := range []struct {
@@ -373,7 +381,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 		}
 	}
-	if o.strategies > 0 && o.mode != ModeVPN && o.mode != ModeTor {
+	if o.strategies > 0 && !o.mode.exitOnly() {
 		bin := byeDPIBinary(o.base)
 		list, _, err := loadStrategies(o.base)
 		switch {
@@ -475,7 +483,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 3. Assemble the race. Initial order is the initial head start: the uncut
 	// baseline first, so unblocked sites never pay for a cut ClientHello.
 	var ups []smartproxy.Upstream
-	if !o.noDirect && o.mode != ModeVPN && o.mode != ModeTor && o.mode != ModeWindscribe {
+	if !o.noDirect && !o.mode.exitOnly() && o.mode != ModeWindscribe {
 		ups = append(ups, smartproxy.PlainUpstreams()...)
 	}
 	for _, c := range up {
@@ -485,7 +493,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			Rank: 2, LocalBypass: o.mode == ModeWindscribe && c.localBypass,
 		})
 	}
-	if !o.noSelf && o.mode != ModeVPN && o.mode != ModeTor {
+	if !o.noSelf && !o.mode.exitOnly() {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
 	}
 	// An independent, already-running TCP exit (e.g. Tor, Psiphon or a
@@ -510,10 +518,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			t.Note("External SOCKS exit is not permitted for protected AI sites: %v", checked)
 		}
 		ups = append(ups, smartproxy.Upstream{
-			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: o.mode != ModeFast && o.mode != ModeVPN && o.mode != ModeTor, Rank: 3,
+			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: o.mode != ModeFast && !o.mode.exitOnly(), Rank: 3,
 		})
 	}
-	if len(ups) == 0 && o.mode != ModeVPN && o.mode != ModeTor && !o.forceFront {
+	if len(ups) == 0 && !o.mode.exitOnly() && !o.forceFront {
 		t.Box("NOTHING TO RUN", toneFail, []string{"No path is available. Extract the complete portable ZIP (cores/ and profiles/)", "or run `ktest doctor`."})
 		return 1
 	}
@@ -562,7 +570,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// ktest CA, so it is only added when the system says it does.
 	var fronter *front.Fronter
 	frontNote := ""
-	if o.mode != ModeVPN && o.mode != ModeTor && o.mode != ModeWindscribe {
+	if !o.mode.exitOnly() && o.mode != ModeWindscribe {
 		// A CDN front can act as an egress/HTTP takeover; its public-IP
 		// semantics are not guaranteed. Local-only means no CDN relay.
 		fronter, frontNote = newFronter(o, cfg.Resolve, t, logDNS)

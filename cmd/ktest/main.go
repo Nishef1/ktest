@@ -36,8 +36,9 @@ const usageText = `ktest: free access toolkit
   ktest                    menu
   ktest connect            Balanced: every method races; AI sites only via a foreign exit
     -mode fast             fastest working route per site; public IP may change
-    -mode vpn              one verified foreign exit, pinned for the session
-    -mode tor              Tor circuit only
+    -mode aether           Aether WARP/Psiphon search; verified foreign exit (alias: vpn)
+    -mode psiphon          Aether to Psiphon; Psiphon profiles only
+    -mode tor              Aether to Tor; Tor circuit only
     -mode windscribe       carry the Windscribe app (OpenVPN TCP over WStunnel)
     -tun                   coverage for the selected policy: Whole PC TCP (Windows, Administrator)
     -v                     log every decision (ktest connect -h lists every flag)

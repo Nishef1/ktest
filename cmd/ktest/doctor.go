@@ -28,9 +28,9 @@ func runDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	base := fs.String("base", defaultBase(), "portable folder holding cores/ and profiles/")
 	noNet := fs.Bool("no-net", false, "skip the network characterization")
-	modeText := fs.String("mode", "balanced", "balanced, fast, vpn, tor, or windscribe; check the relevant prerequisites")
+	modeText := fs.String("mode", "balanced", "balanced, fast, aether (alias vpn), psiphon, tor, or windscribe; check the relevant prerequisites")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: ktest doctor [-mode balanced|fast|vpn|tor|windscribe] [-no-net]")
+		fmt.Fprintln(os.Stderr, "usage: ktest doctor [-mode balanced|fast|aether|psiphon|tor|windscribe] [-no-net]")
 		return 2
 	}
 	mode, err := parseConnectionMode(*modeText)
@@ -90,8 +90,11 @@ func runDoctorMode(ctx context.Context, u *term, base string, noNet bool, mode C
 	if mode == ModeWindscribe {
 		needs = []struct{ name, path string }{{"Xray local TCP core", xray}, {"ByeDPI core", byeDPIBinary(base)}}
 	}
-	if mode == ModeVPN || mode == ModeTor {
+	if mode.exitOnly() {
 		needs = []struct{ name, path string }{{"Aether exit core", aetherBinary(base)}}
+	}
+	if mode == ModePsiphon {
+		needs = append(needs, struct{ name, path string }{"Psiphon helper", psiphonCore(base)})
 	}
 	for _, need := range needs {
 		if fileOK(need.path) {
@@ -109,7 +112,7 @@ func runDoctorMode(ctx context.Context, u *term, base string, noNet bool, mode C
 			}
 		}
 	}
-	if fileOK(xray) && mode != ModeVPN && mode != ModeTor {
+	if fileOK(xray) && !mode.exitOnly() {
 		vctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		out, err := exec.CommandContext(vctx, xray, "version").CombinedOutput()
 		cancel()
@@ -124,7 +127,7 @@ func runDoctorMode(ctx context.Context, u *term, base string, noNet bool, mode C
 			}
 		}
 	}
-	if fileOK(profile) && mode != ModeWindscribe && mode != ModeVPN && mode != ModeTor {
+	if fileOK(profile) && mode != ModeWindscribe && !mode.exitOnly() {
 		data, err := os.ReadFile(profile)
 		if err != nil {
 			line(toneWarn, "Profile", err.Error())
@@ -138,7 +141,7 @@ func runDoctorMode(ctx context.Context, u *term, base string, noNet bool, mode C
 			}
 		}
 	}
-	if mode != ModeVPN && mode != ModeTor {
+	if !mode.exitOnly() {
 		if list, source, err := loadStrategies(base); err != nil {
 			line(toneWarn, "ByeDPI strategies", err.Error())
 		} else {

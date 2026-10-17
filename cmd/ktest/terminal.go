@@ -27,7 +27,7 @@ type terminal struct {
 	cancel context.CancelFunc // the running connection or scan
 
 	certDeclined bool // the user skipped the certificate offer this session
-	wholePC      bool // coverage for policies 1-4; Windscribe owns its own tunnel
+	wholePC      bool // coverage for policies 1-4, 6; Windscribe owns its own tunnel
 }
 
 func (t *terminal) print(format string, args ...any) { t.ui.Printf(format, args...) }
@@ -53,25 +53,26 @@ var menuSections = []struct {
 	{"Connection policy", []menuItem{
 		connectItem("1", "Balanced", "everyday access; known AI domains need a verified foreign exit", ModeBalanced),
 		connectItem("2", "Fast", "first working route; direct ISP IP or another exit may be used", ModeFast),
-		connectItem("3", "VPN exit", "verified foreign exit only; block if unavailable; IP may rotate", ModeVPN),
-		connectItem("4", "Tor", "verified Tor exit only; block if unavailable", ModeTor),
+		connectItem("3", "Aether", "WARP/Psiphon profiles; verified foreign exit only; block if unavailable", ModeAether),
+		connectItem("4", "Aether to Tor", "Tor-only via Aether; verified Tor exit required", ModeTor),
 		connectItem("5", "Windscribe", "bridge for the Windscribe app; its VPN owns coverage and exit IP", ModeWindscribe),
+		connectItem("6", "Aether to Psiphon", "Psiphon-only via Aether; verified foreign exit required", ModePsiphon),
 	}},
-	{"Traffic coverage (policies 1-4)", []menuItem{
-		{key: "6", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},
+	{"Traffic coverage (policies 1-4, 6)", []menuItem{
+		{key: "7", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},
 	}},
 	{"Tools", []menuItem{
-		{key: "7", name: "Diagnose", desc: "choose general network or Windscribe checks; reports test limits", action: func(t *terminal, base string, in *input) bool {
+		{key: "8", name: "Diagnose", desc: "choose general network or Windscribe checks; reports test limits", action: func(t *terminal, base string, in *input) bool {
 			return t.diagnoseMenu(base, in)
 		}},
-		{key: "8", name: "Setup", action: func(t *terminal, base string, in *input) bool {
+		{key: "9", name: "Setup", action: func(t *terminal, base string, in *input) bool {
 			t.setup(base, in.read)
 			return true
 		}},
-		{key: "9", name: "CDN scan", desc: "provider HTTPS reachability or your own Windscribe CDN route", action: func(t *terminal, _ string, in *input) bool {
+		{key: "10", name: "CDN scan", desc: "provider HTTPS reachability or your own Windscribe CDN route", action: func(t *terminal, _ string, in *input) bool {
 			return t.cdnScanMenu(in)
 		}},
-		{key: "10", name: "Windscribe test", desc: "compare SNIs by TCP/TLS/WebSocket; verify a connected VPN separately", action: func(t *terminal, base string, in *input) bool { return t.windscribeTestMenu(base, in) }},
+		{key: "11", name: "Windscribe test", desc: "compare SNIs by TCP/TLS/WebSocket; verify a connected VPN separately", action: func(t *terminal, base string, in *input) bool { return t.windscribeTestMenu(base, in) }},
 	}},
 }
 
@@ -89,16 +90,16 @@ func (t *terminal) mainMenu(base string) {
 		u.Printf("  %s\n", u.Dim(strings.ToUpper(s.title)))
 		for _, it := range s.items {
 			desc := it.desc
-			if it.key == "8" {
+			if it.key == "9" {
 				desc = setupSummary(base)
 			}
-			if it.key == "6" {
+			if it.key == "7" {
 				desc = "Proxy apps: configure apps on 10800/10801; change here to Whole PC (TCP)"
 				if t.wholePC {
 					desc = "Whole PC (TCP): TUN + chosen policy; Administrator; most UDP blocked (change here)"
 				}
 			}
-			u.Printf("   %s  %-11s %s\n", u.Bold(u.Cyan(it.key)), u.Bold(it.name), u.Dim(desc))
+			u.Printf("   %s  %-17s %s\n", u.Bold(u.Cyan(it.key)), u.Bold(it.name), u.Dim(desc))
 		}
 		u.Println("")
 	}
@@ -214,7 +215,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		}
 		it, found := findItem(line)
 		if !found {
-			t.ui.Line(toneWarn, "Unknown option %q. Select 1-10, or 0 to exit.", line)
+			t.ui.Line(toneWarn, "Unknown option %q. Select 1-11, or 0 to exit.", line)
 			continue
 		}
 		if !it.action(t, base, stdin) {
