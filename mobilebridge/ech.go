@@ -11,7 +11,7 @@ import (
 
 // ProbeECH checks whether a fresh, DNS-independent Cloudflare ECH
 // retry config can be obtained. It does not claim to tunnel app traffic.
-func ProbeECH() (string, error) {
+func ProbeEch() (string, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
     defer cancel()
     cfg, addr, err := front.FetchCloudflareECH(ctx)
