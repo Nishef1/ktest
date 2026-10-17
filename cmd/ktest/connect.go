@@ -870,6 +870,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			t.Note("HTTP proxy unavailable: %v (SOCKS5 still works)", err)
 		} else {
 			defer stopHTTP()
+			// Never request Windscribe auto-reconnect until its configured
+			// local HTTP CONNECT proxy has actually bound the port.
+			if o.mode.isWindscribe() {
+				monitor.markBridgeReady()
+			}
 		}
 	}
 	var warpNote string

@@ -169,3 +169,20 @@ func TestWindscribeInitialUnknownCLINeverEnablesNestedTunnel(t *testing.T) {
 		}
 	}
 }
+
+func TestWindscribeAutoReconnectWaitsForHTTPBridgeListener(t *testing.T) {
+	m := &windscribeMonitor{autoReconnect: true}
+	m.mu.Lock()
+	readyBefore := m.bridgeReady
+	m.mu.Unlock()
+	if readyBefore {
+		t.Fatal("auto-reconnect was permitted before the HTTP bridge was ready")
+	}
+	m.markBridgeReady()
+	m.mu.Lock()
+	readyAfter := m.bridgeReady
+	m.mu.Unlock()
+	if !readyAfter {
+		t.Fatal("ready HTTP bridge did not arm CLI reconnect checks")
+	}
+}

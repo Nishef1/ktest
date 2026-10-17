@@ -139,6 +139,7 @@ type windscribeMonitor struct {
 	t                   *term
 	autoReconnect       bool
 	aetherCarrier       bool
+	bridgeReady         bool // HTTP CONNECT listener must exist before CLI reconnect
 	mu                  sync.RWMutex
 	state               windscribeState
 	protocol            string
@@ -158,6 +159,15 @@ func (m *windscribeMonitor) State() windscribeState {
 }
 
 func (m *windscribeMonitor) Connected() bool { return m != nil && m.State() == windscribeConnected }
+
+func (m *windscribeMonitor) markBridgeReady() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.bridgeReady = true
+	m.mu.Unlock()
+}
 
 func (m *windscribeMonitor) onConnected(fn func()) {
 	if m == nil {
@@ -265,7 +275,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	// Wait for a stable disconnected state and the selected carrier class;
 	// otherwise the CLI would keep restarting an unreachable VPN.
 	ready := false
-	if p != nil {
+	if m.bridgeReady && p != nil {
 		if m.aetherCarrier {
 			total, _ := p.ExitCounts()
 			ready = total > 0
