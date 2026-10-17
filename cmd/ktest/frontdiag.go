@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/connectiondns"
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -118,13 +118,7 @@ func frontErr(err error) string {
 // echDoHEndpoint is Cloudflare's DNS-over-HTTPS service reached through
 // Encrypted Client Hello from ktest itself.
 func echDoHEndpoint() smartproxy.DoHEndpoint {
-	f := front.New(front.Config{})
-	return smartproxy.DoHEndpoint{
-		URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json",
-		DialTLS: func(ctx context.Context) (net.Conn, error) {
-			return f.DialECH(ctx, "cloudflare-dns.com", []string{"http/1.1"})
-		},
-	}
+	return connectiondns.ECHEndpoint()
 }
 
 // printECHDoH shows whether encrypted DNS works through ECH where the plain

@@ -9,6 +9,7 @@ import (
     "sync"
     "time"
 
+    "github.com/Nishef1/ktest/internal/connectiondns"
     "github.com/Nishef1/ktest/internal/connectionpolicy"
     "github.com/Nishef1/ktest/internal/httpproxy"
     "github.com/Nishef1/ktest/internal/smartproxy"
@@ -127,6 +128,10 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     }
     config := smartproxy.Config{Upstreams: upstreams}
     connectionpolicy.Configure(mode, &config, rules.Match)
+    // Use the same Go trusted/DoH/ECH resolver as the desktop connection.
+    // Aether never falls back to Android system DNS.
+    config.Resolve, config.Resolve6, err = connectiondns.MobileResolvers(mode, upstream)
+    if err != nil { return "", err }
     if upstream != "" {
         config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {
             _, err := verifyLocalUpstream(ctx, upstream)
