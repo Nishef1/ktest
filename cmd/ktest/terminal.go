@@ -6,8 +6,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
+
+	xterm "golang.org/x/term"
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/systemtun"
@@ -22,8 +26,9 @@ type launcher func(ctx context.Context, dns *dnscheck.Result) error
 type terminal struct {
 	ui *term
 
-	mu     sync.Mutex
-	cancel context.CancelFunc // the running connection or scan
+	mu             sync.Mutex
+	cancel         context.CancelFunc // the running connection or scan
+	mainMenuActive bool
 
 	settings     userSettings
 	settingsFile string
@@ -68,8 +73,7 @@ var menuSections = []struct {
 			return t.diagnoseMenu(base, in)
 		}},
 		{key: "9", name: "Setup", action: func(t *terminal, base string, in *input) bool {
-			t.setup(base, in.read)
-			return true
+			return t.setup(base, in)
 		}},
 		{key: "10", name: "CDN scan", action: func(t *terminal, _ string, in *input) bool {
 			return t.cdnScanMenu(in)
@@ -97,6 +101,8 @@ func (t *terminal) setupDescription(base string) string {
 	}
 	if (t.options.mode == ModeBalanced || t.options.mode == ModeFast) && !t.options.noFront && !t.settings.SkipCertificateOffer {
 		switch certState() {
+		case "invalid":
+			return t.ui.Red("Certificate files need repair")
 		case "untrusted", "outdated":
 			return t.ui.Yellow("Certificate needs attention")
 		case "missing":
@@ -175,10 +181,13 @@ func findItem(key string) (menuItem, bool) {
 }
 
 // input owns stdin, so a running connection can wait for Enter without
-// swallowing the next menu choice. Ctrl+C on the idle menu closes it.
+// swallowing the next menu choice. Ctrl+C closes only the idle main menu;
+// submenus receive a Back request.
 type input struct {
-	lines <-chan string
-	quit  <-chan struct{}
+	lines       <-chan string
+	quit        <-chan struct{}
+	back        <-chan struct{}
+	interrupted bool
 }
 
 func (in *input) read() (string, bool) {
@@ -186,6 +195,9 @@ func (in *input) read() (string, bool) {
 	case l, ok := <-in.lines:
 		return strings.TrimSpace(l), ok
 	case <-in.quit:
+		return "", false
+	case <-in.back:
+		in.interrupted = true
 		return "", false
 	}
 }
@@ -218,6 +230,54 @@ func (t *terminal) foreground(job func(ctx context.Context), lines ...<-chan str
 	return alive
 }
 
+// An idle submenu goes back one level; only the idle main menu exits.
+func (t *terminal) handleInterrupt(back chan<- struct{}, quit chan struct{}) bool {
+	t.mu.Lock()
+	cancel, mainMenuActive := t.cancel, t.mainMenuActive
+	t.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		return false
+	}
+	if mainMenuActive {
+		close(quit)
+		return true
+	}
+	select {
+	case back <- struct{}{}:
+	default:
+	}
+	return false
+}
+
+// Windows ReadConsole can return a transient EOF just before delivering
+// Ctrl+C. Wait briefly for that notification before closing the input channel;
+// a genuine EOF still exits, and redirected input never retries.
+func scanMenuInput(reader io.Reader, lines chan<- string, finished <-chan struct{}, readInterrupts <-chan struct{}, retryConsoleEOF bool) {
+	defer close(lines)
+	for {
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			select {
+			case lines <- scanner.Text():
+			case <-finished:
+				return
+			}
+		}
+		if !retryConsoleEOF {
+			return
+		}
+		select {
+		case <-readInterrupts:
+			// Reopen the scanner over the same still-open console handle.
+		case <-finished:
+			return
+		case <-time.After(200 * time.Millisecond):
+			return
+		}
+	}
+}
+
 // runInteractive is the menu. It never changes Windows routing or DNS itself;
 // only Whole PC does, after asking for Administrator.
 func runInteractive(in io.Reader, out io.Writer, base string) int {
@@ -232,6 +292,8 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	quit := make(chan struct{})
+	back := make(chan struct{}, 1)
+	readInterrupts := make(chan struct{}, 1)
 	finished := make(chan struct{})
 	defer close(finished)
 	go func() {
@@ -240,36 +302,38 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			case <-finished:
 				return
 			case <-interrupts:
-				t.mu.Lock()
-				cancel := t.cancel
-				t.mu.Unlock()
-				if cancel != nil {
-					cancel() // back to the menu
-					continue
+				select {
+				case readInterrupts <- struct{}{}:
+				default:
 				}
-				close(quit) // Ctrl+C on the idle menu exits
-				return
+				if t.handleInterrupt(back, quit) {
+					return
+				}
 			}
 		}
 	}()
 	lines := make(chan string)
-	go func() {
-		sc := bufio.NewScanner(in)
-		for sc.Scan() {
-			select {
-			case lines <- sc.Text():
-			case <-finished:
-				return
-			}
-		}
-		close(lines)
-	}()
-	stdin := &input{lines: lines, quit: quit}
+	consoleInput := false
+	if file, ok := in.(*os.File); ok && runtime.GOOS == "windows" {
+		consoleInput = xterm.IsTerminal(int(file.Fd()))
+	}
+	go scanMenuInput(in, lines, finished, readInterrupts, consoleInput)
+	stdin := &input{lines: lines, quit: quit, back: back}
 
 	for {
+		t.mu.Lock()
+		t.mainMenuActive = true
+		t.mu.Unlock()
 		t.mainMenu(base)
 		line, ok := stdin.read()
+		t.mu.Lock()
+		t.mainMenuActive = false
+		t.mu.Unlock()
 		if !ok {
+			if stdin.interrupted {
+				stdin.interrupted = false
+				continue
+			}
 			t.print("\n")
 			return 0
 		}
@@ -277,6 +341,10 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		case "":
 			t.ui.leaveMenu()
 			if !t.connectFromMenu(base, stdin, t.options.mode) {
+				if stdin.interrupted {
+					stdin.interrupted = false
+					continue
+				}
 				return 0
 			}
 			continue
@@ -288,10 +356,14 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 			t.notice, t.noticeTone = "Unknown option. Use 1-11, Enter, or 0.", toneWarn
 			continue
 		}
-		if it.key != "7" {
+		if it.key != "7" && it.key != "9" {
 			t.ui.leaveMenu()
 		}
 		if !it.action(t, base, stdin) {
+			if stdin.interrupted {
+				stdin.interrupted = false
+				continue
+			}
 			return 0
 		}
 	}
@@ -315,8 +387,9 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 	if state := certState(); state != "ok" && !t.settings.SkipCertificateOffer && usesFronting {
 		why := map[string]string{
 			"missing":   "Domain fronting (YouTube, X, Instagram, Reddit ...) needs a local certificate that is not set up.",
-			"outdated":  "The local certificate predates sites this ktest can front.",
+			"outdated":  "The local certificate needs renewal for its validity period or supported sites.",
 			"untrusted": "The local certificate exists but this system does not trust it yet.",
+			"invalid":   "The local certificate files cannot be used; open Setup to inspect them.",
 		}[state]
 		t.ui.Line(toneInfo, "%s", why)
 		t.print("  Type YES to set it up now (Windows asks you to confirm), or Enter to skip future offers (Setup remains available) > ")

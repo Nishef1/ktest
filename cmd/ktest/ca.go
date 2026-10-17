@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/systemtun"
@@ -79,17 +81,18 @@ func runCA(args []string) int {
 func caStatus(u *term) {
 	u.Heading("domain fronting", "A local, name-constrained CA lets ktest show a harmless name on the wire.")
 	dir := caDir()
-	if dir == "" || !front.Exists(dir) {
+	status := inspectCertificate()
+	if status.state == "missing" {
 		u.Line(toneInfo, "No CA yet. It is optional; without it Connect still works with every other method.")
 		u.Note("`ktest ca -install` creates it and asks Windows to trust it for your user.")
 		return
 	}
-	ca, err := front.Load(dir)
-	if err != nil {
-		u.Line(toneFail, "The CA in %s cannot be used: %v", dir, err)
-		u.Note("`ktest ca -delete` removes it; `ktest ca -install` makes a new one.")
+	if status.state == "invalid" {
+		u.Line(toneFail, "The CA in %s cannot be used: %s", dir, status.detail)
+		u.Note("Repair the local files or use `ktest ca -delete` then `ktest ca -install`.")
 		return
 	}
+	ca := status.ca
 	u.Line(toneInfo, "CA folder    %s", dir)
 	u.Line(toneInfo, "Thumbprint   %s   expires %s", ca.Fingerprint(), ca.Expires().Format("2006-01-02"))
 	u.Line(toneInfo, "Limited to   %d domains (it cannot vouch for any other site, even if its key leaks)", len(ca.Permitted()))
@@ -97,8 +100,11 @@ func caStatus(u *term) {
 		u.Line(toneWarn, "This CA predates %d site(s) this ktest can front: %s", len(missing), strings.Join(firstN(missing, 6), ", "))
 		u.Note("`ktest ca -renew` replaces it by one that covers them (a CA's constraints cannot be extended).")
 	}
-	if ca.TrustedBySystem() {
-		u.Line(toneOK, "Trusted by this system: Connect will use domain fronting for Google, YouTube, Meta and Fastly-hosted sites.")
+	if status.state == "outdated" {
+		u.Line(toneWarn, "Renew required: %s", status.detail)
+		u.Note("`ktest ca -renew` replaces and installs it after confirmation.")
+	} else if status.state == "ok" {
+		u.Line(toneOK, "Installed, trusted by this system and up to date.")
 		u.Note("Firefox keeps its own store: set security.enterprise_roots.enabled to true in about:config, or import %s.", ca.CertPath())
 	} else {
 		u.Line(toneWarn, "Not trusted by this system yet, so Connect leaves domain fronting off.")
@@ -153,7 +159,9 @@ func caInstall(u *term) int {
 // caRemove stops trusting the CA, and with del also deletes its files.
 func caRemove(u *term, del bool) int {
 	dir := caDir()
-	if dir == "" || !front.Exists(dir) {
+	_, certErr := os.Stat(filepath.Join(dir, front.CertFile))
+	_, keyErr := os.Stat(filepath.Join(dir, front.KeyFile))
+	if dir == "" || (os.IsNotExist(certErr) && os.IsNotExist(keyErr)) {
 		u.Line(toneInfo, "There is no ktest CA.")
 		return 0
 	}
@@ -168,11 +176,13 @@ func caRemove(u *term, del bool) int {
 		u.Line(toneOK, "The ktest CA is no longer trusted.")
 	}
 	if del {
-		if err := os.RemoveAll(dir); err != nil {
-			u.Line(toneFail, "cannot delete %s: %v", dir, err)
-			return 1
+		for _, name := range []string{front.CertFile, front.KeyFile} {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+				u.Line(toneFail, "cannot delete %s: %v", name, err)
+				return 1
+			}
 		}
-		u.Line(toneOK, "Deleted %s (the key is gone).", dir)
+		u.Line(toneOK, "Deleted the CA certificate and private key from %s.", dir)
 	}
 	return 0
 }
@@ -204,50 +214,100 @@ func lastLines(s string, n int) string {
 	return strings.TrimSpace(strings.Join(lines, " | "))
 }
 
-// frontSetup is the Advanced menu entry for the CA: show the state, then offer
-// the one step that makes sense. Windows asks for its own confirmation as well.
-func (t *terminal) frontSetup(readLine func() (string, bool)) {
+// frontSetup returns to Setup on Enter or Ctrl+C; trust changes require an
+// explicit action here and remain subject to the operating system's approval.
+func (t *terminal) frontSetup(readLine func() (string, bool)) bool {
 	u := t.ui
 	caStatus(u)
-	ca, trusted := loadFrontCA()
-	switch {
-	case ca != nil && trusted && len(caMissing(ca)) > 0:
-		u.Printf("  Type RENEW to replace the CA by one covering every site (Windows asks you to confirm), or press Enter to keep it > ")
-		if ans, ok := readLine(); ok && strings.EqualFold(ans, "RENEW") {
+	status := inspectCertificate()
+	switch status.state {
+	case "ok", "outdated":
+		u.Printf("  Type RENEW to replace and install the certificate, REMOVE to delete it, or Enter to go back > ")
+		ans, ok := readLine()
+		if !ok {
+			return false
+		}
+		switch strings.ToUpper(ans) {
+		case "RENEW":
 			if caRemove(u, true) == 0 {
 				caInstall(u)
 			}
-		}
-	case ca != nil && trusted:
-		u.Printf("  Type REMOVE to stop trusting and delete the CA, or press Enter to keep it > ")
-		if ans, ok := readLine(); ok && strings.EqualFold(ans, "REMOVE") {
+		case "REMOVE":
 			caRemove(u, true)
 		}
+	case "invalid":
+		u.Printf("  Repair the files shown above; press Enter to go back > ")
+		_, ok := readLine()
+		return ok
 	default:
-		u.Printf("  Type YES to create the CA and trust it for your Windows user (Windows asks you to confirm) > ")
-		if ans, ok := readLine(); ok && strings.EqualFold(ans, "YES") {
-			caInstall(u)
-		} else {
-			u.Line(toneInfo, "Cancelled; nothing was changed.")
+		u.Printf("  Type INSTALL or YES to create/install trust (Windows asks for confirmation), or Enter to go back > ")
+		ans, ok := readLine()
+		if !ok {
+			return false
 		}
+		if strings.EqualFold(ans, "YES") || strings.EqualFold(ans, "INSTALL") {
+			caInstall(u)
+		}
+	}
+	return true
+}
+
+type certificateStatus struct {
+	state, detail string
+	ca            *front.CA
+}
+
+func inspectCertificate() certificateStatus {
+	dir := caDir()
+	if dir == "" {
+		return certificateStatus{state: "invalid", detail: "configuration directory unavailable"}
+	}
+	_, certErr := os.Stat(filepath.Join(dir, front.CertFile))
+	_, keyErr := os.Stat(filepath.Join(dir, front.KeyFile))
+	if os.IsNotExist(certErr) && os.IsNotExist(keyErr) {
+		return certificateStatus{state: "missing"}
+	}
+	ca, err := front.Load(dir)
+	if err != nil {
+		return certificateStatus{state: "invalid", detail: err.Error()}
+	}
+	return classifyCertificate(ca, ca.TrustedBySystem(), time.Now())
+}
+
+func classifyCertificate(ca *front.CA, trusted bool, now time.Time) certificateStatus {
+	status := certificateStatus{state: "outdated", ca: ca}
+	switch {
+	case !ca.ValidAt(now):
+		status.detail = "certificate is expired or not yet valid; check the system clock"
+	case ca.Expires().Sub(now) <= 30*24*time.Hour:
+		status.detail = "expires within 30 days"
+	case len(caMissing(ca)) > 0:
+		status.detail = "new fronting domains need a replacement certificate"
+	case !trusted:
+		status.state = "untrusted"
+	default:
+		status.state = "ok"
+	}
+	return status
+}
+
+func (s certificateStatus) summary(u *term) string {
+	switch s.state {
+	case "ok":
+		return u.Green("Installed / trusted / up to date")
+	case "outdated":
+		return u.Yellow("Renew - " + s.detail)
+	case "untrusted":
+		return u.Yellow("Install trust - not trusted by this system")
+	case "invalid":
+		return u.Red("Repair - certificate files cannot be used")
+	default:
+		return "Install - not set up"
 	}
 }
 
-// certState says whether the fronting certificate needs attention: "ok",
-// "missing", "outdated" (made before this ktest knew more sites) or
-// "untrusted" (not accepted by the system store yet).
-func certState() string {
-	ca, trusted := loadFrontCA()
-	switch {
-	case ca == nil:
-		return "missing"
-	case len(caMissing(ca)) > 0:
-		return "outdated"
-	case !trusted:
-		return "untrusted"
-	}
-	return "ok"
-}
+// certState includes validity dates, supported domains and system trust.
+func certState() string { return inspectCertificate().state }
 
 // ensureCert leaves a trusted, up-to-date certificate behind, creating or
 // renewing it as needed. Windows asks the user to confirm the trust step.
@@ -257,7 +317,7 @@ func ensureCert(u *term) bool {
 		u.Line(toneOK, "The ktest certificate is set up.")
 		return true
 	case "outdated":
-		u.Line(toneInfo, "The certificate predates sites this ktest can front; renewing it.")
+		u.Line(toneInfo, "The certificate needs renewal for its validity period or supported sites.")
 		if caRemove(u, true) != 0 {
 			return false
 		}

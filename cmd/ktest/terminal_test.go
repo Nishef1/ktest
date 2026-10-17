@@ -2,11 +2,56 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+type transientEOFReader struct {
+	first  bool
+	reader io.Reader
+	ended  chan struct{}
+}
+
+func (r *transientEOFReader) Read(p []byte) (int, error) {
+	if !r.first {
+		r.first = true
+		if r.ended != nil {
+			close(r.ended)
+		}
+		return 0, io.EOF
+	}
+	return r.reader.Read(p)
+}
+
+func TestConsoleInterruptEOFDoesNotCloseMenuInput(t *testing.T) {
+	lines := make(chan string)
+	finished := make(chan struct{})
+	interrupts := make(chan struct{}, 1)
+	ended := make(chan struct{})
+	go func() { <-ended; time.Sleep(10 * time.Millisecond); interrupts <- struct{}{} }()
+	go scanMenuInput(&transientEOFReader{reader: strings.NewReader("9\n"), ended: ended}, lines, finished, interrupts, true)
+	line, ok := <-lines
+	if !ok || line != "9" {
+		t.Fatal("transient Ctrl+C EOF closed the input")
+	}
+	close(finished)
+	for range lines {
+	}
+}
+
+func TestRedirectedEOFDoesNotRetryOnAnInterrupt(t *testing.T) {
+	lines := make(chan string)
+	interrupts := make(chan struct{}, 1)
+	interrupts <- struct{}{}
+	go scanMenuInput(&transientEOFReader{reader: strings.NewReader("must not be read\n")}, lines, make(chan struct{}), interrupts, false)
+	if line, ok := <-lines; ok {
+		t.Fatalf("redirected EOF unexpectedly retried: %q", line)
+	}
+}
 
 func menuOutput(t *testing.T, input string) string {
 	t.Helper()
@@ -23,6 +68,40 @@ func TestMenuExits(t *testing.T) {
 		if !strings.Contains(menuOutput(t, in), "Select >") {
 			t.Fatalf("no menu for %q", in)
 		}
+	}
+}
+
+func TestSetupCertificateBackReturnsToSetupThenMainMenu(t *testing.T) {
+	t.Setenv("KTEST_CA_DIR", t.TempDir())
+	out := menuOutput(t, "9\n1\n\n0\n0\n")
+	if strings.Count(out, "Certificate health and optional exit components.") != 2 || strings.Count(out, "Free access toolkit") != 2 {
+		t.Fatal("certificate Back did not return to Setup before the main menu:", out)
+	}
+}
+
+func TestCtrlCInSubmenuGoesBackWhileMainMenuExits(t *testing.T) {
+	menu := &terminal{}
+	back, quit := make(chan struct{}, 1), make(chan struct{})
+	if menu.handleInterrupt(back, quit) {
+		t.Fatal("submenu interrupt exited application")
+	}
+	in := &input{back: back}
+	if _, ok := in.read(); ok || !in.interrupted {
+		t.Fatal("submenu did not receive Back")
+	}
+	select {
+	case <-quit:
+		t.Fatal("application quit channel closed from submenu")
+	default:
+	}
+	menu.mainMenuActive = true
+	if !menu.handleInterrupt(back, quit) {
+		t.Fatal("idle main menu did not exit")
+	}
+	select {
+	case <-quit:
+	default:
+		t.Fatal("main menu did not close application")
 	}
 }
 

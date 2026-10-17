@@ -172,6 +172,11 @@ func (c *CA) Fingerprint() string {
 // Expires is when the CA stops being valid.
 func (c *CA) Expires() time.Time { return c.cert.NotAfter }
 
+// ValidAt includes the CA's activation time, not just its expiry date.
+func (c *CA) ValidAt(now time.Time) bool {
+	return !now.Before(c.cert.NotBefore) && now.Before(c.cert.NotAfter)
+}
+
 // Permitted lists the domains the CA may issue for.
 func (c *CA) Permitted() []string { return append([]string(nil), c.cert.PermittedDNSDomains...) }
 

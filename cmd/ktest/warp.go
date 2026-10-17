@@ -305,55 +305,82 @@ func runWarp(args []string) int {
 
 // setup is the menu screen for the two optional pieces: the certificate that
 // enables domain fronting and the WARP exit.
-func (t *terminal) setup(base string, readLine func() (string, bool)) {
+func (t *terminal) setup(base string, in *input) bool {
 	u := t.ui
 	for {
-		u.Heading("setup", "Prepare optional capabilities. Configured files/identity do not prove a working connection.")
-		u.Note("Certificate: HTTPS website fronting for Balanced/Fast (including their Whole PC coverage); it cannot authenticate or front raw OpenVPN.")
-		u.Note("Exit paths: used by Balanced/Fast/Aether/Psiphon. Windscribe prohibits them; Aether to Tor uses its separately verified Tor route.")
-		cert := map[string]string{
-			"ok": "set up", "missing": "not set up", "outdated": "outdated: renew it", "untrusted": "not trusted yet",
-		}[certState()]
-		warp := map[string]string{"ready": "configured; tunnel unverified", "no core": "off", "no identity": "core present, not registered"}[warpState(base)]
-		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("1")), u.Bold("Certificate"), u.Dim(cert+" (domain fronting: YouTube, X, Instagram, Reddit ...)"))
-		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("2")), u.Bold("Exit paths"), u.Dim(warp+" (WARP, Psiphon: Telegram and sites blocked by address)"))
-		u.Printf("  %s  %s\n\n  Select > ", u.Bold(u.Cyan("0")), u.Bold("Back"))
-		line, ok := readLine()
-		if !ok {
-			return
+		u.menuView()
+		u.Heading("setup", "Certificate health and optional exit components.")
+		cert := inspectCertificate()
+		u.menuOption("1", "Certificate", cert.summary(u))
+		if cert.ca != nil {
+			u.Note("Expires: %s", cert.ca.Expires().Format("2006-01-02"))
 		}
-		switch line {
-		case "1":
-			t.frontSetup(readLine)
-		case "2":
-			t.warpSetup(base, readLine)
-		case "0", "b", "B":
-			return
+		warp := map[string]string{"ready": "Configured / tunnel unverified", "no core": "Install exit components", "no identity": "Core present / WARP not registered"}[warpState(base)]
+		u.menuOption("2", "Exit paths", warp)
+		u.Printf("\n")
+		u.Note("Certificate: optional website fronting for Balanced / Fast.")
+		u.Note("Exit components do not prove a working VPN. Windscribe uses its own app.")
+		u.Note("Ctrl+C goes back. No certificate changes without your choice.")
+		u.Printf("\n")
+		u.menuOption("0", "Back", "")
+		u.Printf("\n  Select > ")
+		line, ok := in.read()
+		if !ok {
+			return false
+		}
+		switch strings.ToLower(line) {
+		case "1", "2":
+			u.leaveMenu()
+			var alive bool
+			if line == "1" {
+				alive = t.frontSetup(in.read)
+			} else {
+				alive = t.warpSetup(base, in.read)
+			}
+			if in.interrupted {
+				in.interrupted = false
+				continue
+			}
+			if !alive {
+				return false
+			}
+		case "0", "b", "back":
+			return true
 		case "":
 		default:
-			u.Line(toneWarn, "Unknown option. Select 1-2, or 0 to go back.")
+			u.Line(toneWarn, "Select 1-2, or 0 to go back.")
 		}
 	}
 }
 
-func (t *terminal) warpSetup(base string, readLine func() (string, bool)) {
+func (t *terminal) warpSetup(base string, readLine func() (string, bool)) bool {
 	u := t.ui
 	warpStatus(u, base)
 	if warpState(base) == "ready" {
-		u.Printf("  Type REMOVE to delete the WARP identity, or press Enter to keep it > ")
-		if ans, ok := readLine(); ok && strings.EqualFold(ans, "REMOVE") {
+		u.Printf("  Type REMOVE to delete the WARP identity, or Enter to go back > ")
+		ans, ok := readLine()
+		if !ok {
+			return false
+		}
+		if strings.EqualFold(ans, "REMOVE") {
 			warpDisable(u)
 		}
-		return
+		return true
 	}
-	u.Printf("  Type YES to enable it (downloads the pinned Aether core if missing and registers a free anonymous WARP identity) > ")
-	if ans, ok := readLine(); !ok || !strings.EqualFold(ans, "YES") {
-		u.Line(toneInfo, "Cancelled; nothing was changed.")
-		return
+	u.Printf("  Type YES to enable it (downloads Aether if missing and registers a free anonymous WARP identity), or Enter to go back > ")
+	ans, ok := readLine()
+	if !ok {
+		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
-	defer cancel()
-	warpEnable(ctx, u, base)
+	if !strings.EqualFold(ans, "YES") {
+		return true
+	}
+	u.Note("Press Ctrl+C to cancel setup.")
+	return t.foreground(func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
+		defer cancel()
+		warpEnable(ctx, u, base)
+	})
 }
 
 // wrapOne shortens a log line to n runes.

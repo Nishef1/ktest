@@ -2,11 +2,93 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nishef1/ktest/internal/front"
 )
+
+func TestCertificateHealthIncludesSystemTrustExpiryAndSupportedSites(t *testing.T) {
+	ca, err := front.Create(t.TempDir(), front.PermittedDomains(front.DefaultFamilies()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		now     time.Time
+		trusted bool
+		want    string
+	}{
+		{"healthy", time.Now(), true, "ok"},
+		{"not installed", time.Now(), false, "untrusted"},
+		{"expires soon", ca.Expires().Add(-24 * time.Hour), true, "outdated"},
+		{"expired", ca.Expires().Add(time.Hour), true, "outdated"},
+		{"not yet valid", ca.Expires().AddDate(-3, 0, 0), true, "outdated"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := classifyCertificate(ca, tc.trusted, tc.now)
+			if s.state != tc.want {
+				t.Fatalf("got %s, want %s", s.state, tc.want)
+			}
+			green := strings.Contains(s.summary(&term{color: true}), "\x1b[32m")
+			if green != (tc.want == "ok") {
+				t.Fatal("unhealthy certificate was shown as green")
+			}
+		})
+	}
+	old, err := front.Create(t.TempDir(), []string{"youtube.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := classifyCertificate(old, true, time.Now()); s.state != "outdated" || !strings.Contains(s.summary(plainTerm(&bytes.Buffer{})), "Renew") {
+		t.Fatal("old domain coverage did not offer renewal")
+	}
+}
+
+func TestCertificateInspectionDetectsPartialFilesAndActualUntrustedCA(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KTEST_CA_DIR", dir)
+	if inspectCertificate().state != "missing" {
+		t.Fatal("empty directory was not missing")
+	}
+	if err := os.WriteFile(filepath.Join(dir, front.CertFile), []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if inspectCertificate().state != "invalid" {
+		t.Fatal("partial/broken files were treated as an installable CA")
+	}
+	t.Setenv("KTEST_CA_DIR", t.TempDir())
+	if _, err := loadOrCreateCA(caDir()); err != nil {
+		t.Fatal(err)
+	}
+	if inspectCertificate().state != "untrusted" {
+		t.Fatal("generating files alone was treated as system installation")
+	}
+}
+
+func TestRemovingBrokenCAOnlyDeletesItsOwnFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KTEST_CA_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, front.CertFile), []byte("broken certificate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dir, "unrelated.txt")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if caRemove(plainTerm(&bytes.Buffer{}), true) != 0 {
+		t.Fatal("partial CA was not removable")
+	}
+	if _, err := os.Stat(filepath.Join(dir, front.CertFile)); !os.IsNotExist(err) {
+		t.Fatal("partial CA remained")
+	}
+	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "keep" {
+		t.Fatal("unrelated files were deleted")
+	}
+}
 
 func TestFronterStaysOffWithoutATrustedCA(t *testing.T) {
 	t.Setenv("KTEST_CA_DIR", t.TempDir())
