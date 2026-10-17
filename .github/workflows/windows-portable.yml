@@ -117,7 +117,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $menu = "0`n" | & ./portable/ktest/ktest.exe
-          if ($LASTEXITCODE -ne 0 -or (($menu -join "`n") -notmatch "Status: disconnected")) {
+          $menuText = $menu -join "`n"
+          if ($LASTEXITCODE -ne 0 -or $menuText -notmatch "(?i)Disconnected" -or $menuText -notmatch "Connect with") {
             throw "Terminal menu did not start and exit cleanly"
           }
           $version = & ./portable/ktest/cores/xray.exe version
