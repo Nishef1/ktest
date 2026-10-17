@@ -49,6 +49,10 @@ type Config struct {
 	// VerifyPeer, when set, still decides whether to accept the peer.
 	Verify     bool
 	VerifyPeer func(certs []*x509.Certificate) error
+	// OfficialHello reproduces Windscribe's randomized uTLS ClientHello
+	// family instead of ktest's existing Chrome preset. The caller selects
+	// this as a separate carrier; existing working profiles are unchanged.
+	OfficialHello bool
 	// Dial opens the TCP leg (directly or through a local anti-DPI core).
 	Dial func(ctx context.Context, addr string) (net.Conn, error)
 	// Timeout bounds TCP, TLS and the upgrade together; 0 means 12 s.
@@ -169,6 +173,29 @@ func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error)
 		}
 	}
 	u := utls.UClient(raw, conf, utls.HelloChrome_Auto)
+	if c.OfficialHello {
+		// Windscribe/wstunnel uses HelloRandomizedALPN + ApplyPreset.
+		// Keep http/1.1 as the only offered ALPN for WebSocket upgrade.
+		spec, err := utls.UTLSIdToSpec(utls.HelloRandomizedALPN)
+		if err != nil {
+			return nil, fmt.Errorf("Windscribe ClientHello preset: %w", err)
+		}
+		extensions := spec.Extensions[:0]
+		for _, ext := range spec.Extensions {
+			switch x := ext.(type) {
+			case *utls.ALPNExtension:
+				x.AlpnProtocols = []string{"http/1.1"}
+			case *utls.ApplicationSettingsExtension:
+				continue
+			}
+			extensions = append(extensions, ext)
+		}
+		spec.Extensions = extensions
+		u = utls.UClient(raw, conf, utls.HelloCustom)
+		if err := u.ApplyPreset(&spec); err != nil {
+			return nil, fmt.Errorf("Windscribe ClientHello: %w", err)
+		}
+	}
 	if err := u.BuildHandshakeState(); err != nil {
 		return nil, err
 	}

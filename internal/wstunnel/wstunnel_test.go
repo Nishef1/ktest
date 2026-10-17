@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -313,5 +314,34 @@ func TestClientWebSocketFrameSurvivesShortSuccessfulWrites(t *testing.T) {
 		t.Fatal(err)
 	case <-time.After(time.Second):
 		t.Fatal("failed to decode complete WebSocket frame")
+	}
+}
+
+func TestWindscribeOfficialClientHelloWebSocketAndStealth(t *testing.T) {
+	srv := wsEcho(t, DefaultPath, nil)
+	// The origin is a local test TLS server; the normal public profile never
+	// disables OpenVPN's separate certificate checks.
+	dial := func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", srv.Listener.Addr().String())
+	}
+	for _, official := range []bool{false, true} {
+		t.Run(fmt.Sprintf("upstream_hello=%t", official), func(t *testing.T) {
+			conn, err := Dial(context.Background(), Config{
+				Addr: srv.Listener.Addr().String(), Host: "127.0.0.1",
+				Dial: dial, OfficialHello: official,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			data := []byte("OpenVPN-test-control-record")
+			if _, err := conn.Write(data); err != nil {
+				t.Fatal(err)
+			}
+			out := make([]byte, len(data))
+			if _, err := io.ReadFull(conn, out); err != nil || !bytes.Equal(data, out) {
+				t.Fatalf("WStunnel payload mismatch: %v", err)
+			}
+		})
 	}
 }
