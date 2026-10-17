@@ -52,18 +52,67 @@ type wsEndpoint struct{ ip, source string }
 type wsNodeCatalog struct {
 	mu        sync.RWMutex
 	lists     map[string]wsCatalogList
-	ready     chan struct{}
-	readyOnce sync.Once
+	ready       chan struct{}
+	readyOnce   sync.Once
+	initialDone chan struct{}
+	initialOnce sync.Once
+	refreshing  bool
 }
 
 func newWSNodeCatalog() *wsNodeCatalog {
-	return &wsNodeCatalog{lists: make(map[string]wsCatalogList), ready: make(chan struct{})}
+	return &wsNodeCatalog{lists: make(map[string]wsCatalogList), ready: make(chan struct{}), initialDone: make(chan struct{})}
 }
 
 // A cached or newly fetched *valid* source unblocks OpenVPN carrier discovery.
 // Do not wait for a second, inaccessible source to time out before using it.
 func (c *wsNodeCatalog) signalReady() {
 	c.readyOnce.Do(func() { close(c.ready) })
+}
+
+// The first valid source may not contain the node selected by Windscribe.
+// Preserve the eight-second overall wait for the *exact* node while the
+// other startup source is still loading; never invent a nearby endpoint.
+func (c *wsNodeCatalog) waitForNode(ctx context.Context, tcp string, budget time.Duration) error {
+	if len(c.endpoints(tcp)) != 0 {
+		return nil
+	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case <-c.ready:
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if len(c.endpoints(tcp)) != 0 {
+		return nil
+	}
+	c.mu.RLock()
+	refreshing := c.refreshing
+	c.mu.RUnlock()
+	if refreshing {
+		select {
+		case <-c.initialDone:
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (c *wsNodeCatalog) startInitialRefresh() {
+	c.mu.Lock()
+	c.refreshing = true
+	c.mu.Unlock()
+}
+
+func (c *wsNodeCatalog) finishInitialRefresh() {
+	c.mu.Lock()
+	c.refreshing = false
+	c.mu.Unlock()
+	c.initialOnce.Do(func() { close(c.initialDone) })
 }
 
 func publicWSIP(s string) bool {
@@ -334,7 +383,9 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 }
 
 func (c *wsNodeCatalog) run(ctx context.Context, client *http.Client, path string, logf func(string, ...any)) {
+	c.startInitialRefresh()
 	refreshed := c.refresh(ctx, client, path, logf)
+	c.finishInitialRefresh()
 	c.signalReady() // no source succeeded: unblock with explicit missing mapping
 	for {
 		delay := 30 * time.Minute
