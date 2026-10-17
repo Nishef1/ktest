@@ -121,9 +121,12 @@ func wsEcho(t *testing.T, wantPath string, hosts chan<- string) *httptest.Server
 		if r.TLS != nil {
 			negotiated = r.TLS.NegotiatedProtocol
 		}
-		if negotiated != "http/1.1" {
-			t.Errorf("WebSocket must offer HTTP/1.1 when HTTP/2 is also supported, got %q", negotiated)
-			http.Error(w, "wrong ALPN", http.StatusUpgradeRequired)
+		// HTTP/1.1 is valid both with an explicit ALPN value and with no
+		// ALPN negotiation. The server also offers h2 to catch accidental
+		// selection of HTTP/2 by the WebSocket client.
+		if r.ProtoMajor != 1 || (negotiated != "" && negotiated != "http/1.1") {
+			t.Errorf("WebSocket negotiated unsupported protocol HTTP/%d, ALPN=%q", r.ProtoMajor, negotiated)
+			http.Error(w, "wrong protocol", http.StatusUpgradeRequired)
 			return
 		}
 		if r.URL.Path != wantPath || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
