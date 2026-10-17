@@ -257,11 +257,41 @@ func (t *term) rule(n int) string {
 	return strings.Repeat("-", n)
 }
 
+// cleanTerminalText only allows SGR color styling that the renderer itself
+// uses. Other terminal controls (cursor movement, alternate screen, OSC links,
+// BEL and CR) become printable text rather than actions on the user's terminal.
+func cleanTerminalText(s string, allowSGR bool) string {
+	var out strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b {
+			if loc := ansiPattern.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
+				if allowSGR {
+					out.WriteString(s[i : i+loc[1]])
+				}
+				i += loc[1]
+				continue
+			}
+			out.WriteString("[ESC]")
+			i++
+			continue
+		}
+		if s[i] == '\n' || s[i] == '\t' {
+			out.WriteByte(s[i])
+		} else if s[i] < 32 || s[i] == 127 {
+			fmt.Fprintf(&out, "[0x%02X]", s[i])
+		} else {
+			out.WriteByte(s[i])
+		}
+		i++
+	}
+	return out.String()
+}
+
 // Printf writes text, fitting long rows and prompts to the current terminal.
 func (t *term) Printf(format string, args ...any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	text := fmt.Sprintf(format, args...)
+	text := cleanTerminalText(fmt.Sprintf(format, args...), t.color)
 	if !t.unicode {
 		text = asciiFallback.Replace(text)
 	}
@@ -335,16 +365,18 @@ func (t *term) Bar(frac float64, width int, k tone) string {
 
 // Box prints a bordered panel.
 func (t *term) Box(title string, k tone, lines []string) {
+	title = cleanTerminalText(title, t.color)
 	if !t.unicode {
 		title = asciiFallback.Replace(title)
 	}
 	inner := visibleLen(title) + 2
 	for _, l := range lines {
-		inner = max(inner, visibleLen(l))
+		inner = max(inner, visibleLen(cleanTerminalText(l, t.color)))
 	}
 	inner = min(inner, max(t.width()-5, 1))
 	var wrapped []string
 	for _, line := range lines {
+		line = cleanTerminalText(line, t.color)
 		if !t.unicode {
 			line = asciiFallback.Replace(line)
 		}
@@ -393,6 +425,7 @@ func (t *term) Progress(label string, total int) *progress {
 // Set redraws the line in place on a terminal; elsewhere it prints at most
 // every 25 percent so logs stay short.
 func (p *progress) Set(done int, detail string) {
+	detail = cleanTerminalText(detail, p.t.color)
 	frac := min(max(float64(done)/float64(p.total), 0), 1)
 	pct := int(frac*100 + 0.5)
 	t := p.t

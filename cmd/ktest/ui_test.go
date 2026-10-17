@@ -292,3 +292,28 @@ func TestUnicodeDisplayCellWidthsAndWholeGraphemes(t *testing.T) {
 		}
 	}
 }
+
+func TestUntrustedTerminalControlsNeverExecute(t *testing.T) {
+	dangerous := "remote.example\x1b[2J\x1b[?1049h\x1b]0;spoofed\x07\rstatus"
+	for _, color := range []bool{false, true} {
+		var out bytes.Buffer
+		u := &term{w: &out, columns: 80, color: color, unicode: true, live: color}
+		u.Line(toneWarn, "%s", dangerous)
+		u.Box("REMOTE", toneInfo, []string{dangerous})
+		progress := u.Progress("Checking", 1)
+		progress.Set(1, dangerous)
+		progress.Finish(toneOK, "done")
+		text := out.String()
+		for _, raw := range []string{"\x1b[2J", "\x1b[?1049h", "\x1b]0;", "\x07status"} {
+			if strings.Contains(text, raw) {
+				t.Fatalf("untrusted terminal control executed (color=%t): %q", color, raw)
+			}
+		}
+		if !strings.Contains(text, "[ESC]") || !strings.Contains(text, "spoofed") {
+			t.Fatalf("control data silently lost or not escaped: %q", text)
+		}
+		if color && !strings.Contains(text, "\x1b[33m") {
+			t.Fatal("trusted renderer styling was also removed")
+		}
+	}
+}
