@@ -31,9 +31,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358"
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358"
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.5.0'
@@ -42,9 +43,8 @@ jobs:
           go test ./mobilebridge ./internal/pathdiag
           test -z "$(gofmt -l mobilebridge)"
       - name: Build Go mobile AAR
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
         run: |
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/28.2.13676358"
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
           mkdir -p android/app/libs
