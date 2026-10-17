@@ -116,7 +116,16 @@ func serverFrame(op byte, p []byte) []byte {
 // then echoes every binary message back.
 func wsEcho(t *testing.T, wantPath string, hosts chan<- string) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		negotiated := ""
+		if r.TLS != nil {
+			negotiated = r.TLS.NegotiatedProtocol
+		}
+		if negotiated != "http/1.1" {
+			t.Errorf("WebSocket must offer HTTP/1.1 when HTTP/2 is also supported, got %q", negotiated)
+			http.Error(w, "wrong ALPN", http.StatusUpgradeRequired)
+			return
+		}
 		if r.URL.Path != wantPath || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 			http.NotFound(w, r)
 			return
@@ -146,6 +155,8 @@ func wsEcho(t *testing.T, wantPath string, hosts chan<- string) *httptest.Server
 			}
 		}
 	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	return srv
 }
