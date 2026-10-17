@@ -28,6 +28,8 @@ type terminal struct {
 	settings     userSettings
 	settingsFile string
 	options      connectOptions
+	notice       string
+	noticeTone   tone
 }
 
 func (t *terminal) print(format string, args ...any) { t.ui.Printf(format, args...) }
@@ -50,52 +52,82 @@ var menuSections = []struct {
 	title string
 	items []menuItem
 }{
-	{"Connection policy", []menuItem{
-		connectItem("1", "Balanced", "Adaptive routes; AI requires a verified foreign exit", ModeBalanced),
-		connectItem("2", "Fast", "Faster ordinary-site routing; AI requires verified foreign exit", ModeFast),
-		connectItem("3", "Aether", "WARP / Psiphon; verified foreign exit only", ModeAether),
-		connectItem("4", "Aether to Tor", "Tor only; verified exit required", ModeTor),
-		connectItem("5", "Windscribe", "Local bridge; Windscribe owns the VPN", ModeWindscribe),
-		connectItem("6", "Aether to Psiphon", "Psiphon only; verified foreign exit required", ModePsiphon),
+	{"Connection methods", []menuItem{
+		connectItem("1", "Balanced", "Adaptive routing", ModeBalanced),
+		connectItem("2", "Fast", "Faster fallback", ModeFast),
+		connectItem("3", "Aether", "WARP / Psiphon", ModeAether),
+		connectItem("4", "Aether to Tor", "Tor", ModeTor),
+		connectItem("5", "Windscribe", "Bridge for the Windscribe app", ModeWindscribe),
+		connectItem("6", "Aether to Psiphon", "Psiphon", ModePsiphon),
 	}},
-	{"Traffic coverage (policies 1-4, 6)", []menuItem{
+	{"Coverage", []menuItem{
 		{key: "7", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},
 	}},
 	{"Tools", []menuItem{
-		{key: "8", name: "Diagnose", desc: "Network or Windscribe checks; no changes", action: func(t *terminal, base string, in *input) bool {
+		{key: "8", name: "Diagnose", desc: "Check connection problems", action: func(t *terminal, base string, in *input) bool {
 			return t.diagnoseMenu(base, in)
 		}},
 		{key: "9", name: "Setup", action: func(t *terminal, base string, in *input) bool {
 			t.setup(base, in.read)
 			return true
 		}},
-		{key: "10", name: "CDN scan", desc: "Check CDN HTTPS or your Windscribe CDN route", action: func(t *terminal, _ string, in *input) bool {
+		{key: "10", name: "CDN scan", action: func(t *terminal, _ string, in *input) bool {
 			return t.cdnScanMenu(in)
 		}},
-		{key: "11", name: "Windscribe test", desc: "Compare carriers or verify a connected VPN", action: func(t *terminal, base string, in *input) bool { return t.windscribeTestMenu(base, in) }},
+		{key: "11", name: "Windscribe test", action: func(t *terminal, base string, in *input) bool { return t.windscribeTestMenu(base, in) }},
 	}},
 }
 
-// setupSummary is the Setup line's live description.
-func setupSummary(base string) string {
-	cert := map[string]string{"ok": "set up", "missing": "off", "outdated": "outdated", "untrusted": "not trusted"}[certState()]
-	warp := map[string]string{"ready": "configured (connection unverified)", "no core": "off", "no identity": "not registered"}[warpState(base)]
-	return "certificate: " + cert + " · exit paths (WARP/Psiphon): " + warp
+func policyName(mode ConnectionMode) string {
+	for _, section := range menuSections {
+		for _, item := range section.items {
+			if item.mode == mode && mode != "" {
+				return item.name
+			}
+		}
+	}
+	return "Balanced"
+}
+
+// Setup reports actionable configuration, never connection readiness.
+func (t *terminal) setupDescription(base string) string {
+	needsCore := t.options.mode == ModePsiphon || (t.options.mode == ModeAether && t.options.exitSocks == "")
+	if needsCore && warpState(base) == "no core" {
+		return t.ui.Yellow("Exit core needs setup")
+	}
+	if (t.options.mode == ModeBalanced || t.options.mode == ModeFast) && !t.options.noFront && !t.settings.SkipCertificateOffer {
+		switch certState() {
+		case "untrusted", "outdated":
+			return t.ui.Yellow("Certificate needs attention")
+		case "missing":
+			return "Optional certificate setup"
+		}
+	}
+	return "Certificates and exit components"
 }
 
 func (t *terminal) mainMenu(base string) {
 	u := t.ui
-	u.Heading("free access toolkit", "Choose coverage, then a connection policy.")
+	u.menuView()
+	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Free access toolkit"))
+	previous := "Default policy: "
+	if t.settings.Connect["mode"] != "" {
+		previous = "Last policy: "
+	}
+	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(policyName(t.options.mode)))
+	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
+	u.text("  "+u.Bold(u.Cyan("Enter"))+"  ", "         ", u.Bold("Connect with "+policyName(t.options.mode)))
+	u.Println("")
 	for _, s := range menuSections {
 		u.Printf("  %s\n", u.Dim(strings.ToUpper(s.title)))
 		for _, it := range s.items {
 			name := it.name
 			desc := it.desc
 			if it.key == "9" {
-				desc = setupSummary(base)
+				desc = t.setupDescription(base)
 			}
 			if it.mode != "" && it.mode == t.options.mode && t.settings.Connect["mode"] != "" {
-				desc = "Last selected · " + desc
+				desc += " · " + u.Cyan("Last used")
 			}
 			if it.key == "7" {
 				name = "Current Mode: Proxy"
@@ -105,15 +137,22 @@ func (t *terminal) mainMenu(base string) {
 			}
 			u.menuOption(it.key, name, desc)
 		}
-		u.Println("")
 	}
+	u.Println("")
 	u.menuOption("0", "Exit", "")
-	u.Printf("\n  Select > ")
+	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
+	if t.notice != "" {
+		u.text("  ", "  ", u.tinted(t.noticeTone, t.notice))
+		t.notice = ""
+	} else {
+		u.text("  ", "  ", u.Dim("Enter to connect · number to choose an option"))
+	}
+	u.Printf("  Select > ")
 }
 
 func (t *term) menuOption(key, name, description string) {
 	prefix := "  " + strings.Repeat(" ", max(2-visibleLen(key), 0)) + t.Bold(t.Cyan(key)) + "  "
-	if description == "" || t.width() < 76 {
+	if description == "" || t.width() < 60 {
 		t.text(prefix, "      ", t.Bold(name))
 		if description != "" {
 			t.text("      ", "      ", t.Dim(description))
@@ -184,6 +223,7 @@ func (t *terminal) foreground(job func(ctx context.Context), lines ...<-chan str
 func runInteractive(in io.Reader, out io.Writer, base string) int {
 	settings, path, options, err := loadPreferences(base)
 	t := &terminal{ui: newTerm(out), settings: settings, settingsFile: path, options: options}
+	defer t.ui.leaveMenu()
 	if err != nil {
 		t.ui.Line(toneWarn, "Saved settings unavailable; using defaults: %v", err)
 	}
@@ -235,15 +275,21 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		}
 		switch strings.ToLower(line) {
 		case "":
-			// Asynchronous output can displace the prompt; Enter just redraws.
+			t.ui.leaveMenu()
+			if !t.connectFromMenu(base, stdin, t.options.mode) {
+				return 0
+			}
 			continue
 		case "0", "q", "exit":
 			return 0
 		}
 		it, found := findItem(line)
 		if !found {
-			t.ui.Line(toneWarn, "Unknown option %q. Select 1-11, or 0 to exit.", line)
+			t.notice, t.noticeTone = "Unknown option. Use 1-11, Enter, or 0.", toneWarn
 			continue
+		}
+		if it.key != "7" {
+			t.ui.leaveMenu()
 		}
 		if !it.action(t, base, stdin) {
 			return 0
@@ -265,7 +311,7 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 	t.rememberConnect("mode", string(mode))
 	o := t.menuConnectOptions(base, mode)
 	t.ui.Note("Policy: %s. Coverage: %s", mode, connectionCoverage(o))
-	usesFronting := mode == ModeBalanced || mode == ModeFast
+	usesFronting := (mode == ModeBalanced || mode == ModeFast) && !o.noFront
 	if state := certState(); state != "ok" && !t.settings.SkipCertificateOffer && usesFronting {
 		why := map[string]string{
 			"missing":   "Domain fronting (YouTube, X, Instagram, Reddit ...) needs a local certificate that is not set up.",

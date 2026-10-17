@@ -110,7 +110,7 @@ func TestPolicyIsSavedEvenIfConnectionIsCancelledBeforeSetup(t *testing.T) {
 	}
 	menu.settings, menu.options = s, options
 	menu.mainMenu(t.TempDir())
-	if !strings.Contains(out.String(), "Last selected") {
+	if !strings.Contains(out.String(), "Last used") {
 		t.Fatal("restored policy is not identified in the menu")
 	}
 }

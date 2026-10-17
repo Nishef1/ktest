@@ -198,6 +198,9 @@ func TestMenuFitsNarrowAndColoredTerminals(t *testing.T) {
 		u := &term{w: &out, columns: width, color: true, unicode: true}
 		menu := &terminal{ui: u}
 		menu.mainMenu(t.TempDir())
+		if width >= 60 && strings.Count(out.String(), "\n") > 23 {
+			t.Fatalf("menu requires more than a 24-row terminal at width %d", width)
+		}
 		for _, line := range strings.Split(out.String(), "\n") {
 			if visibleLen(line) > width {
 				t.Fatalf("width=%d: overflowing menu line %q", width, line)
@@ -208,5 +211,49 @@ func TestMenuFitsNarrowAndColoredTerminals(t *testing.T) {
 				t.Fatalf("width=%d: missing choice %q", width, name)
 			}
 		}
+	}
+}
+
+func TestMenuRedrawRestoresHistoryAndNeverClearsThePrimaryScreen(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		var out bytes.Buffer
+		u := &term{w: &out, columns: 80, live: live}
+		u.Println("previous connection log")
+		menu := &terminal{ui: u, options: connectOptions{mode: ModeFast}}
+		menu.mainMenu(t.TempDir())
+		menu.mainMenu(t.TempDir())
+		u.leaveMenu()
+		u.Println("new connection log")
+		text := out.String()
+		if !live {
+			if strings.Contains(text, "\x1b") || strings.Count(text, "CONNECTION METHODS") != 2 {
+				t.Fatal("plain transcript was cleared or decorated")
+			}
+			continue
+		}
+		start, end := strings.Index(text, "\x1b[?1049h"), strings.Index(text, "\x1b[?1049l")
+		if start < 0 || end < start || strings.Count(text, "\x1b[?1049h") != 1 || strings.Count(text, "\x1b[?1049l") != 1 {
+			t.Fatal("alternate-screen lifecycle is unbalanced")
+		}
+		if strings.Contains(text[:start], "\x1b[2J") || strings.Contains(text[end:], "\x1b[2J") || strings.Count(text[start:end], "\x1b[2J") != 2 {
+			t.Fatal("redraw cleared connection history instead of the menu")
+		}
+	}
+}
+
+func TestSmallTerminalFallsBackToScrollableMenu(t *testing.T) {
+	var out bytes.Buffer
+	u := &term{w: &out, columns: 40, live: true}
+	u.menuView()
+	u.leaveMenu()
+	if out.Len() != 0 {
+		t.Fatal("small terminal entered a screen with inaccessible menu options")
+	}
+	u.columns = 80
+	u.menuView()
+	u.columns = 40
+	u.menuView()
+	if u.menuScreen || !strings.HasSuffix(out.String(), "\x1b[0m\x1b[?1049l") {
+		t.Fatal("shrinking the terminal left the menu trapped in its alternate screen")
 	}
 }

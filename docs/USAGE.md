@@ -13,7 +13,11 @@ The everyday path needs no options and no knowledge of the methods behind it.
 
 From source: `go run ./cmd/ktest` (see "Where ktest looks for its files").
 
-On Windows, a first launch defaults to **TUN**; other platforms default to Proxy because this TUN integration is Windows-only. Menu option 7 shows `Current Mode: TUN` or `Current Mode: Proxy` and saves a change immediately. Closing the window does not lose it. The last selected connection policy is marked in the menu; reopening never connects automatically. Windscribe always uses its own VPN and does not change the saved coverage of other policies.
+On Windows, a first launch defaults to **TUN**; other platforms default to Proxy because this TUN integration is Windows-only. Menu option 7 shows `Current Mode: TUN` or `Current Mode: Proxy` and saves a change immediately. Its submenu marks the current choice and confirms a successful save. Closing the window does not lose it. Windscribe always uses its own VPN and does not change the saved coverage of other policies.
+
+The menu keeps keys 1–11 and 0. **Enter connects with the saved policy** (Balanced on a first launch); choosing 1–6 connects with that method instead. `Last used` and the disconnected status describe the current process, not a running VPN in another window. Reopening the menu never connects automatically. During a connection, Enter or Ctrl+C disconnects and returns to the menu; Ctrl+C on the idle menu exits. Setup shows configuration details and actionable notices separately from verified network readiness.
+
+On a terminal with VT support and at least 60 columns by 24 rows, menu/coverage navigation redraws on an alternate screen. Starting a connection or opening a tool restores the normal screen, preserving connection logs and scrollback. Small terminals, pipes, `NO_COLOR` and `TERM=dumb` keep a scrollable transcript. The main menu fits a 24-row screen at standard widths; narrow displays wrap descriptions.
 
 Preferences live in the current user's configuration directory: `%APPDATA%\ktest\settings.json` on Windows (`KTEST_SETTINGS_FILE` can select another file). The menu and `connect` use the same saved options; explicit connection flags override and update their saved values. This includes ports, path switches, timings, extra protected AI domains and Windscribe carrier settings. Mode-specific settings remain stored but apply only to compatible policies. The certificate-offer skip choice and the defaults shown in Diagnose, CDN scan and Windscribe test also survive restart. In tool prompts, Enter accepts the displayed previous value; `-` clears a saved optional CDN/target. Certificate generation/install (`-cert`), active connections, Administrator permission and credentials are never saved as repeatable actions. An unreadable or invalid preferences file is preserved and reported; that session uses defaults and reports that changes cannot be saved.
 
@@ -129,16 +133,33 @@ Not verified on a real network: this mode changes Windows routes. It was checked
 
 ## 8. The menu
 
+Example after selecting Fast; on a first launch the default policy is Balanced:
+
 ```
-CONNECTION POLICY                            TOOLS
- 1 Balanced          (= ktest connect)         8 Diagnose  general or Windscribe
- 2 Fast              (-mode fast)             9 Setup     configured capabilities
- 3 Aether            (-mode aether)           10 CDN scan  provider HTTPS or own CDN route
- 4 Aether to Tor     (-mode tor)              11 Windscribe test  SNIs or connected VPN
- 5 Windscribe        (-mode windscribe)
- 6 Aether to Psiphon  (-mode psiphon)
-TRAFFIC COVERAGE (for 1-4, 6)                  0 Exit
- 7 Current Mode: Proxy   shows Current Mode: TUN when Whole PC TCP is selected
+ktest  Free access toolkit
+  Disconnected · Last policy: Fast
+────────────────────────────────────────────────────────────────
+  Enter  Connect with Fast
+
+  CONNECTION METHODS
+   1  Balanced            Adaptive routing
+   2  Fast                Faster fallback · Last used
+   3  Aether              WARP / Psiphon
+   4  Aether to Tor       Tor
+   5  Windscribe          Bridge for the Windscribe app
+   6  Aether to Psiphon   Psiphon
+  COVERAGE
+   7  Current Mode: TUN
+  TOOLS
+   8  Diagnose            Check connection problems
+   9  Setup               Certificates and exit components
+  10  CDN scan
+  11  Windscribe test
+
+   0  Exit
+────────────────────────────────────────────────────────────────
+  Enter to connect · number to choose an option
+  Select >
 ```
 
 `Aether` searches WARP/Psiphon profiles. `Aether to Psiphon` selects only the normal/CDN Psiphon profiles, while `Aether to Tor` uses Aether's Tor-only backend. These labels select Aether backends, not an extra VPN hop.

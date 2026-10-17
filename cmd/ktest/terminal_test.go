@@ -38,21 +38,50 @@ func TestMenuKeysAreUniqueAndContiguous(t *testing.T) {
 	}
 }
 
-func TestBlankInputNeverShownAsInvalidChoice(t *testing.T) {
-	if out := menuOutput(t, "\n0\n"); strings.Contains(out, "Unknown option") {
-		t.Fatalf("empty line incorrectly rejected: %s", out)
+func TestEnterConnectsWithSavedPolicyWithoutRepeatingSelection(t *testing.T) {
+	t.Setenv("KTEST_CA_DIR", t.TempDir())
+	t.Setenv("KTEST_SETTINGS_FILE", filepath.Join(t.TempDir(), "settings.json"))
+	settings, path, _, err := loadPreferences(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Connect["mode"] = "fast"
+	if err := saveSettings(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	// EOF at the certificate offer ends the operation before networking/UAC.
+	if code := runInteractive(strings.NewReader("\n"), &output, t.TempDir()); code != 0 {
+		t.Fatal(code)
+	}
+	if !strings.Contains(output.String(), "Connect with Fast") || !strings.Contains(output.String(), "Policy: fast.") || strings.Contains(output.String(), "Unknown option") {
+		t.Fatalf("Enter did not select the saved policy: %s", output.String())
 	}
 }
 
 func TestUnknownOptionNamesTheRange(t *testing.T) {
-	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, `Unknown option "42". Select 1-11`) {
+	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, "Unknown option. Use 1-11, Enter, or 0.") {
 		t.Fatal(out)
 	}
 }
 
-func TestSetupLineShowsState(t *testing.T) {
-	if out := menuOutput(t, "0\n"); !strings.Contains(out, "certificate: ") || !strings.Contains(out, "exit paths (WARP/Psiphon): off") {
-		t.Fatal(out)
+func TestMenuDoesNotAdvertiseConfiguredExitsAsConnected(t *testing.T) {
+	if out := menuOutput(t, "0\n"); !strings.Contains(out, "Disconnected") || strings.Contains(out, "exit paths (WARP/Psiphon):") || strings.Contains(out, "READY") {
+		t.Fatal("configuration was presented as a connection:", out)
+	}
+}
+
+func TestCoverageSaveFailureDoesNotClaimSuccess(t *testing.T) {
+	var out bytes.Buffer
+	menu := &terminal{ui: plainTerm(&out), options: connectOptions{tun: true}}
+	lines := make(chan string, 1)
+	lines <- "1"
+	if !menu.chooseCoverage(&input{lines: lines}) {
+		t.Fatal("coverage selection ended the menu")
+	}
+	menu.mainMenu(t.TempDir())
+	if menu.options.tun || !strings.Contains(out.String(), "Not saved:") || strings.Contains(out.String(), "Saved: Proxy") {
+		t.Fatal("unsaved coverage change was presented as durable:", out.String())
 	}
 }
 

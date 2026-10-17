@@ -25,6 +25,7 @@ type term struct {
 	columns      int  // explicit width for captured renders; zero uses the terminal
 	file         *os.File
 	progressLine string
+	menuScreen   bool // menus use a separate screen; connection history stays intact
 	mu           sync.Mutex
 }
 
@@ -59,6 +60,45 @@ func newTerm(w io.Writer) *term {
 
 // plainTerm is for tests and any caller that wants no decoration.
 func plainTerm(w io.Writer) *term { return &term{w: w} }
+
+// Menus redraw only inside the terminal's alternate screen. Leaving it restores
+// the connection log and scrollback; plain output remains a complete transcript.
+func (t *term) menuView() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.live {
+		return
+	}
+	rows := 24
+	if t.file != nil {
+		if _, h, err := xterm.GetSize(int(t.file.Fd())); err == nil && h > 0 {
+			rows = h
+		}
+	}
+	if t.width() < 60 || rows < 24 {
+		// A small alternate screen cannot scroll back to the first options.
+		// Preserve an ordinary scrollable transcript in that case.
+		if t.menuScreen {
+			_, _ = io.WriteString(t.w, "\x1b[0m\x1b[?1049l")
+			t.menuScreen = false
+		}
+		return
+	}
+	if !t.menuScreen {
+		_, _ = io.WriteString(t.w, "\x1b[?1049h")
+		t.menuScreen = true
+	}
+	_, _ = io.WriteString(t.w, "\x1b[H\x1b[2J")
+}
+
+func (t *term) leaveMenu() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.menuScreen {
+		_, _ = io.WriteString(t.w, "\x1b[0m\x1b[?1049l")
+		t.menuScreen = false
+	}
+}
 
 var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
 

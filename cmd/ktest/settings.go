@@ -147,16 +147,19 @@ func (s *userSettings) rememberFlags(flags *flag.FlagSet) bool {
 	return changed
 }
 
-func (t *terminal) savePreferences() {
+func (t *terminal) savePreferences() bool {
 	if err := saveSettings(t.settingsFile, t.settings); err != nil {
 		t.ui.Line(toneWarn, "Settings were not saved: %v", err)
+		t.notice, t.noticeTone = "Not saved: changes last for this session only", toneWarn
+		return false
 	}
+	return true
 }
 
-func (t *terminal) rememberConnect(name, value string) {
+func (t *terminal) rememberConnect(name, value string) bool {
 	if t.settings.Connect == nil {
 		t.settings.Connect = map[string]string{}
 	}
 	t.settings.Connect[name] = value
-	t.savePreferences()
+	return t.savePreferences()
 }

@@ -8,10 +8,20 @@ import (
 )
 
 func (t *terminal) chooseCoverage(in *input) bool {
-	t.ui.Heading("traffic coverage", "Choose coverage, then select a connection policy (1-4, 6). Windscribe always uses its own app.")
-	t.ui.Println("   1  Proxy apps: configure SOCKS5/HTTP in each app; other apps keep their route")
-	t.ui.Println("   2  Whole PC (TCP): TUN + chosen policy; Windows Administrator; LAN/helpers exempt")
-	t.ui.Note("Whole PC blocks most UDP. It is not a persistent VPN kill switch. Do not combine it with Windscribe.")
+	t.ui.menuView()
+	t.ui.Heading("traffic coverage", "Applies to methods 1-4 and 6. Windscribe uses its own VPN.")
+	proxy, tun := "   1  Proxy     Only apps configured to use ktest", "   2  TUN       System TCP traffic"
+	if t.options.tun {
+		tun = t.ui.Cyan(" >") + tun[2:] + t.ui.Cyan(" · Selected")
+	} else {
+		proxy = t.ui.Cyan(" >") + proxy[2:] + t.ui.Cyan(" · Selected")
+	}
+	t.ui.Println(proxy)
+	t.ui.Println(tun)
+	t.ui.Printf("\n")
+	t.ui.Note("TUN needs Windows Administrator; LAN and helper processes are exempt.")
+	t.ui.Note("Most UDP is blocked. TUN is not a persistent VPN kill switch.")
+	t.ui.Note("Changes are saved automatically.")
 	t.ui.Printf("   0  Back\n\n  Coverage > ")
 	choice, ok := in.read()
 	if !ok {
@@ -22,17 +32,23 @@ func (t *terminal) chooseCoverage(in *input) bool {
 		t.options.tun = false
 	case "2":
 		if runtime.GOOS != "windows" {
-			t.ui.Line(toneWarn, "Whole PC currently supports Windows only")
+			t.notice, t.noticeTone = "TUN currently supports Windows only", toneWarn
 			return true
 		}
 		t.options.tun = true
 	case "", "0":
 		return true
 	default:
-		t.ui.Line(toneWarn, "Select 1, 2, or 0")
+		t.notice, t.noticeTone = "Select 1, 2, or 0", toneWarn
 		return true
 	}
-	t.rememberConnect("tun", strconv.FormatBool(t.options.tun))
+	if t.rememberConnect("tun", strconv.FormatBool(t.options.tun)) {
+		mode := "Proxy"
+		if t.options.tun {
+			mode = "TUN"
+		}
+		t.notice, t.noticeTone = "Saved: "+mode+" · Enter to connect", toneInfo
+	}
 	return true
 }
 
