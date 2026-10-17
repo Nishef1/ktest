@@ -585,7 +585,7 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}
 	}
-	if len(names) != 2+2*2*2*2+1 {
+	if len(names) != 2+2*2*(2+1)+1 {
 		t.Fatalf("%d carriers:\n%s", len(names), all)
 	}
 }

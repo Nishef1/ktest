@@ -286,14 +286,23 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 						return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial})
 					}})
 				}
-				for _, endpoint := range endpoints {
-					addr := net.JoinHostPort(endpoint.ip, "443")
-					out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " entry=" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
-						// Provider-advertised Stealth endpoints can present a generic
-						// certificate. Like Windscribe's own wrapper, authentication
-						// belongs to inner OpenVPN, not the outer TLS name.
-						return wstunnel.DialStealth(ctx, wstunnel.Config{Addr: addr, SNI: sni, Dial: leg.dial})
-					}})
+				// Windscribe's published Android port map selects ip3 for
+				// Stealth and ip2 for raw OpenVPN TCP. An ip3 TLS listener
+				// cannot be inferred from the node's ip field. Explicit
+				// server-IP overrides apply to WStunnel only.
+				if o.serverIP == "" {
+					for _, endpoint := range endpoints {
+						if !strings.HasSuffix(endpoint.source, "/ip3") {
+							continue
+						}
+						addr := net.JoinHostPort(endpoint.ip, "443")
+						out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " entry=" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+							// Provider-advertised Stealth endpoints can present a generic
+							// certificate. Like Windscribe's own wrapper, authentication
+							// belongs to inner OpenVPN, not the outer TLS name.
+							return wstunnel.DialStealth(ctx, wstunnel.Config{Addr: addr, SNI: sni, Dial: leg.dial})
+						}})
+					}
 				}
 			}
 		}

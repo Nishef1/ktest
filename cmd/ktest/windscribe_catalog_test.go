@@ -124,7 +124,7 @@ func TestCarriersActuallyDialAdvertisedNonNeighbourAddresses(t *testing.T) {
 			_, _ = carrier.open(context.Background(), "203.0.113.100", "443")
 		}
 	}
-	want := []string{"198.51.100.9:443", "192.0.2.210:443", "198.51.100.9:443", "192.0.2.210:443"}
+	want := []string{"198.51.100.9:443", "192.0.2.210:443", "192.0.2.210:443"}
 	if !reflect.DeepEqual(targets, want) {
 		t.Fatalf("wrong carrier destinations: %v, want %v", targets, want)
 	}
@@ -154,4 +154,31 @@ func TestAdvertisedStealthEndpointDoesNotRequireWStunnelCertificateName(t *testi
 		}
 	}
 	t.Fatal("advertised Stealth carrier missing")
+}
+
+func TestStealthOnlyTargetsOfficialProviderIP3(t *testing.T) {
+	b := newWSBridge(wsOptions{direct: true, sni: "a.example"}, nil, nil, func(string, ...any) {})
+	b.catalog = newWSNodeCatalog()
+	if err := b.catalog.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var stealth int
+	for _, candidate := range b.carriersFor("203.0.113.100") {
+		if !strings.HasPrefix(candidate.name, "Stealth ") {
+			continue
+		}
+		stealth++
+		if candidate.addr != "192.0.2.210:443" || !strings.HasSuffix(candidate.source, "/ip3") {
+			t.Fatalf("Stealth tested a non-ip3 endpoint: %+v", candidate)
+		}
+	}
+	if stealth != 2 {
+		t.Fatalf("expected direct and local anti-DPI ip3 Stealth candidates, got %d", stealth)
+	}
+	b.opts.serverIP = "198.51.100.55"
+	for _, candidate := range b.carriersFor("203.0.113.100") {
+		if strings.HasPrefix(candidate.name, "Stealth ") {
+			t.Fatalf("explicit WStunnel IP override created an unrelated Stealth route: %+v", candidate)
+		}
+	}
 }
