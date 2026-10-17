@@ -257,3 +257,38 @@ func TestSmallTerminalFallsBackToScrollableMenu(t *testing.T) {
 		t.Fatal("shrinking the terminal left the menu trapped in its alternate screen")
 	}
 }
+
+func TestUnicodeDisplayCellWidthsAndWholeGraphemes(t *testing.T) {
+	for input, want := range map[string]int{
+		"界": 2, "e\u0301": 1, "🇩🇪": 2, "👩‍💻": 2,
+		"\x1b[36m界\x1b[0m": 2,
+	} {
+		if got := visibleLen(input); got != want {
+			t.Errorf("display width of %q = %d, want %d", input, got, want)
+		}
+	}
+	colored := "\x1b[36m界e\u0301👩‍💻\x1b[0m"
+	head, tail := splitVisible(colored, 3)
+	if visibleLen(head) != 3 || visibleLen(tail) != 2 {
+		t.Fatalf("split broke a grapheme: %q / %q", head, tail)
+	}
+	for _, line := range wrapText("界界界界", 4) {
+		if visibleLen(line) > 4 {
+			t.Fatalf("wide characters overflowed: %q", line)
+		}
+	}
+	var out bytes.Buffer
+	u := &term{w: &out, columns: 40, color: true, unicode: true}
+	u.Box("عنوان", toneInfo, []string{"界e\u0301", "🇩🇪👩‍💻"})
+	var widths []int
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.ContainsAny(line, "╭│╰") {
+			widths = append(widths, visibleLen(line))
+		}
+	}
+	for _, width := range widths {
+		if width != widths[0] {
+			t.Fatalf("box borders are misaligned: %v", widths)
+		}
+	}
+}

@@ -570,3 +570,32 @@ func TestAsciiDigitsNormalizesLayoutsAndInvisibleMarks(t *testing.T) {
 		}
 	}
 }
+
+func TestMenuInputAcceptsLongPastedLine(t *testing.T) {
+	src := newLineSource()
+	done := make(chan struct{})
+	defer close(done)
+	input := strings.Repeat("x", 70<<10)
+	go scanMenuInput(strings.NewReader(input+"\n"), src, done, make(chan struct{}), false)
+	src.request()
+	got, ok := <-src.lines
+	if !ok || got != input {
+		t.Fatalf("pasted input truncated or treated as EOF: len=%d, ok=%t", len(got), ok)
+	}
+}
+func TestMenuInputReportsOversizedLine(t *testing.T) {
+	src := newLineSource()
+	go scanMenuInput(strings.NewReader(strings.Repeat("x", 1<<20)+"\n"), src, make(chan struct{}), make(chan struct{}), false)
+	src.request()
+	if _, ok := <-src.lines; ok {
+		t.Fatal("oversized input accepted")
+	}
+	select {
+	case err := <-src.errors:
+		if !strings.Contains(err.Error(), "token too long") {
+			t.Fatalf("unexpected scanner error: %v", err)
+		}
+	default:
+		t.Fatal("menu closed without an input error")
+	}
+}

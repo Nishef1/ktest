@@ -364,11 +364,12 @@ func (t *terminal) handleInterrupt(back chan<- struct{}, quit chan struct{}) boo
 type lineSource struct {
 	lines   chan string
 	want    chan struct{}
+	errors  chan error
 	pending atomic.Bool // a read has been requested and not yet delivered or cancelled
 }
 
 func newLineSource() *lineSource {
-	return &lineSource{lines: make(chan string), want: make(chan struct{}, 1)}
+	return &lineSource{lines: make(chan string), want: make(chan struct{}, 1), errors: make(chan error, 1)}
 }
 
 // request starts one read unless one is already outstanding.
@@ -386,6 +387,9 @@ func (s *lineSource) request() {
 func scanMenuInput(reader io.Reader, src *lineSource, finished <-chan struct{}, readInterrupts <-chan struct{}, retryConsoleEOF bool) {
 	defer close(src.lines)
 	scanner := bufio.NewScanner(reader)
+	// The default 64 KiB cap turns long pasted text into a silent EOF.
+	// Allow up to 1 MiB, keeping a finite limit for untrusted input.
+	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for {
 		select {
 		case <-src.want:
@@ -402,6 +406,13 @@ func scanMenuInput(reader io.Reader, src *lineSource, finished <-chan struct{}, 
 				}
 				src.pending.Store(false)
 				break read
+			}
+			if err := scanner.Err(); err != nil {
+				select {
+				case src.errors <- fmt.Errorf("terminal input: %w", err):
+				default:
+				}
+				return
 			}
 			if !retryConsoleEOF {
 				return
@@ -461,6 +472,14 @@ func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-c
 		}
 	}()
 	src := newLineSource()
+	defer func() {
+		select {
+		case err := <-src.errors:
+			t.ui.leaveMenu()
+			t.ui.Line(toneFail, "%v", err)
+		default:
+		}
+	}()
 	consoleInput := false
 	if file, ok := in.(*os.File); ok && runtime.GOOS == "windows" {
 		consoleInput = xterm.IsTerminal(int(file.Fd()))

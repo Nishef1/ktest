@@ -8,8 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
-
+	"github.com/rivo/uniseg"
 	xterm "golang.org/x/term"
 )
 
@@ -106,7 +105,8 @@ func (t *term) leaveMenu() {
 
 var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-func visibleLen(s string) int { return utf8.RuneCountInString(ansiPattern.ReplaceAllString(s, "")) }
+// Use grapheme display cells instead of Unicode code-point counts.
+func visibleLen(s string) int { return uniseg.StringWidth(ansiPattern.ReplaceAllString(s, "")) }
 
 func (t *term) width() int {
 	if t.columns > 0 {
@@ -168,21 +168,33 @@ func wrapText(s string, width int) []string {
 	return lines
 }
 
+// splitVisible preserves ANSI SGR escapes and whole grapheme clusters.
 func splitVisible(s string, width int) (string, string) {
-	i, cells := 0, 0
-	for i < len(s) {
-		if loc := ansiPattern.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
-			i += loc[1]
+	width = max(width, 1)
+	used, offset := 0, 0
+	for offset < len(s) {
+		if loc := ansiPattern.FindStringIndex(s[offset:]); loc != nil && loc[0] == 0 {
+			offset += loc[1]
 			continue
 		}
-		if cells == width {
-			break
+		segment := s[offset:]
+		if loc := ansiPattern.FindStringIndex(segment); loc != nil {
+			segment = segment[:loc[0]]
 		}
-		_, n := utf8.DecodeRuneInString(s[i:])
-		i += n
-		cells++
+		clusters := uniseg.NewGraphemes(segment)
+		for clusters.Next() {
+			cluster, cells := clusters.Str(), clusters.Width()
+			if used+cells > width && used > 0 {
+				return s[:offset], s[offset:]
+			}
+			offset += len(cluster)
+			used += cells
+			if used >= width {
+				return s[:offset], s[offset:]
+			}
+		}
 	}
-	return s[:i], s[i:]
+	return s, ""
 }
 
 // text keeps wrapped continuations aligned and emits a whole message atomically.
