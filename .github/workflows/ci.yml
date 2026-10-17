@@ -39,6 +39,9 @@ jobs:
           cache: false
       - run: gofmt -d cmd internal && test -z "$(gofmt -l cmd internal)"
   binaries:
+    # Keep downloadable binaries on main only. Feature-branch development
+    # should run tests/vet/race, not generate release-like artifacts.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

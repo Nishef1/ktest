@@ -1,6 +1,22 @@
-# KTest Connection for Android — 0.3.0 Preview
+# KTest Connection for Android — active development (no new APK builds)
 
 **Scope:** an English-only Jetpack Compose client with a real Go SOCKS5 + HTTP proxy service, bounded network diagnostics, CDN/ECH research tools and user-initiated official-update checks. It is **not** a system VPN and it does not embed Aether, Psiphon or Tor cores.
+
+## Current development gate (2026-10-17)
+
+Do **not** generate new APK/AAR artifacts after every commit. The Android workflow is manual-only (`workflow_dispatch`) until the owner explicitly approves a release candidate. The ordinary Go quality/test workflow remains enabled.
+
+This branch has new in-progress changes beyond the last Android preview. Version labels in source control and existing preview APKs must not be treated as evidence that these changes are installed or device-tested.
+
+## New development: HEV / VPN UDP preflight
+
+- `mobilebridge.CheckUDPRelay(address)` performs a real SOCKS5 UDP ASSOCIATE handshake **and** a fresh `example.com` DNS query to 1.1.1.1 through the local relay. A successful TCP/SOCKS reply alone is insufficient.
+- It refuses SOCKS listeners outside loopback and refuses UDP relay addresses outside loopback; no arbitrary remote UDP endpoint is dialed.
+- The advanced Tools screen exposes this independent test and explicitly says that it does **not** start or verify a VPN. The check only indicates UDP transport availability; it does not establish exit anonymity, foreign IP, IPv6 support, DNS privacy, or process recovery.
+- External Aether, Tor and Psiphon proxy modes now apply `ExitOnly` to **every** host, not only known AI destinations, so they require verified foreign egress on revalidation instead of silently falling back to direct.
+- The Power Orb's infinite visual pulse is active only while the proxy is running, not while idle.
+
+Detailed safety decisions and the integration gate are in [docs/ANDROID_VPN_SECURITY.md](../docs/ANDROID_VPN_SECURITY.md).
 
 ## Current capabilities
 

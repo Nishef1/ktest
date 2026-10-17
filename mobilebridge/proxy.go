@@ -124,7 +124,7 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     }
     config := smartproxy.Config{
         Upstreams: upstreams,
-        ExitOnly: rules.Match, // Known AI domains must not fall back to the direct ISP.
+        ExitOnly: exitOnlyForMode(mode, rules.Match),
     }
     if upstream != "" {
         config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {
@@ -208,4 +208,18 @@ func ProxyReady() bool {
     }
     _ = conn.Close()
     return true
+}
+
+
+// An external-core mode promises to use only its authenticated foreign SOCKS
+// upstream. Revalidating only a small AI-domain list would allow country
+// changes to go unnoticed for ordinary destinations and future fallback paths.
+// Balanced/Fast preserve their existing per-domain policy.
+func exitOnlyForMode(mode string, protected func(string) bool) func(string) bool {
+    switch mode {
+    case "aether", "psiphon", "tor":
+        return func(string) bool { return true }
+    default:
+        return protected
+    }
 }

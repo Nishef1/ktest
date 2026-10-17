@@ -109,6 +109,9 @@ private fun ConnectionApp() {
     var frontReport by remember { mutableStateOf<JSONObject?>(null) }
     var echBusy by remember { mutableStateOf(false) }
     var echReport by remember { mutableStateOf<JSONObject?>(null) }
+    var udpAddress by rememberSaveable { mutableStateOf("127.0.0.1:1080") }
+    var udpBusy by remember { mutableStateOf(false) }
+    var udpReport by remember { mutableStateOf<JSONObject?>(null) }
     var checkingUpdates by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
     val scope = rememberCoroutineScope()
@@ -219,6 +222,21 @@ private fun ConnectionApp() {
                     setFrontHost = { frontHost = it }, setFrontEdge = { frontEdge = it },
                     frontBusy = frontBusy, frontReport = frontReport,
                     echBusy = echBusy, echReport = echReport,
+                    udpAddress = udpAddress, setUdpAddress = { udpAddress = it },
+                    udpBusy = udpBusy, udpReport = udpReport,
+                    runUdp = {
+                        udpBusy = true
+                        udpReport = null
+                        error = null
+                        scope.launch {
+                            try {
+                                udpReport = withContext(Dispatchers.IO) {
+                                    JSONObject(Mobilebridge.checkUDPRelay(udpAddress.trim()))
+                                }
+                            } catch (e: Exception) { error = e.message ?: "UDP preflight failed" }
+                            finally { udpBusy = false }
+                        }
+                    },
                     runFront = {
                         frontBusy = true; frontReport = null; error = null
                         scope.launch {
@@ -488,15 +506,18 @@ private fun ConnectionScreen(
 
 @Composable
 private fun PowerOrb(enabled: Boolean, active: Boolean, onClick: () -> Unit) {
-    val transition = rememberInfiniteTransition(label = "power")
-    val animatedPulse by transition.animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ), label = "pulse"
-    )
-    val pulse = if (active) animatedPulse else 0f
+    // Do not keep an infinite animation alive while disconnected.
+    val pulse = if (active) {
+        val transition = rememberInfiniteTransition(label = "power")
+        val value by transition.animateFloat(
+            initialValue = 0f, targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2200, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ), label = "pulse"
+        )
+        value
+    } else 0f
     val color = when {
         active -> accent
         enabled -> white
@@ -540,7 +561,9 @@ private fun ToolsScreen(
     setFrontUrl: (String) -> Unit, setFrontSni: (String) -> Unit,
     setFrontHost: (String) -> Unit, setFrontEdge: (String) -> Unit,
     frontBusy: Boolean, frontReport: JSONObject?, runFront: () -> Unit,
-    echBusy: Boolean, echReport: JSONObject?, runEch: () -> Unit
+    echBusy: Boolean, echReport: JSONObject?, runEch: () -> Unit,
+    udpAddress: String, setUdpAddress: (String) -> Unit,
+    udpBusy: Boolean, udpReport: JSONObject?, runUdp: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(17.dp)) {
         Text("Tools & diagnostics", fontSize = 25.sp, color = white,
@@ -620,6 +643,28 @@ private fun ToolsScreen(
                     Text("ECH config from ${echReport.optString("edge")}",
                         color = accent, fontSize = 12.sp)
                     Text(echReport.optString("note"), color = muted, fontSize = 11.sp)
+                }
+            }
+        }
+        Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                Text("VPN TRANSPORT PREFLIGHT", color = accent, fontSize = 11.sp, letterSpacing = 1.4.sp)
+                Text("Verify SOCKS5 UDP ASSOCIATE with an actual DNS response before considering HEV / TUN. This does not start a VPN.",
+                    color = muted, fontSize = 12.sp)
+                OutlinedTextField(
+                    value = udpAddress, onValueChange = setUdpAddress,
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    label = { Text("Local SOCKS5 address") }
+                )
+                Button(onClick = runUdp, enabled = !udpBusy && udpAddress.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = edge, contentColor = white)) {
+                    Text(if (udpBusy) "Checking UDP relay…" else "Test UDP and DNS relay")
+                }
+                if (udpReport != null) {
+                    Text(if (udpReport.optBoolean("ready")) "UDP relay verified" else "UDP unavailable",
+                        color = if (udpReport.optBoolean("ready")) accent else amber, fontSize = 13.sp)
+                    Text(udpReport.optString("note"), color = muted, fontSize = 11.sp)
                 }
             }
         }
