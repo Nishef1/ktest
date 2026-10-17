@@ -882,3 +882,25 @@ func TestStaleCarrierCannotBeCreditedWithNewCLIConnection(t *testing.T) {
 		t.Fatal("old unrelated carrier falsely credited with newer CLI Connected state")
 	}
 }
+
+func TestWindscribeCarrierSessionIDsIncreasePerAttempt(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "WStunnel session trace"})
+	var prior uint64
+	for i := 0; i < 3; i++ {
+		conn, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var id uint64
+		for session := range b.active {
+			id = session.id
+		}
+		if id != prior+1 {
+			t.Fatalf("session id %d, expected %d", id, prior+1)
+		}
+		b.observeCLIConnected()
+		done(time.Minute, 128<<10)
+		_ = conn.Close()
+		prior = id
+	}
+}

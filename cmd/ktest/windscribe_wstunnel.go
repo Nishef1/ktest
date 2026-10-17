@@ -139,6 +139,7 @@ type wsCarrier struct {
 // local dialer; OpenVPN is raced over every carrier and the first one whose
 // server returns data carries the stream, including later client writes.
 type wsActiveCarrier struct {
+	id          uint64
 	key         string
 	name        string
 	started     time.Time
@@ -165,7 +166,8 @@ type wsBridge struct {
 	bad       map[string]map[string]time.Time // destination -> carrier -> demoted until
 	retries   map[string]uint64               // attempt index for choosing independent alternatives
 	active    map[*wsActiveCarrier]bool       // streams awaiting CLI state correlation
-	shortEnds map[string]int                  // consecutive short unexpected ends of correlated sessions
+	shortEnds   map[string]int                  // consecutive short unexpected ends of correlated sessions
+	nextSession uint64
 }
 
 // CLI authentication is attributed only if a single OpenVPN stream is
@@ -173,24 +175,26 @@ type wsBridge struct {
 // Concurrent candidate streams are ambiguous, so none is credited.
 func (b *wsBridge) observeCLIConnected() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if len(b.active) != 1 {
+		b.mu.Unlock()
 		return
 	}
+	var id uint64
+	var key, name string
 	for active := range b.active {
-		// A long-lived leftover socket from an earlier connection attempt
-		// must not be credited when an unrelated CLI session changes state.
-		// CLI state has no authoritative link to the carrier socket.
 		if active.started.IsZero() || time.Since(active.started) > 90*time.Second {
+			b.mu.Unlock()
 			return
 		}
 		active.confirmed = true
-		// A real Windscribe TCP Connected transition is stronger evidence
-		// than an arbitrary 60-second/64-KiB threshold. This session is
-		// uniquely attributable, and already passed OpenVPN authentication.
+		id, key, name = active.id, active.key, active.name
+		// This is one-stream correlation, not proof of an authenticated
+		// link between the CLI event and a particular carrier.
 		b.good[active.key] = active.name
 		delete(b.bad[active.key], active.name)
 	}
+	b.mu.Unlock()
+	b.logf("Windscribe session=%d requested=%s carrier=%s CLI_CONNECTED correlated (exit not verified independently)", id, key, name)
 }
 
 // windscribeServerCert rejects certificates without a Windscribe hostname.
@@ -729,11 +733,14 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	b.logf("Windscribe %s carried by %s source=%s; tunneled data returned in %s (authentication remains with Windscribe)", key, r.c.name, r.c.source, shortDur(r.took))
 	session := &wsActiveCarrier{key: key, name: r.c.name, started: time.Now()}
 	b.mu.Lock()
+	b.nextSession++
+	session.id = b.nextSession
 	if b.active == nil {
 		b.active = make(map[*wsActiveCarrier]bool)
 	}
 	b.active[session] = true
 	b.mu.Unlock()
+	b.logf("Windscribe session=%d requested=%s entry=%s source=%s carrier=%s OPENVPN_REPLY (framing only)", session.id, key, r.c.addr, r.c.source, r.c.name)
 	if b.report != nil {
 		b.report(smartproxy.Event{Host: host, Site: host, Path: r.c.name, Took: r.took, TCPOnly: true})
 	}
@@ -779,7 +786,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 			b.bad[key][r.c.name] = time.Now().Add(ttl)
 		}
-		b.logf("Windscribe %s carrier=%s session ended after %s, returned=%d bytes, CLI-correlated=%v, upstream-ended=%v (not proof of DPI or per-carrier authentication)", key, r.c.name, shortDur(lived), received, confirmed, session.upstreamEnd)
+		b.logf("Windscribe session=%d requested=%s carrier=%s STREAM_ENDED duration=%s upstream_bytes=%d cli_correlated=%v upstream_ended=%v (no DPI attribution)", session.id, key, r.c.name, shortDur(lived), received, confirmed, session.upstreamEnd)
 	}
 	stopClose := context.AfterFunc(live, func() { _ = r.conn.Close() })
 	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose, logf: b.logf, name: r.c.name, destination: key, started: time.Now(), onUpstreamEnd: func() {
