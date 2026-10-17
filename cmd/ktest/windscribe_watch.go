@@ -325,7 +325,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 }
 
 // Unknown initial CLI state is safe for read-only Windscribe observation,
- // but never authorizes a nested Aether carrier or automatic reconnect.
+// but never authorizes a nested Aether carrier or automatic reconnect.
 func monitorUnknownCLIAllowed(mode ConnectionMode) bool { return mode == ModeWindscribe }
 
 func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *windscribeMonitor {
