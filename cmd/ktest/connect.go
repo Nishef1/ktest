@@ -127,7 +127,7 @@ func runConnect(args []string) int {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	o := defaultConnectOptions(defaultBase())
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
-	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, aether (alias vpn), psiphon (Aether to Psiphon), tor (Aether to Tor)")
+	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, aether, psiphon (Aether to Psiphon), tor (Aether to Tor)")
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", "", "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
 	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: race WStunnel and Stealth straight to the Windscribe node with chosen SNIs")

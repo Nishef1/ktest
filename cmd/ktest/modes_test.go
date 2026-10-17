@@ -35,7 +35,6 @@ func TestConnectionModes(t *testing.T) {
 		{"balanced", true, false, false},
 		{"fast", false, false, false},
 		{"windscribe", false, false, false},
-		{"vpn", true, true, false},
 		{"aether", true, true, false},
 		{"psiphon", true, true, false},
 		{"tor", true, true, false},
@@ -60,9 +59,6 @@ func TestConnectionModes(t *testing.T) {
 	}
 	if _, err := parseConnectionMode("unknown"); err == nil {
 		t.Fatal("unrecognized mode accepted")
-	}
-	if mode, err := parseConnectionMode(" VPN "); err != nil || mode != ModeAether {
-		t.Fatalf("legacy vpn alias: mode=%q err=%v", mode, err)
 	}
 }
 

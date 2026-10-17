@@ -119,7 +119,7 @@ TRAFFIC COVERAGE (for 1-4, 6)                  0 Exit
  7 Coverage          Proxy apps / Whole PC TCP
 ```
 
-`Aether` searches WARP/Psiphon profiles. `Aether to Psiphon` selects only the normal/CDN Psiphon profiles, while `Aether to Tor` uses Aether's Tor-only backend. These labels select Aether backends, not an extra VPN hop. The old `-mode vpn` command remains an alias for `-mode aether`.
+`Aether` searches WARP/Psiphon profiles. `Aether to Psiphon` selects only the normal/CDN Psiphon profiles, while `Aether to Tor` uses Aether's Tor-only backend. These labels select Aether backends, not an extra VPN hop.
 
 Network jobs run in the foreground; Enter/Ctrl+C cancels them and returns to the menu. Ctrl+C on the idle menu exits. Setup reports prepared capabilities, not a successful tunnel: its CA applies to supported website HTTPS fronting in Balanced/Fast; Windscribe prohibits foreign exits.
 

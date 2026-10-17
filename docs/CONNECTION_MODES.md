@@ -13,7 +13,7 @@ CLI policy options:
 | `-mode balanced` | normal mixed access, **AI sites protected** | Ordinary sites may use own IP; AI via verified foreign exit | AI domains stop if foreign exit absent |
 | `-mode fast` | fastest usable destination path | Direct, fragment, fronting, or Psiphon may win; public IP may differ by destination | Can fall back to local ISP IP |
 | `-mode windscribe` | **strict local-only anti-DPI** HTTP/SOCKS bootstrap for installed Windscribe | OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI; optional own Cloudflare hostname whose origin is a Windscribe server) + local Xray TCP fragmentation + ByeDPI; no Psiphon/Aether/WARP/Tor, foreign/unknown Xray exit or Plain; only Windscribe changes public VPN IP | No foreign fallback. HTTP CONNECT may be acknowledged before the carrier race; a later failure closes that stream. Windscribe Firewall controls other apps |
-| `-mode aether` (legacy alias `vpn`) | all traffic **sent through ktest's SOCKS/HTTP listeners** | One verified foreign SOCKS path is pinned after its first success in this session | Fail closed; never switch to direct/fragment/fronting |
+| `-mode aether` | all traffic **sent through ktest's SOCKS/HTTP listeners** | One verified foreign SOCKS path is pinned after its first success in this session | Fail closed; never switch to direct/fragment/fronting |
 | `-mode psiphon` | Aether to Psiphon; all managed traffic | Only Aether Psiphon profiles, including CDN fronting; verified foreign exit required | Fail closed; no WARP, Tor, direct or external SOCKS fallback |
 | `-mode tor` | all traffic **sent through ktest's SOCKS/HTTP listeners** | Tor-only, may use different exit IPs by circuit/site | Fail closed while Tor is unavailable |
 
@@ -49,7 +49,7 @@ For modes other than Windscribe and Aether to Psiphon, an **already running** ex
 
 ## IP stability and limitations
 
-In the `aether` profile (also accepted as `vpn`), the first verified foreign exit route that succeeds for a managed connection is pinned for the remainder of the session; other exits are no longer chosen automatically. A **pinned route does not guarantee a pinned public IP**: Psiphon may rotate servers and Tor changes circuit exits. The country/IP check is a one-time HTTPS test, not a continuous per-destination geolocation or cryptographic guarantee. Do not claim an identity is fixed based on this.
+In the `aether` profile, the first verified foreign exit route that succeeds for a managed connection is pinned for the remainder of the session; other exits are no longer chosen automatically. A **pinned route does not guarantee a pinned public IP**: Psiphon may rotate servers and Tor changes circuit exits. The country/IP check is a one-time HTTPS test, not a continuous per-destination geolocation or cryptographic guarantee. Do not claim an identity is fixed based on this.
 
 When a truly stable login/location is necessary (AI sites may trigger extra checks on exit-IP changes), use a fixed Windscribe location, or consider Windscribe's optional Static IP offering. Use Windscribe Firewall when the VPN is active. Tor is designed for anonymity properties, *not* for fixed identity across websites; some services also block Tor exits.
 

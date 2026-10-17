@@ -33,14 +33,11 @@ const (
 
 func parseConnectionMode(v string) (ConnectionMode, error) {
 	m := ConnectionMode(strings.ToLower(strings.TrimSpace(v)))
-	if m == "vpn" { // Preserve existing commands and scripts.
-		m = ModeAether
-	}
 	switch m {
 	case ModeBalanced, ModeFast, ModeWindscribe, ModeAether, ModePsiphon, ModeTor:
 		return m, nil
 	default:
-		return "", fmt.Errorf("unknown -mode %q; use balanced, fast, windscribe, aether (alias vpn), psiphon, or tor", v)
+		return "", fmt.Errorf("unknown -mode %q; use balanced, fast, windscribe, aether, psiphon, or tor", v)
 	}
 }
 

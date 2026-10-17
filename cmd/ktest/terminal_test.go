@@ -73,7 +73,7 @@ func TestElevationPreservesChosenPolicyAndOriginalCLIFlags(t *testing.T) {
 	if !strings.Contains(strings.Join(args, " "), "-mode tor") {
 		t.Fatalf("elevation changed Tor policy: %v", args)
 	}
-	original := []string{"-mode", "vpn", "-tun", "-exit-socks", "127.0.0.1:9000", "-no-front"}
+	original := []string{"-mode", "aether", "-tun", "-exit-socks", "127.0.0.1:9000", "-no-front"}
 	args = elevatedConnectArgs(o, original)
 	if strings.Join(args[1:], "|") != strings.Join(original, "|") {
 		t.Fatalf("elevation lost explicit CLI options: %v", args)

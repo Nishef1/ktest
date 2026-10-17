@@ -28,7 +28,7 @@ func runDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	base := fs.String("base", defaultBase(), "portable folder holding cores/ and profiles/")
 	noNet := fs.Bool("no-net", false, "skip the network characterization")
-	modeText := fs.String("mode", "balanced", "balanced, fast, aether (alias vpn), psiphon, tor, or windscribe; check the relevant prerequisites")
+	modeText := fs.String("mode", "balanced", "balanced, fast, aether, psiphon, tor, or windscribe; check the relevant prerequisites")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: ktest doctor [-mode balanced|fast|aether|psiphon|tor|windscribe] [-no-net]")
 		return 2
