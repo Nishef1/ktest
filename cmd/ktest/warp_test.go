@@ -246,3 +246,31 @@ func TestExitStatusUpdatesDuringSearchAndDeadCoreIsRemovedImmediately(t *testing
 		t.Fatal(status())
 	}
 }
+
+func TestAetherHelpOptionMatchingAndEqualsValues(t *testing.T) {
+	help := "  --help                 Print help\n  --h2, --http2          HTTP/2\n  --startup-secs <n>     Deadline\n  --config <file>       Config\n  --tls-verify           Certificate option\n"
+	known := aetherDocumentedOptions(help)
+	for _, option := range []string{"--help", "--h2", "--http2", "--startup-secs", "--config", "--tls-verify"} {
+		if !known[option] {
+			t.Errorf("missing documented %s", option)
+		}
+	}
+	for _, invalid := range []string{"--h", "--tls", "--start", "--config-path"} {
+		if known[invalid] {
+			t.Errorf("substring accepted as option: %s", invalid)
+		}
+	}
+	p := aetherProfile{Label: "custom", Args: []string{"--masque", "--startup-secs=100", "--ech=one"}}
+	if !p.has("--startup-secs") || p.value("--startup-secs") != "100" || !p.has("--ech") {
+		t.Fatal("equals-form flags were not parsed")
+	}
+	other := aetherProfile{Label: "custom", Args: []string{"--masque", "--startup-secs=100", "--ech=two"}}
+	if p.id() != other.id() {
+		t.Fatal("ECH session material should not destabilize profile identities")
+	}
+	for _, reserved := range []string{"--config=foo", "--bind=0.0.0.0:5"} {
+		if _, err := parseAetherProfiles("bad | --masque "+reserved, "", ""); err == nil {
+			t.Fatalf("reserved argument accepted: %s", reserved)
+		}
+	}
+}

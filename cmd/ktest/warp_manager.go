@@ -59,7 +59,7 @@ type aetherProfile struct {
 
 func (p aetherProfile) has(flag string) bool {
 	for _, a := range p.Args {
-		if a == flag {
+		if a == flag || strings.HasPrefix(a, flag+"=") {
 			return true
 		}
 	}
@@ -83,8 +83,13 @@ func parseAetherProfiles(text, ech, ip string) ([]aetherProfile, error) {
 		if !ok || label == "" || flags == "" {
 			return nil, fmt.Errorf("line %d: want \"label | flags\"", n+1)
 		}
-		if strings.Contains(flags, "--bind") || strings.Contains(flags, "--config") || strings.Contains(flags, "--masque-config") || strings.Contains(flags, "--wg-config") || strings.Contains(flags, "--http-proxy") || strings.Contains(flags, "--tor-bind") || strings.Contains(flags, "--psiphon-bind") || strings.Contains(flags, "--register") {
-			return nil, fmt.Errorf("line %d: --bind and the identity paths are set by ktest", n+1)
+		args := strings.Fields(flags)
+		for _, arg := range args {
+			name, _, _ := strings.Cut(arg, "=")
+			switch name {
+			case "--bind", "--config", "--masque-config", "--wg-config", "--http-proxy", "--tor-bind", "--psiphon-bind", "--register":
+				return nil, fmt.Errorf("line %d: %s is managed by ktest", n+1, name)
+			}
 		}
 		if strings.Contains(flags, "{ECH") && (ech == "" || ip == "") {
 			continue

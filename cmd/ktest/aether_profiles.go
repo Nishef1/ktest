@@ -49,6 +49,9 @@ func (p aetherProfile) value(flag string) string {
 		if v == flag && i+1 < len(p.Args) {
 			return p.Args[i+1]
 		}
+		if value, ok := strings.CutPrefix(v, flag+"="); ok {
+			return value
+		}
 	}
 	return ""
 }
@@ -60,6 +63,11 @@ func (p aetherProfile) id() string {
 	for i, flag := range args {
 		if (flag == "--ech" || flag == "--enroll-address") && i+1 < len(args) {
 			args[i+1] = "<discovered>"
+		}
+		for _, key := range []string{"--ech=", "--enroll-address="} {
+			if strings.HasPrefix(flag, key) {
+				args[i] = key + "<discovered>"
+			}
 		}
 	}
 	sum := sha256.Sum256([]byte(p.Label + "\n" + strings.Join(args, "\x00")))
@@ -97,6 +105,39 @@ func profilesForMode(profiles []aetherProfile, mode ConnectionMode) []aetherProf
 	return selected
 }
 
+// The help output is not a bag of substrings. Read option declarations from
+// their own lines so --h is not falsely accepted because --help exists.
+func aetherDocumentedOptions(help string) map[string]bool {
+	known := make(map[string]bool)
+	for _, line := range strings.Split(help, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "-") {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			for _, alias := range strings.Split(field, ",") {
+				alias = strings.TrimSpace(alias)
+				name, _, _ := strings.Cut(alias, "=")
+				name = strings.TrimRight(name, ",|")
+				if !strings.HasPrefix(name, "--") {
+					continue
+				}
+				ok := len(name) > 2
+				for _, c := range name[2:] {
+					if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+						ok = false
+						break
+					}
+				}
+				if ok {
+					known[name] = true
+				}
+			}
+		}
+	}
+	return known
+}
+
 func supportedAetherProfiles(ctx context.Context, bin string, profiles []aetherProfile) ([]aetherProfile, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -106,13 +147,17 @@ func supportedAetherProfiles(ctx context.Context, bin string, profiles []aetherP
 	if err != nil {
 		return nil, fmt.Errorf("cannot inspect Aether capabilities: %w", err)
 	}
+	known := aetherDocumentedOptions(string(help))
 	var supported []aetherProfile
 	for _, p := range profiles {
 		ok := true
 		for _, arg := range p.Args {
-			if strings.HasPrefix(arg, "--") && !strings.Contains(string(help), arg) {
-				ok = false
-				break
+			if strings.HasPrefix(arg, "--") {
+				name, _, _ := strings.Cut(arg, "=")
+				if !known[name] {
+					ok = false
+					break
+				}
 			}
 		}
 		if ok {
