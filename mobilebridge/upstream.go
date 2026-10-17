@@ -43,10 +43,10 @@ func verifyLocalUpstream(parent context.Context, address string, requireTor bool
         ResponseHeaderTimeout: 5 * time.Second,
     }
     defer transport.CloseIdleConnections()
-    client := &http.Client{Transport: transport, Timeout: 8 * time.Second,
+    client := &http.Client{Transport: transport, Timeout: 10 * time.Second,
         CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
     }
-    ctx, cancel := context.WithTimeout(parent, 12*time.Second)
+    ctx, cancel := context.WithTimeout(parent, 20*time.Second)
     defer cancel()
     req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
         "https://www.cloudflare.com/cdn-cgi/trace", nil)

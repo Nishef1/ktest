@@ -61,6 +61,55 @@ func TestUDPRelayPreflightRealFraming(t *testing.T) {
 	if !report.Ready || !report.DNSAnswered || report.Relay == "" { t.Fatalf("unexpected report: %+v", report) }
 }
 
+func TestUDPRelayPreflightRejectsIncorrectUDPSource(t *testing.T) {
+    // Same transaction ID and a valid DNS answer, but a different reported
+    // SOCKS5 UDP source than the requested 1.1.1.1:53.
+    addr := fakeUDPAssociateWithSpoofedSource(t)
+    ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+    defer cancel()
+    if _, err := probeUDPRelay(ctx, addr); err == nil {
+        t.Fatal("accepted a UDP response with an unexpected destination")
+    }
+}
+
+func fakeUDPAssociateWithSpoofedSource(t *testing.T) string {
+    t.Helper()
+    relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+    if err != nil { t.Fatal(err) }
+    t.Cleanup(func(){_ = relay.Close()})
+    server, err := net.Listen("tcp4", "127.0.0.1:0")
+    if err != nil { t.Fatal(err) }
+    t.Cleanup(func(){_ = server.Close()})
+    go func() {
+        conn, err := server.Accept()
+        if err != nil { return }
+        defer conn.Close()
+        _ = conn.SetDeadline(time.Now().Add(4*time.Second))
+        var greeting [3]byte
+        if _, err := io.ReadFull(conn, greeting[:]); err != nil { return }
+        _, _ = conn.Write([]byte{5, 0})
+        var request [10]byte
+        if _, err := io.ReadFull(conn, request[:]); err != nil { return }
+        port := relay.LocalAddr().(*net.UDPAddr).Port
+        _, _ = conn.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, byte(port >> 8), byte(port)})
+        var hold [1]byte
+        _, _ = conn.Read(hold[:])
+    }()
+    go func() {
+        _ = relay.SetReadDeadline(time.Now().Add(3*time.Second))
+        buf := make([]byte, 1500)
+        n, sender, err := relay.ReadFromUDP(buf)
+        if err != nil || n < 10+29 { return }
+        dns := append([]byte(nil), buf[10:n]...)
+        dns[2], dns[3] = 0x81, 0x80
+        dns[6], dns[7] = 0, 1
+        dns = append(dns, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 93, 184, 215, 14)
+        reply := append([]byte{0, 0, 0, 1, 203, 0, 113, 10, 0, 53}, dns...)
+        _, _ = relay.WriteToUDP(reply, sender)
+    }()
+    return server.Addr().String()
+}
+
 func TestUDPRelayPreflightRejectsNoReply(t *testing.T) {
 	addr := fakeUDPAssociate(t, false)
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)

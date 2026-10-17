@@ -110,7 +110,9 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     }
     location := ""
     if upstream != "" {
-        checked, err := verifyLocalUpstream(context.Background(), upstream, mode == "tor")
+        startContext, startCancel := context.WithTimeout(context.Background(), 25*time.Second)
+        defer startCancel()
+        checked, err := verifyLocalUpstream(startContext, upstream, mode == "tor")
         if err != nil {
             return "", fmt.Errorf("upstream not verified: %w", err)
         }
@@ -125,6 +127,9 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     config := smartproxy.Config{
         Upstreams: upstreams,
         ExitOnly: exitOnlyForMode(mode, rules.Match),
+        // Authentication can require a second TLS-protected Tor confirmation.
+        ConnectTimeout: 18 * time.Second,
+        ExitVerifyTTL: 60 * time.Second,
     }
     if upstream != "" {
         config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {

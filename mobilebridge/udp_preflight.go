@@ -131,6 +131,11 @@ func probeUDPRelay(ctx context.Context, address string) (UDPRelayReport, error) 
 	if n < 10+len(query) || reply[0] != 0 || reply[1] != 0 || reply[2] != 0 || reply[3] != 1 {
 		return UDPRelayReport{}, errors.New("malformed SOCKS5 UDP response")
 	}
+	// The SOCKS UDP reply must identify the DNS endpoint requested, not
+	// merely contain a plausible DNS packet with our transaction ID.
+	if !net.IP(reply[4:8]).Equal(net.IPv4(1, 1, 1, 1)) || binary.BigEndian.Uint16(reply[8:10]) != 53 {
+		return UDPRelayReport{}, errors.New("SOCKS UDP response source differs from DNS target")
+	}
 	packet := reply[10:n]
 	if packet[0] != nonce[0] || packet[1] != nonce[1] ||
 		packet[2]&0x80 == 0 || packet[3]&0x0f != 0 ||

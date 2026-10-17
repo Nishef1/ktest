@@ -9,6 +9,7 @@ import android.net.VpnService
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import hev.htproxy.TProxyService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -66,8 +67,12 @@ class KTestVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_CONNECT) {
             // Foreground notification must be posted before any slow Go probe.
+            if (requested || phase == "blocking") {
+                // Never replace a fail-closed warning with "Checking upstream".
+                startForeground(NOTIFICATION, notification(detail.ifBlank { "VPN is active" }))
+                return START_NOT_STICKY
+            }
             startForeground(NOTIFICATION, notification("Checking verified upstream"))
-            if (requested || phase == "blocking") return START_NOT_STICKY
             requested = true
             phase = "verifying"
             detail = "Checking TCP and UDP through selected external SOCKS5"
@@ -134,13 +139,16 @@ class KTestVpnService : VpnService() {
                         phase = "tun_unverified"
                         detail = "TUN + HEV active; traffic from other apps still needs on-device verification"
                         startForeground(NOTIFICATION, notification(detail))
+                    } catch (e: CancellationException) {
+                        // A user Disconnect or Android revocation is not an
+                        // unexpected network fault. Teardown owns TUN closure.
+                        if (requested) failClosed("VPN setup canceled")
                     } catch (e: Exception) {
                         failClosed(e.message ?: "Cannot establish VPN")
                     } catch (e: LinkageError) {
                         failClosed("Pinned HEV native library unavailable")
                     }
                 }
-                var consecutiveFailures = 0
                 while (requested && isActive) {
                     delay(15000)
                     val alive = runCatching { TProxyService.TProxyIsRunning() }.getOrDefault(false)
@@ -150,17 +158,19 @@ class KTestVpnService : VpnService() {
                                 .optBoolean("verified")
                         }.getOrDefault(false)
                     } else false
-                    consecutiveFailures = if (alive && exitHealthy) 0 else consecutiveFailures + 1
-                    if (!alive || consecutiveFailures >= 3) {
+                    // A privacy-sensitive foreign exit must never receive a
+                    // grace period for identity/location verification failures.
+                    if (requested && (!alive || !exitHealthy)) {
                         failClosed(
                             if (!alive) "Native HEV tunnel stopped"
-                            else "Verified foreign SOCKS egress repeatedly failed"
+                            else "Foreign SOCKS exit could not be reverified"
                         )
                     }
                 }
             }
         } else if (intent?.action == ACTION_DISCONNECT) {
             requested = false
+            runner?.cancel()
             scope.launch {
                 mutex.withLock {
                     phase = "idle"
@@ -176,6 +186,7 @@ class KTestVpnService : VpnService() {
 
     override fun onRevoke() {
         requested = false
+        runner?.cancel()
         phase = "revoked"
         detail = "VPN permission revoked by Android"
         shutdownNative()

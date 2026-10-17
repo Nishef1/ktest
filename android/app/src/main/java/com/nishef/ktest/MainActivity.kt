@@ -222,6 +222,7 @@ private fun ConnectionApp() {
                         onMode = {
                             if (!running) {
                                 modeId = it
+                                if (it == "tor") vpnSelected = false
                                 upstream = prefs.getString("upstream_$it", "") ?: ""
                                 prefs.edit().putString("mode", it).apply()
                                 error = null
@@ -506,7 +507,9 @@ private fun ConnectionScreen(
                             if (!mode.available) {
                                 Text("SOON", color = amber, fontSize = 10.sp,
                                     fontWeight = FontWeight.SemiBold)
-                            } else if (mode.id in listOf("aether", "psiphon", "tor")) {
+                            } else if (mode.id == "tor") {
+                                Text("EMBEDDED", color = accent, fontSize = 10.sp)
+                            } else if (mode.id in listOf("aether", "psiphon")) {
                                 Text(if (selected && upstream.isNotBlank()) "CONFIGURED" else "EXTERNAL",
                                     color = amber, fontSize = 10.sp)
                             } else if (selected) {
@@ -534,10 +537,10 @@ private fun ConnectionScreen(
                         "Balanced and Fast can add a separately running, verified foreign SOCKS5 exit.",
                     color = muted, fontSize = 12.sp
                 )
-                OutlinedTextField(
+                if (activeMode.id != "tor") OutlinedTextField(
                     value = upstream,
                     onValueChange = onUpstream,
-                    enabled = !running && activeMode.id != "tor",
+                    enabled = !running,
                     singleLine = true,
                     label = { Text("Local address (e.g. 127.0.0.1:9050)") },
                     modifier = Modifier.fillMaxWidth(),
@@ -568,7 +571,7 @@ private fun ConnectionScreen(
                             color = muted, fontSize = 11.sp)
                     }
                     Switch(checked = vpnSelected, onCheckedChange = onVpnSelected,
-                        enabled = !running && vpnPhase != "verifying")
+                        enabled = !running && vpnPhase != "verifying" && activeMode.id != "tor")
                 }
                 if (vpnSelected) {
                     OutlinedTextField(value = vpnOwner, onValueChange = onVpnOwner,

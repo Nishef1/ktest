@@ -8,7 +8,7 @@ An experimental `VpnService` + HEV adapter is also added. It can only start with
 
 
 
-**Scope:** an English-only Jetpack Compose client with a real Go SOCKS5 + HTTP proxy service, bounded network diagnostics, CDN/ECH research tools and user-initiated official-update checks. It is **not** a system VPN and it does not embed Aether, Psiphon or Tor cores.
+**Current scope:** an English-only Jetpack Compose client with a real Go SOCKS5 + HTTP proxy service, optional embedded Guardian Tor **source integration**, bounded diagnostics and CDN/ECH research tools. An experimental HEV-backed `VpnService` exists in source but is **not verified on a device** and must not be described as a finished system VPN. Aether and Psiphon engines are **not embedded**. No change in this branch has produced a new installable Android release.
 
 ## Current development gate (2026-10-17)
 
@@ -76,3 +76,15 @@ Go version from root `go.mod`, SDK 36, NDK r28c, Java 17+, Gradle 9.5+; `gomobil
 - [ ] Real CDN origin challenge verification on an operator-owned test endpoint.
 - [ ] HEV + `VpnService.protect` + UDP-aware upstream design and complete routing validation.
 - [ ] Stable release signing and OTA upgrade compatibility.
+
+## Source review fixes in this change
+
+- Tor service binding has a single **two-minute deadline covering the binding itself as well as bootstrap**. Canceled/timed-out Tor startup releases its service binding and stops the app-owned local proxy foreground service.
+- The Go mobile proxy checks HTTPS egress using an 18-second verifier budget and a bounded **60-second** successful verification lease, instead of the desktop default 5-minute lease. This is only a live observation, not a cryptographic proof of which engine is running.
+- The SOCKS5 UDP preflight now verifies the SOCKS reply's **reported source IP and port** against the DNS target, rejecting a response that only matches the DNS nonce. A deterministic malicious-reply test covers the rejection.
+- The experimental HEV VPN cancels pending startup on stop/revocation and enters TUN blocking on the **first** failed foreign-exit recheck, not after multiple failures. This is a best-effort state and is **not** an OS kill-switch substitute.
+- Tor is marked **EMBEDDED** and its unrelated manual SOCKS address field is hidden. The system VPN switch cannot be activated in Tor mode until there is a validated UDP/DNS bridge.
+
+### Why Psiphon isn't a drop-in second AAR
+
+Official Psiphon Android code explicitly loads its own Go-based `gojni` native library. KTest already generates a Go mobile `libgojni.so` from this repository. Importing both unchanged can introduce a native-library packaging/class-loader conflict, plus two distinct Go runtime assumptions. The correct solution needs an isolated packaged Psiphon service/native-library namespace or a consolidated Go/mobile build, as well as **legitimate Psiphon sponsor and channel configuration**. Adding the dependency alone would not provide a working client. See [Psiphon Android SDK](https://github.com/Psiphon-Labs/psiphon-tunnel-core/tree/master/MobileLibrary/Android) and [the PsiphonTunnel source](https://github.com/Psiphon-Labs/psiphon-tunnel-core/blob/master/MobileLibrary/Android/PsiphonTunnel/PsiphonTunnel.java).

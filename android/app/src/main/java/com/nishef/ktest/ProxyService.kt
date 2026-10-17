@@ -11,6 +11,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -58,38 +60,54 @@ class ProxyService : Service() {
                 lastError = null
                 startForeground(NOTIFICATION_ID, notification(mode))
                 startup = worker.launch {
-                    lock.withLock {
-                        try {
-                            val validatedUpstream = if (mode == "tor") tor.start() else upstream
-                            if (wanted) Mobilebridge.startProxyWithUpstream(mode, validatedUpstream)
-                            if (!wanted) Mobilebridge.stopProxy()
-                        } catch (e: CancellationException) {
-                            wanted = false
-                            Mobilebridge.stopProxy()
-                            throw e
-                        } catch (e: Exception) {
-                            lastError = e.message ?: "Could not start proxy."
-                            wanted = false
-                            Mobilebridge.stopProxy()
-                        }
-                    }
-                    if (wanted && mode == "tor") {
-                        var failures = 0
-                        while (wanted && isActive) {
-                            delay(5000)
-                            failures = if (tor.isAlive()) 0 else failures + 1
-                            if (failures >= 3) {
-                                wanted = false
-                                lastError = "Tor circuit/service unavailable; proxy stopped"
+                    try {
+                        lock.withLock {
+                            val selected = if (mode == "tor") tor.start() else upstream
+                            ensureActive()
+                            if (!wanted) throw CancellationException("Connect was canceled")
+                            Mobilebridge.startProxyWithUpstream(mode, selected)
+                            if (!wanted) {
                                 Mobilebridge.stopProxy()
+                                throw CancellationException("Connect was canceled")
                             }
                         }
-                    }
-                    if (!wanted) {
-                        tor.stop()
-                        withContext(Dispatchers.Main) {
-                            stopForeground(STOP_FOREGROUND_REMOVE)
-                            stopSelf()
+                        if (mode == "tor") {
+                            // Tor control reports can disappear during bridge/circuit
+                            // recovery. Require consecutive failures before shutdown.
+                            var failures = 0
+                            while (wanted && isActive) {
+                                delay(5000)
+                                failures = if (tor.isAlive()) 0 else failures + 1
+                                if (failures >= 3) {
+                                    lastError = "Tor circuit unavailable; local proxy stopped"
+                                    wanted = false
+                                    Mobilebridge.stopProxy()
+                                }
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        if (wanted) {
+                            lastError = e.message ?: "Connection setup timed out"
+                            wanted = false
+                        }
+                    } catch (e: Exception) {
+                        if (wanted) {
+                            lastError = e.message ?: "Could not start local proxy"
+                            wanted = false
+                        }
+                    } finally {
+                        if (!wanted) {
+                            // This cleanup must run even after coroutine cancellation;
+                            // otherwise the foreground notification can remain alive
+                            // following a timed-out Tor service bind.
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                lock.withLock { Mobilebridge.stopProxy() }
+                                tor.stop()
+                                withContext(Dispatchers.Main) {
+                                    stopForeground(STOP_FOREGROUND_REMOVE)
+                                    stopSelfResult(startId)
+                                }
+                            }
                         }
                     }
                 }

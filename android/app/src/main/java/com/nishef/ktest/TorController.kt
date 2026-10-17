@@ -30,55 +30,66 @@ internal class TorController(private val context: Context) {
         }.getOrDefault(false)
     }
 
-    suspend fun start(): String = withContext(Dispatchers.IO) {
-        val service = withContext(Dispatchers.Main) {
-            suspendCancellableCoroutine<TorService> { continuation ->
-                val conn = object : ServiceConnection {
-                    override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                        if (!continuation.isActive) return
-                        val local = binder as? TorService.LocalBinder
-                        if (local == null) {
-                            continuation.resumeWithException(IllegalStateException("Tor binder is not local"))
-                        } else {
-                            serviceInstance = local.service
-                            continuation.resume(local.service)
+    // The *entire* bind + bootstrap is bounded. Previously the timeout only
+    // wrapped the bootstrap loop; a never-fulfilled Android ServiceConnection
+    // could leave the foreground notification running indefinitely.
+    suspend fun start(): String = withTimeout(120_000L) {
+        try {
+            val service = withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine<TorService> { continuation ->
+                    val conn = object : ServiceConnection {
+                        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                            if (!continuation.isActive) return
+                            val local = binder as? TorService.LocalBinder
+                            if (local == null) {
+                                continuation.resumeWithException(
+                                    IllegalStateException("Tor binder has an unexpected type")
+                                )
+                            } else {
+                                serviceInstance = local.service
+                                continuation.resume(local.service)
+                            }
+                        }
+
+                        override fun onServiceDisconnected(name: ComponentName?) {
+                            serviceInstance = null
                         }
                     }
-
-                    override fun onServiceDisconnected(name: ComponentName?) {
-                        serviceInstance = null
+                    binding = conn
+                    continuation.invokeOnCancellation { stop() }
+                    val bound = try {
+                        context.bindService(
+                            Intent(context, TorService::class.java),
+                            conn,
+                            Context.BIND_AUTO_CREATE
+                        )
+                    } catch (e: Exception) {
+                        if (continuation.isActive) continuation.resumeWithException(e)
+                        false
+                    }
+                    if (!bound && continuation.isActive) {
+                        continuation.resumeWithException(
+                            IllegalStateException("Tor service binding failed")
+                        )
                     }
                 }
-                binding = conn
-                val bound = try {
-                    context.bindService(
-                        Intent(context, TorService::class.java), conn, Context.BIND_AUTO_CREATE
-                    )
-                } catch (e: Exception) {
-                    continuation.resumeWithException(e)
-                    false
-                }
-                if (!bound && continuation.isActive) {
-                    continuation.resumeWithException(IllegalStateException("Cannot bind Tor service"))
-                }
-                continuation.invokeOnCancellation { stop() }
             }
-        }
-        try {
-            withTimeout(120_000L) {
-                while (true) {
+            withContext(Dispatchers.IO) {
+                var endpoint: String? = null
+                while (endpoint == null) {
                     val port = service.socksPort
-                    // Only a completed Tor circuit counts; listening port is not enough.
-                    val circuit = runCatching { service.getInfo("status/circuit-established") }.getOrNull()
-                    if (port in 1..65535 && circuit?.trim() == "1") {
-                        return@withTimeout "127.0.0.1:$port"
+                    val established = runCatching {
+                        service.getInfo("status/circuit-established")?.trim() == "1"
+                    }.getOrDefault(false)
+                    if (port in 1..65535 && established) {
+                        endpoint = "127.0.0.1:$port"
+                    } else {
+                        delay(500)
                     }
-                    delay(500)
                 }
-                @Suppress("UNREACHABLE_CODE")
-                error("Tor bootstrap incomplete")
+                endpoint ?: error("Tor bootstrap finished without a usable SOCKS port")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             stop()
             throw e
         }
