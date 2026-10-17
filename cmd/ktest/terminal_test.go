@@ -95,9 +95,11 @@ func TestSubmenusKeepInvalidInputAndNestedBackInTheirOwnMenu(t *testing.T) {
 		{"CDN provider", "10\ninvalid\n0\n0\n", "Provider: cloudflare", 2},
 		{"CDN hostname back", "10\ncloudflare\n0\n0\n0\n", "Provider: cloudflare", 2},
 		{"CDN hostname invalid", "10\ncloudflare\nhttps://invalid\n0\n0\n", "Provider: cloudflare", 2},
-		{"Windscribe target", "11\nback\n0\n", "Location or TCP IP", 1},
-		{"Windscribe SNI back", "11\nexample\n0\n0\n0\n", "Location or TCP IP", 2},
-		{"Windscribe SNI invalid", "11\nexample\nhttps://invalid\n0\n0\n", "Location or TCP IP", 2},
+		{"Windscribe target", "11\n2\nback\n0\n0\n", "Location or TCP IP", 1},
+		{"Windscribe SNI back", "11\n2\nexample\n0\n0\n0\n0\n", "Location or TCP IP", 2},
+		{"Windscribe SNI invalid", "11\n2\nexample\nhttps://invalid\n0\n0\n0\n", "Location or TCP IP", 2},
+		{"Windscribe modes", "5\ninvalid\n0\n0\n", "Windscribe >", 2},
+		{"Aether method back", "3\n2\n0\n0\n0\n", "Aether >", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := menuOutput(t, tc.input)

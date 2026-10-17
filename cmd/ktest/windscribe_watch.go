@@ -138,6 +138,7 @@ type windscribeMonitor struct {
 	cli                 string
 	t                   *term
 	autoReconnect       bool
+	aetherCarrier       bool
 	mu                  sync.RWMutex
 	state               windscribeState
 	protocol            string
@@ -183,10 +184,19 @@ func (m *windscribeMonitor) attach(p *smartproxy.Proxy) {
 	m.mu.Unlock()
 }
 
+var windscribeCLIMu sync.Mutex // the official CLI permits one instance at a time
+
 func (m *windscribeMonitor) command(ctx context.Context, args ...string) ([]byte, error) {
+	windscribeCLIMu.Lock()
+	defer windscribeCLIMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	return exec.CommandContext(callCtx, m.cli, args...).CombinedOutput()
+	cmd := exec.CommandContext(callCtx, m.cli, args...)
+	hideConsole(cmd)
+	return cmd.CombinedOutput()
 }
 
 func (m *windscribeMonitor) refresh(ctx context.Context) {
@@ -231,11 +241,19 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	} else {
 		m.disconnectedSamples = 0
 	}
-	// Windscribe mode never enables foreign exits. Wait for a stable
-	// disconnected state and an available LOCAL packet-shaping path; otherwise the
-	// CLI would keep restarting an unreachable VPN every few seconds.
+	// Wait for a stable disconnected state and the selected carrier class;
+	// otherwise the CLI would keep restarting an unreachable VPN.
+	ready := false
+	if p != nil {
+		if m.aetherCarrier {
+			total, _ := p.ExitCounts()
+			ready = total > 0
+		} else {
+			ready = p.HasLocalBypass()
+		}
+	}
 	shouldReconnect := m.autoReconnect && state == windscribeDisconnected &&
-		m.disconnectedSamples >= 3 && p != nil && p.HasLocalBypass() &&
+		m.disconnectedSamples >= 3 && ready &&
 		!time.Now().Before(m.nextReconnect)
 	if shouldReconnect {
 		m.nextReconnect = time.Now().Add(3 * time.Minute)
@@ -246,7 +264,11 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		case windscribeConnected:
 			m.t.Line(toneOK, "Windscribe connected (CLI): standby; leaving VPN routing, IP and firewall to Windscribe")
 		case windscribeDisconnected:
-			m.t.Line(toneWarn, "Windscribe disconnected (CLI): ktest local anti-DPI TCP bootstrap ready; NO Psiphon/Aether or foreign exit")
+			if m.aetherCarrier {
+				m.t.Line(toneWarn, "Windscribe disconnected (CLI): waiting for the selected Aether WARP carrier")
+			} else {
+				m.t.Line(toneWarn, "Windscribe disconnected (CLI): ktest local anti-DPI TCP bootstrap ready; NO Psiphon/Aether or foreign exit")
+			}
 		case windscribeConnecting:
 			m.t.Note("Windscribe is connecting or validating its tunnel; no duplicate reconnect command")
 		default:
@@ -265,7 +287,11 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		m.t.Note("Windscribe protocol %s: this VPN tunnel is not carried by ktest's HTTP bootstrap; use OpenVPN TCP to test local anti-DPI", protocol)
 	}
 	if shouldReconnect {
-		m.t.Note("Local anti-DPI TCP proxy ready; requesting last Windscribe location (cooldown 3min, no IP-changing ktest exits)")
+		if m.aetherCarrier {
+			m.t.Note("Aether carrier verified; requesting last Windscribe location (cooldown 3min)")
+		} else {
+			m.t.Note("Local anti-DPI TCP proxy ready; requesting last Windscribe location (cooldown 3min, no IP-changing ktest exits)")
+		}
 		_, e := m.command(ctx, "connect", "-n")
 		if e != nil && ctx.Err() == nil {
 			m.t.Note("Windscribe reconnect command failed: %v", e)
@@ -274,7 +300,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 }
 
 func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *windscribeMonitor {
-	if o.mode != ModeWindscribe {
+	if !o.mode.isWindscribe() {
 		return nil
 	}
 	path, err := windscribeCLIPath(o.windscribeCLI)
@@ -282,10 +308,14 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 		t.Note("Windscribe monitor unavailable: %v; recovery remains manual until CLI is available", err)
 		return nil
 	}
-	m := &windscribeMonitor{cli: path, t: t, autoReconnect: o.windscribeReconnect}
+	m := &windscribeMonitor{cli: path, t: t, autoReconnect: o.windscribeReconnect, aetherCarrier: o.mode == ModeWindscribeAether}
 	m.refresh(ctx) // initial state before external tunnel scanning
 	if m.State() == windscribeUnknown {
-		t.Note("Windscribe CLI status not trusted yet; running bootstrap in manual fallback mode (no automatic reconnect)")
+		if o.mode == ModeWindscribeAether {
+			t.Note("Windscribe CLI status is unavailable; the extra Aether carrier cannot start safely")
+		} else {
+			t.Note("Windscribe CLI status not trusted yet; running bootstrap in manual fallback mode (no automatic reconnect)")
+		}
 		return nil
 	}
 	go func() {

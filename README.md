@@ -34,6 +34,7 @@ go build -o ktest.exe ./cmd/ktest
 - [Usage](docs/USAGE.md)
 - [Windows setup](docs/WINDOWS.md)
 - [Connection modes](docs/CONNECTION_MODES.md)
+- [Aether methods and network diagnosis](docs/NETWORK_DIAGNOSIS.md)
 - [Windscribe bootstrap](docs/WINDSCRIBE_BOOTSTRAP.md)
 - [Direct access](docs/ACCESS.md)
 - [Domain fronting](docs/FRONTING.md)

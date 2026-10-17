@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
-	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -24,8 +22,8 @@ import (
 // altogether. Aether can do all of it, so ktest does not pick; it keeps a list
 // of ways to run Aether (WARP over MASQUE on HTTP/2 or HTTP/3, WireGuard with
 // obfuscation, over IPv6, and Psiphon, which does not depend on WARP at all),
-// tries them two at a time, keeps the first that opens a tunnel, and tries the
-// one that worked last time first.
+// compares them two at a time and ranks successful neutral HTTPS measurements.
+// A fresh per-network measurement orders the next live connection attempt.
 
 // defaultAetherProfiles is the shipped list; profiles/aether-profiles.txt
 // replaces it. {ECH} and {ECHIP} are an ECH configuration and a Cloudflare edge
@@ -33,15 +31,22 @@ import (
 // WARP API (the key) possible where the API's name is filtered. A line that uses
 // them is skipped when they could not be fetched.
 const defaultAetherProfiles = `# Aether profiles, one per line:  label | flags
-# They are tried two at a time in this order, the last one that worked first.
+# Two at a time; fresh measurements for this network/core take priority.
 # ktest adds the loopback bind address, the identity files and the prompts' answers.
-Psiphon | --psiphon-only
 WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --no-fragment --ech {ECH} --enroll-address {ECHIP}
 WARP, MASQUE over HTTP/3 (QUIC) with ECH | --masque --h3 --ech {ECH} --enroll-address {ECHIP}
 WARP, WireGuard | --wg --noize balanced --ech {ECH} --enroll-address {ECHIP}
 WARP, MASQUE over HTTP/2, fragmented | --masque --h2 --api-fragment
+WARP, MASQUE over HTTP/3 | --masque --h3
+WARP, WireGuard without ECH enrollment | --wg --noize balanced
+WARP, Gool WireGuard over MASQUE H2 | --gool --h2
+WARP, Gool WireGuard over MASQUE H3 | --gool --h3
+WARP, MASQUE-in-MASQUE H2 | --mim --h2
+WARP, MASQUE-in-MASQUE H3 | --mim --h3
+WARP, classic WireGuard-in-WireGuard | --gool-classic
 WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --enroll-address {ECHIP}
 WARP, MASQUE over HTTP/2 with ECH, IPv6 | --masque --h2 --no-fragment -6 --ech {ECH} --enroll-address {ECHIP}
+Psiphon | --psiphon-only
 Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
 WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --no-fragment --scan thorough --startup-secs 100 --ech {ECH} --enroll-address {ECHIP}
 `
@@ -78,7 +83,7 @@ func parseAetherProfiles(text, ech, ip string) ([]aetherProfile, error) {
 		if !ok || label == "" || flags == "" {
 			return nil, fmt.Errorf("line %d: want \"label | flags\"", n+1)
 		}
-		if strings.Contains(flags, "--bind") || strings.Contains(flags, "--config") || strings.Contains(flags, "--masque-config") || strings.Contains(flags, "--wg-config") {
+		if strings.Contains(flags, "--bind") || strings.Contains(flags, "--config") || strings.Contains(flags, "--masque-config") || strings.Contains(flags, "--wg-config") || strings.Contains(flags, "--http-proxy") || strings.Contains(flags, "--tor-bind") || strings.Contains(flags, "--psiphon-bind") || strings.Contains(flags, "--register") {
 			return nil, fmt.Errorf("line %d: --bind and the identity paths are set by ktest", n+1)
 		}
 		if strings.Contains(flags, "{ECH") && (ech == "" || ip == "") {
@@ -90,6 +95,9 @@ func parseAetherProfiles(text, ech, ip string) ([]aetherProfile, error) {
 		}
 		seen[label] = true
 		out = append(out, aetherProfile{Label: label, Args: strings.Fields(flags)})
+		if len(out) > 64 {
+			return nil, fmt.Errorf("at most 64 Aether profiles are supported")
+		}
 	}
 	return out, nil
 }
@@ -105,16 +113,10 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 		text = string(b)
 	}
 	profiles, err := parseAetherProfiles(text, ech, ip)
-	if err != nil || mode != ModePsiphon {
+	if err != nil {
 		return profiles, err
 	}
-	var psiphon []aetherProfile
-	for _, p := range profiles {
-		if p.psiphon() && !p.has("--tor-only") && !p.has("--masque") && !p.has("--wg") {
-			psiphon = append(psiphon, p)
-		}
-	}
-	return psiphon, nil
+	return profilesForMode(profiles, mode), nil
 }
 
 // aetherRunArgs is the full command line of a profile on a local port. Every
@@ -140,12 +142,14 @@ func aetherRunArgs(i int, p aetherProfile, port int) []string {
 		if !has("--startup-secs") {
 			args = append(args, "--startup-secs", "45")
 		}
-		args = append(args, "--quick-reconnect")
+		if !has("--quick-reconnect", "--no-quick-reconnect") {
+			args = append(args, "--quick-reconnect")
+		}
 	}
 	return append(args,
 		"--log-level", "warn",
 		"--bind", fmt.Sprintf("127.0.0.1:%d", port),
-		"--config", filepath.Join(warpDir(), fmt.Sprintf("run-%d.toml", i+1)),
+		"--config", filepath.Join(warpDir(), "run-"+p.id()+".toml"),
 		"--masque-config", identityFile(),
 		"--wg-config", wireguardIdentityFile(),
 	)
@@ -162,42 +166,28 @@ func attemptTimeout(p aetherProfile) time.Duration {
 	return time.Duration(secs+20) * time.Second
 }
 
-func lastGoodFile() string { return filepath.Join(warpDir(), "last-profile.txt") }
-
-// lastGoodFirst moves the profile that worked last time to the front.
-func lastGoodFirst(ps []aetherProfile, last string) []aetherProfile {
-	out := make([]aetherProfile, 0, len(ps))
-	for _, p := range ps {
-		if p.Label == last {
-			out = append(out, p)
-		}
-	}
-	for _, p := range ps {
-		if p.Label != last {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // aetherPorts: one fixed port per profile index, so a profile that is found
 // again after a drop is the same upstream.
 func aetherPort(i int) int { return aetherBasePort + i }
 
 type warpManager struct {
-	o            connectOptions
-	proxy        *smartproxy.Proxy
-	dns          *dnscheck.Result
-	t            *term
-	profs        []aetherProfile
-	logsMu       sync.Mutex
-	files        []*os.File
-	monitor      *windscribeMonitor
-	searching    atomic.Bool
-	enrollMu     sync.Mutex
-	enrollTried  map[string]bool
-	enrollRoutes []enrollmentRoute
-	ech, echIP   string
+	o             connectOptions
+	proxy         *smartproxy.Proxy
+	dns           *dnscheck.Result
+	t             *term
+	profs         []aetherProfile
+	monitor       *windscribeMonitor
+	searching     atomic.Bool
+	enrollMu      sync.Mutex
+	enrollTried   map[string]bool
+	enrollRoutes  []enrollmentRoute
+	ech, echIP    string
+	network, core string
+	processCtx    context.Context
+	measureMu     sync.Mutex
+	measurements  []aetherMeasurement
+	diagnosis     bool
+	selected      *aetherMeasurement
 }
 
 func (m *warpManager) status() string {
@@ -206,7 +196,14 @@ func (m *warpManager) status() string {
 	if m.searching.Load() {
 		phase = "search continuing"
 	}
-	return fmt.Sprintf("%d %s available · %d verified · %s", total, plural(total, "exit", "exits"), verified, phase)
+	status := fmt.Sprintf("%d %s available · %d AI-verified · %s", total, plural(total, "exit", "exits"), verified, phase)
+	m.measureMu.Lock()
+	defer m.measureMu.Unlock()
+	if m.selected != nil {
+		r := m.selected
+		status += fmt.Sprintf(" · best measured %s · probe %s (%s) at %s", r.Method, r.ExitIP, r.Country, r.Checked.UTC().Format("15:04:05Z"))
+	}
+	return status
 }
 
 // startWarp runs the search for a working exit in the background and returns
@@ -227,42 +224,16 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	if o.mode == ModePsiphon && !fileOK(psiphonCore(o.base)) {
 		return fixed("Psiphon unavailable: helper missing; `ktest warp -enable` fetches it")
 	}
-	ech, ip := "", ""
-	if o.mode != ModePsiphon {
-		fctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		if cfg, addr, err := front.FetchCloudflareECH(fctx); err == nil {
-			ech, ip = base64.StdEncoding.EncodeToString(cfg), addr
-		}
-		cancel()
+	m, err := newWarpManager(ctx, o, proxy, dns, t, false)
+	if err != nil {
+		return fixed("off - " + err.Error())
 	}
-	profs, err := loadAetherProfiles(o.base, ech, ip, o.mode)
-	if err != nil || len(profs) == 0 {
-		msg := "no usable profile"
-		if err != nil {
-			msg = err.Error()
-		}
-		return fixed("off - " + msg + " (" + aetherProfilesFile(o.base) + ")")
-	}
-	if !fileOK(psiphonCore(o.base)) {
-		var kept []aetherProfile
-		for _, p := range profs {
-			if !p.psiphon() {
-				kept = append(kept, p)
-			}
-		}
-		if len(kept) < len(profs) {
-			t.Note("Psiphon profiles skipped: its helper is missing; `ktest warp -enable` fetches it")
-		}
-		profs = kept
-	}
-	_ = os.MkdirAll(warpDir(), 0o700)
-	last, _ := os.ReadFile(lastGoodFile())
-	m := &warpManager{o: o, proxy: proxy, dns: dns, t: t, profs: lastGoodFirst(profs, strings.TrimSpace(string(last))), ech: ech, echIP: ip}
 	if len(monitors) > 0 {
 		m.monitor = monitors[0]
 	}
 	m.searching.Store(true)
 	mctx, stopManager := context.WithCancel(ctx)
+	m.processCtx = mctx
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -271,11 +242,6 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	return m.status, func() {
 		stopManager()
 		<-done
-		m.logsMu.Lock()
-		for _, f := range m.files {
-			_ = f.Close()
-		}
-		m.logsMu.Unlock()
 	}
 }
 
@@ -368,6 +334,11 @@ func (m *warpManager) run(ctx context.Context) {
 			case ended := <-done:
 				remaining--
 				ended.rc.stop()
+				// A late observer from this generation must not remove a
+				// replacement with the same profile name on the next search.
+				if ended.unregistered != nil {
+					<-ended.unregistered
+				}
 			}
 		}
 		m.t.Line(toneWarn, "Every exit path ended; searching again")
@@ -382,6 +353,11 @@ func (m *warpManager) watchExit(ctx context.Context, name string, rc *runningCor
 	case <-rc.done:
 	}
 	m.proxy.Remove("Exit: " + name)
+	m.measureMu.Lock()
+	if m.selected != nil && m.selected.Label == name {
+		m.selected = nil
+	}
+	m.measureMu.Unlock()
 	if ctx.Err() == nil {
 		m.t.Line(toneWarn, "%s ended; no longer eligible for new connections", name)
 		m.t.Note("Exit status: %s", m.status())
@@ -389,96 +365,57 @@ func (m *warpManager) watchExit(ctx context.Context, name string, rc *runningCor
 }
 
 type warpFound struct {
-	p    aetherProfile
-	port int
-	rc   *runningCore
+	p            aetherProfile
+	port         int
+	rc           *runningCore
+	unregistered chan struct{}
 }
 
-// search runs the profiles two at a time. Every tunnel that opens its port is
-// added to the race at once and kept; the search ends when the list is used up
-// or maxExits tunnels are open.
+// Compare before exposing the initial choice. A cached winner gets one worker;
+// first-use discovery has a shared deadline rather than delaying the UI for minutes.
 func (m *warpManager) search(ctx context.Context) []*warpFound {
-	var (
-		mu    sync.Mutex
-		next  int
-		found []*warpFound
-		wg    sync.WaitGroup
-	)
-	take := func() (int, bool) {
-		mu.Lock()
-		defer mu.Unlock()
-		if len(found) >= maxExits || next >= len(m.profs) {
-			return 0, false
+	limit := maxExits
+	history, _ := cachedNetwork(m.network, m.core)
+	m.profs = measuredProfilesFirst(m.profs, history, m.o.mode)
+	if len(m.profs) > 0 {
+		if r, ok := history.Results[m.profs[0].id()]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
+			limit = 1
 		}
-		next++
-		return next - 1, true
 	}
-	began := time.Now()
-	for w := 0; w < 2; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ctx.Err() == nil {
-				if m.monitor != nil && m.monitor.Connected() {
-					return
-				}
-				i, ok := take()
-				if !ok {
-					return
-				}
-				p := m.profs[i]
-				up, rc := m.try(ctx, i, p)
-				if !up {
-					continue
-				}
-				rank := 5 // WARP: faster and steadier
-				if p.psiphon() {
-					rank = 6
-				}
-				exitAddr := fmt.Sprintf("127.0.0.1:%d", aetherPort(i))
-				ip, country, geoErr := probeForeignExit(ctx, exitAddr)
-				if geoErr != nil {
-					m.t.Note("%s: AI protection rejects this exit until non-Iran egress is verified (%v)", p.Label, geoErr)
-				}
-				mu.Lock()
-				if len(found) >= maxExits {
-					mu.Unlock()
-					rc.stop()
-					continue
-				}
-				err := m.proxy.Add(smartproxy.Upstream{
-					Name: "Exit: " + p.Label, Addr: exitAddr, Rank: rank, Exit: true, AIEligible: geoErr == nil, Late: m.o.mode != ModeFast,
-				})
-				first := len(found) == 0
-				if err == nil {
-					found = append(found, &warpFound{p: p, port: aetherPort(i), rc: rc})
-				}
-				mu.Unlock()
-				if err != nil {
-					rc.stop()
-					continue
-				}
-				go m.watchExit(ctx, p.Label, rc)
-				if first {
-					_ = os.WriteFile(lastGoodFile(), []byte(p.Label), 0o600)
-				}
-				m.t.Line(toneOK, "Exit ready: %s · %s", p.Label, shortDur(time.Since(began)))
-				m.t.Note("Exit status: %s", m.status())
-				if m.o.mode == ModeWindscribe {
-					m.t.Note("Verified TCP exit discovered. Retry Windscribe with OpenVPN TCP/443 or WStunnel/443, not WireGuard via HTTP proxy.")
-				}
-				if geoErr == nil {
-					m.t.Line(toneOK, "Foreign exit verified and available: %s (%s)", ip, country)
-					if m.o.mode == ModeFast {
-						m.t.Note("Fast keeps AI on verified foreign exits; ordinary sites may use direct routes.")
-					}
-				}
-			}
-		}()
+	searchCtx, stopSearch := context.WithTimeout(ctx, 40*time.Second)
+	results := m.compare(searchCtx, limit, false)
+	stopSearch()
+	var found []*warpFound
+	for i, r := range results {
+		select {
+		case <-r.rc.done:
+			r.rc.stop()
+			continue
+		default:
+		}
+		err := m.proxy.Add(smartproxy.Upstream{Name: "Exit: " + r.p.Label, Addr: fmt.Sprintf("127.0.0.1:%d", r.port), Rank: 5 + i, Exit: true, AIEligible: r.result.State == "verified", Late: m.o.mode != ModeFast})
+		if err != nil {
+			r.rc.stop()
+			continue
+		}
+		found = append(found, r.warpFound)
+		if len(found) == 1 {
+			m.measureMu.Lock()
+			sample := r.result
+			m.selected = &sample
+			m.measureMu.Unlock()
+		}
+		r.unregistered = make(chan struct{})
+		go func(w *warpFound) {
+			defer close(w.unregistered)
+			m.watchExit(ctx, w.p.Label, w.rc)
+		}(r.warpFound)
+		go m.watchHealth(ctx, r.warpFound)
+		m.t.Line(toneOK, "Exit selected: %s · %s", r.p.Label, r.result.detail())
+		m.t.Note("Observed exit belongs to the neutral probe, not a permanent per-website IP guarantee.")
 	}
-	wg.Wait()
 	if len(found) == 0 && ctx.Err() == nil {
-		m.t.Line(toneWarn, "No exit path came up (%d tried); trying again in two minutes. Logs are in %s", len(m.profs), warpDir())
+		m.t.Line(toneWarn, "No verified exit came up; retrying tunnel discovery in two minutes. Initial enrollment is not repeated for every profile.")
 	}
 	return found
 }
@@ -494,6 +431,10 @@ func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *r
 			return false, nil
 		}
 	}
+	return m.startProfile(ctx, i, p)
+}
+
+func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) (bool, *runningCore) {
 	port := aetherPort(i)
 	if err := portFree(port); err != nil {
 		m.t.Note("skipped %s: %v", p.Label, err)
@@ -502,10 +443,9 @@ func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *r
 	logs := &tailBuffer{max: 8192}
 	logPath := filepath.Join(warpDir(), fmt.Sprintf("aether-%d.log", i+1))
 	var sinks []io.Writer
+	var logFile *os.File
 	if lf, err := os.Create(logPath); err == nil {
-		m.logsMu.Lock()
-		m.files = append(m.files, lf)
-		m.logsMu.Unlock()
+		logFile = lf
 		sinks = append(sinks, lf)
 	}
 	if m.o.verbose {
@@ -514,12 +454,19 @@ func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *r
 	if len(sinks) > 0 {
 		logs.tee = io.MultiWriter(sinks...)
 	}
-	cctx, cancel := context.WithCancel(ctx)
+	processCtx := m.processCtx
+	if processCtx == nil {
+		processCtx = ctx
+	}
+	cctx, cancel := context.WithCancel(processCtx)
 	rc := &runningCore{cancel: cancel, done: make(chan struct{})}
 	l := aetherLauncher(aetherBinary(m.o.base), aetherRunArgs(i, p, port), logs)
 	go func() {
+		defer close(rc.done)
+		if logFile != nil {
+			defer logFile.Close()
+		}
 		rc.err = l(cctx, m.dns)
-		close(rc.done)
 	}()
 	// Once the VPN is back, unfinished discovery attempts must stop. Do not
 	// cancel a transport that has already passed try() and is carrying the VPN.
@@ -569,29 +516,90 @@ func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) erro
 	}
 	m.enrollMu.Lock()
 	defer m.enrollMu.Unlock()
+	if m.enrollTried == nil {
+		m.enrollTried = make(map[string]bool)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	protocol, path := "masque", identityFile()
-	if p.has("--wg") {
+	if p.method() == "wireguard" || p.method() == "wiw" {
 		protocol, path = "wg", wireguardIdentityFile()
 	}
+	if err := m.prepareIdentityFile(ctx, protocol, path, nil); err != nil {
+		return err
+	}
+	switch {
+	case p.method() == "wiw":
+		return m.prepareIdentityFile(ctx, "wg", filepath.Join(warpDir(), "wg-secondary.toml"), nil)
+	case strings.HasPrefix(p.method(), "mim-"):
+		return m.prepareIdentityFile(ctx, "masque", filepath.Join(warpDir(), "masque-secondary.toml"), nil)
+	case strings.HasPrefix(p.method(), "gool-"):
+		inner := filepath.Join(warpDir(), "masque-gool.toml")
+		if err := checkWarpIdentity(inner, "wg"); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if m.enrollTried[inner] {
+			return fmt.Errorf("Gool inner enrollment already attempted this connection; retry diagnosis or reconnect")
+		}
+		var args []string
+		for i := 0; i < len(p.Args); i++ {
+			arg := p.Args[i]
+			if arg == "--protocol" && i+1 < len(p.Args) {
+				args = append(args, arg, "masque")
+				i++
+				continue
+			}
+			if arg == "--gool" || arg == "--wiw" {
+				args = append(args, "--masque")
+				continue
+			}
+			if arg == "--gool-peer" {
+				i++
+				continue
+			}
+			args = append(args, arg)
+		}
+		outer := aetherProfile{Label: "Gool registration carrier " + p.method(), Args: args}
+		up, rc := m.startProfile(ctx, 80, outer)
+		if !up {
+			m.enrollTried[inner] = true
+			return fmt.Errorf("outer MASQUE tunnel did not carry registration; saved Gool keys kept")
+		}
+		defer rc.stop()
+		routes := []enrollmentRoute{{label: "outer MASQUE tunnel", args: []string{"--upstream", fmt.Sprintf("socks5://127.0.0.1:%d", aetherPort(80))}}}
+		return m.prepareIdentityFile(ctx, "wg", inner, routes)
+	}
+	return nil
+}
+
+// Called with enrollMu held. Inner files have their own attempt ledger.
+func (m *warpManager) prepareIdentityFile(ctx context.Context, protocol, path string, routes []enrollmentRoute) error {
 	if err := checkWarpIdentity(path, protocol); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if m.enrollTried[protocol] {
+	key := path
+	if path == identityFile() || path == wireguardIdentityFile() {
+		key = protocol
+	}
+	if m.enrollTried[key] {
 		return fmt.Errorf("%s identity unavailable; retry Setup > Exit paths (automatic registration already attempted this connection)", protocol)
 	}
 	if m.enrollTried == nil {
 		m.enrollTried = make(map[string]bool)
 	}
-	m.enrollTried[protocol] = true
-	if m.enrollRoutes == nil {
+	m.enrollTried[key] = true
+	if routes == nil && m.enrollRoutes == nil {
 		m.enrollRoutes = enrollmentRoutes(ctx, m.o.base, m.o.listen, m.ech, m.echIP)
 	}
-	return enrollWarpIdentity(ctx, m.t, aetherBinary(m.o.base), protocol, m.enrollRoutes, runEnrollment)
+	if routes == nil {
+		routes = m.enrollRoutes
+	}
+	return enrollWarpIdentityAt(ctx, m.t, aetherBinary(m.o.base), protocol, path, routes, runEnrollment)
 }
 
 // exitCarries waits until a request really goes through the proxy on port. The

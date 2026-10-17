@@ -102,6 +102,7 @@ type Config struct {
 	// VerifyExit rechecks a previously eligible exit using a neutral destination.
 	// Protected connections wait for a fresh successful check before dialing.
 	VerifyExit    func(context.Context, Upstream) error
+	VerifyCarrier func(context.Context, Upstream) error
 	ExitVerifyTTL time.Duration
 	// PreferVerifiedExit is useful for bootstrapping TCP VPN protocols: try an
 	// already checked foreign proxy before a misleading raw TCP/IP connection.
@@ -141,6 +142,7 @@ type Event struct {
 	Prepared    bool   // takeover prepared; application TLS acceptance is still pending
 	EarlyClose  bool   // route ended before post-hello response data; not a second request
 	Path        string // winning path; empty when none answered
+	Egress      string // route class; never a fabricated destination-observed IP
 	Took        time.Duration
 	OK          bool
 	Err         string // last failure reason when no path answered
@@ -180,6 +182,8 @@ type Stat struct {
 
 type upstreamState struct {
 	Upstream
+	carrierMu     sync.Mutex
+	carrierUntil  time.Time
 	wins, fails   int
 	ewmaMS        float64
 	verifiedUntil atomic.Int64
@@ -329,6 +333,11 @@ func (p *Proxy) Remove(name string) {
 	}
 	// The AI policy must not silently jump between identities; it remains
 	// pinned and fails closed if a previously chosen exit disappeared.
+	// Windscribe's outer carrier may recover after a dead core; its own
+	// authenticated VPN retains ownership of application identity.
+	if p.bootstrapPinned == name {
+		p.bootstrapPinned = ""
+	}
 }
 
 // HasLocalBypass reports whether an explicitly trusted local anti-DPI SOCKS
@@ -440,6 +449,19 @@ func (p *Proxy) DialWindscribeLocal(ctx context.Context, host, port string) (net
 // After the first real TCP connection, the chosen exit stays pinned for this
 // session to prevent accidental mid-session route/identity switching.
 func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Conn, error) {
+	return p.dialManagedExit(ctx, host, port, true)
+}
+
+// Windscribe's authenticated VPN can use a proven WARP carrier even when that
+// carrier exits in Iran. This never grants access to protected AI destinations.
+func (p *Proxy) DialExitCarrier(ctx context.Context, host, port string) (net.Conn, error) {
+	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) {
+		return p.DialVerifiedExit(ctx, host, port)
+	}
+	return p.dialManagedExit(ctx, host, port, false)
+}
+
+func (p *Proxy) dialManagedExit(ctx context.Context, host, port string, foreign bool) (net.Conn, error) {
 	p.mu.Lock()
 	pinned := p.bootstrapPinned
 	p.mu.Unlock()
@@ -447,10 +469,20 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 	var lastErr error
 	any := false
 	for _, u := range candidates {
-		if !u.Exit || !u.AIEligible || (pinned != "" && u.Name != pinned) {
+		if !u.Exit || (foreign && !u.AIEligible) || (pinned != "" && u.Name != pinned) {
 			continue
 		}
 		any = true
+		var verification error
+		if foreign {
+			verification = p.verifyExit(ctx, u)
+		} else {
+			verification = p.verifyCarrier(ctx, u)
+		}
+		if err := verification; err != nil {
+			lastErr = err
+			continue
+		}
 		began := time.Now()
 		conn, err := p.dial(ctx, u, host, port)
 		if err != nil {
@@ -474,11 +506,14 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 			continue
 		}
 		p.logf("Windscribe CONNECT %s:%s carried through verified exit %s", host, port, u.Name)
-		p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
+		p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
 		return conn, nil
 	}
 	if !any {
-		return nil, errors.New("Windscribe bootstrap blocked: no verified foreign TCP exit; waiting for Aether/Psiphon")
+		if foreign {
+			return nil, errors.New("Windscribe bootstrap blocked: no verified foreign TCP exit")
+		}
+		return nil, errors.New("Windscribe bootstrap blocked: no eligible verified exit carrier")
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("Windscribe verified exit is unreachable: %w", lastErr)
@@ -761,6 +796,23 @@ const lateAfter = 3 * time.Second
 func (p *Proxy) emit(ctx context.Context, e Event) {
 	e.Probe, _ = ctx.Value(probeContextKey{}).(bool)
 	if p.cfg.OnEvent != nil {
+		p.mu.Lock()
+		for _, u := range p.ups {
+			if u.Name == e.Path {
+				switch {
+				case u.Exit:
+					e.Egress = "proxy exit"
+				case u.Takeover != nil:
+					e.Egress = "CDN route; IP unmeasured"
+				case u.LocalBypass || u.Addr == "":
+					e.Egress = "system route"
+				default:
+					e.Egress = "proxy route; IP unmeasured"
+				}
+				break
+			}
+		}
+		p.mu.Unlock()
 		p.cfg.OnEvent(e)
 	}
 }

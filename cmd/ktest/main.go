@@ -40,6 +40,8 @@ const usageText = `ktest: free access toolkit
     -mode psiphon          Aether to Psiphon; Psiphon profiles only
     -mode tor              Aether to Tor; Tor circuit only
     -mode windscribe       carry the Windscribe app (OpenVPN TCP over WStunnel)
+    -mode windscribe-aether carry Windscribe OpenVPN TCP through Aether WARP
+    -aether-method auto    choose by saved network measurements; see connect -h
     -tun                   Whole PC TCP (initial Windows default; Administrator)
     -tun=false             Proxy coverage; remember it for the next launch
     -v                     log every decision (ktest connect -h lists every flag)
@@ -47,6 +49,7 @@ const usageText = `ktest: free access toolkit
     -mode windscribe       Windscribe-specific prerequisites/status; no reconnects
   ktest windscribe-test    fixed-entry SNI comparison (-target location-or-TCP-IP)
     -verify-vpn            CLI + one system HTTPS exit-IP check; no reconnects
+  ktest aether-test        bounded per-network comparison (-budget 3m; optional -speed)
 
 Setup
   ktest ca                 domain-fronting certificate (-install, -renew, -uninstall, -delete)
@@ -108,6 +111,8 @@ func run(args []string) int {
 		return runDoctor(args[1:])
 	case "windscribe-test":
 		return runWindscribeTest(args[1:])
+	case "aether-test":
+		return runAetherTest(args[1:])
 	case "ca":
 		return runCA(args[1:])
 	case "warp":

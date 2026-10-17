@@ -6,6 +6,27 @@ import (
 	"time"
 )
 
+func (p *Proxy) verifyCarrier(ctx context.Context, u *upstreamState) error {
+	if p.cfg.VerifyCarrier == nil {
+		return fmt.Errorf("managed carrier verifier unavailable")
+	}
+	u.carrierMu.Lock()
+	defer u.carrierMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if time.Now().Before(u.carrierUntil) {
+		return nil
+	}
+	vctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
+	defer cancel()
+	if err := p.cfg.VerifyCarrier(vctx, u.Upstream); err != nil {
+		return fmt.Errorf("carrier verification failed: %w", err)
+	}
+	u.carrierUntil = time.Now().Add(p.cfg.ExitVerifyTTL)
+	return nil
+}
+
 // Refresh only when protected traffic needs an expired lease. Concurrent
 // requests share one check; a failed/unknown location never permits the dial.
 func (p *Proxy) verifyExit(ctx context.Context, u *upstreamState) error {

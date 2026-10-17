@@ -60,9 +60,9 @@ var menuSections = []struct {
 	{"Connection methods", []menuItem{
 		connectItem("1", "Balanced", "Adaptive routing", ModeBalanced),
 		connectItem("2", "Fast", "Faster fallback", ModeFast),
-		connectItem("3", "Aether", "WARP / Psiphon", ModeAether),
+		{key: "3", name: "Aether", desc: "WARP / Psiphon", mode: ModeAether, action: func(t *terminal, base string, in *input) bool { return t.aetherMenu(base, in) }},
 		connectItem("4", "Aether to Tor", "Tor", ModeTor),
-		connectItem("5", "Windscribe", "Bridge for the Windscribe app", ModeWindscribe),
+		{key: "5", name: "Windscribe", desc: "Local bridge / through Aether", mode: ModeWindscribe, action: func(t *terminal, base string, in *input) bool { return t.windscribeMenu(base, in) }},
 		connectItem("6", "Aether to Psiphon", "Psiphon", ModePsiphon),
 	}},
 	{"Coverage", []menuItem{
@@ -78,11 +78,14 @@ var menuSections = []struct {
 		{key: "10", name: "CDN scan", action: func(t *terminal, _ string, in *input) bool {
 			return t.cdnScanMenu(in)
 		}},
-		{key: "11", name: "Windscribe test", action: func(t *terminal, base string, in *input) bool { return t.windscribeTestMenu(base, in) }},
+		{key: "11", name: "Windscribe test", action: func(t *terminal, base string, in *input) bool { return t.windscribeToolsMenu(base, in) }},
 	}},
 }
 
 func policyName(mode ConnectionMode) string {
+	if mode == ModeWindscribeAether {
+		return "Windscribe through Aether"
+	}
 	for _, section := range menuSections {
 		for _, item := range section.items {
 			if item.mode == mode && mode != "" {
@@ -95,7 +98,7 @@ func policyName(mode ConnectionMode) string {
 
 // Setup reports actionable configuration, never connection readiness.
 func (t *terminal) setupDescription(base string) string {
-	needsCore := t.options.mode == ModePsiphon || (t.options.mode == ModeAether && t.options.exitSocks == "")
+	needsCore := t.options.mode == ModePsiphon || t.options.mode == ModeWindscribeAether || (t.options.mode == ModeAether && t.options.exitSocks == "")
 	if needsCore && warpState(base) == "no core" {
 		return t.ui.Yellow("Exit core needs setup")
 	}
@@ -132,7 +135,7 @@ func (t *terminal) mainMenu(base string) {
 			if it.key == "9" {
 				desc = t.setupDescription(base)
 			}
-			if it.mode != "" && it.mode == t.options.mode && t.settings.Connect["mode"] != "" {
+			if it.mode != "" && (it.mode == t.options.mode || (it.mode == ModeWindscribe && t.options.mode.isWindscribe())) && t.settings.Connect["mode"] != "" {
 				desc += " · " + u.Cyan("Last used")
 			}
 			if it.key == "7" {
@@ -428,12 +431,15 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 		relaunchElevated(t.ui, o)
 		return true
 	}
-	if mode == ModeWindscribe {
+	if mode.isWindscribe() {
 		t.ui.Box("WINDSCRIBE SETTINGS", toneInfo, []string{
 			t.ui.Bold("Connection  ") + "Protocol OpenVPN TCP, port 443",
 			t.ui.Bold("Proxy       ") + "Proxy Settings → HTTP, 127.0.0.1, port 10801, no login",
 			t.ui.Dim("Not Proxy Gateway. WireGuard, IKEv2 and Stealth ignore this proxy."),
 		})
+		if mode == ModeWindscribeAether {
+			t.ui.Note("Carrier: Aether WARP. Exclude this ktest executable and aether.exe from Windscribe VPN routing; keep this process running while connected.")
+		}
 	}
 	return t.foreground(func(ctx context.Context) { connectSession(ctx, o, nil, t.ui) }, in.lines)
 }

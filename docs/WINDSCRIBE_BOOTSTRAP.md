@@ -1,6 +1,8 @@
-# Windscribe bootstrap: local-only and no extra public-IP exits
+# Windscribe bootstrap and carrier tests
 
-The **Windscribe** mode is deliberately different from **Fast**, **Balanced** and **VPN** modes. It helps the **installed Windscribe Windows client** reach its TCP endpoint using local packet-level anti-DPI methods. **ktest must never launch Psiphon, Aether, WARP, Tor or an external SOCKS/Worker exit in Windscribe mode**, even when those cores are installed or enabled under Setup. ktest does not select or change a public VPN egress IP: **only Windscribe itself can do so after its own tunnel connects**.
+The **local Windscribe** mode (`-mode windscribe`) helps the installed Windows client reach its TCP endpoint using local packet-level anti-DPI methods. It never launches Psiphon, Aether, WARP, Tor or an external SOCKS/Worker exit, even when those cores are installed. Windscribe owns VPN authentication and final VPN IP.
+
+The separately selected **Windscribe through Aether** (`-mode windscribe-aether`) uses a measured WARP carrier for raw OpenVPN TCP. It does not wrap that stream again in WStunnel or silently fall back to Psiphon/local methods. Keep ktest/Aether running; exclude their helper transport from Windscribe's tunnel to avoid recursion. A WARP carrier may exit in Iran; that permits carrying Windscribe but does not authorize direct AI traffic. See [methods, diagnosis and identity handling](NETWORK_DIAGNOSIS.md).
 
 ## Run
 
@@ -10,7 +12,7 @@ git pull --ff-only origin main
 go run ./cmd/ktest connect -mode windscribe -v
 ```
 
-Menu option **5** launches the same mode. Windscribe **Proxy Settings** (not Proxy Gateway):
+Menu option **5** selects the local bridge or explicit Aether carrier. Windscribe **Proxy Settings** (not Proxy Gateway):
 
 | Setting | Value |
 | --- | --- |
@@ -125,7 +127,9 @@ The live feed labels these events **TCP proxy accepted; VPN handshake not verifi
 
 ## Troubleshooting
 
-### Stage-specific tests (menu 10)
+### Stage-specific tests (menu 11)
+
+The tests submenu offers prerequisites, separate WStunnel/Stealth/both comparisons, the real local bridge, Aether comparison, the explicit Aether carrier, connected VPN data, and an owned CDN route. Comparisons can suggest a measured WStunnel SNI; applying it is an explicit prompt and saves the preference. Stealth's TLS-only result cannot establish VPN readiness.
 
 Use these commands without changing the app's connection or credentials:
 

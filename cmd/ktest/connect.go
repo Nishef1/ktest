@@ -110,6 +110,7 @@ type connectOptions struct {
 	ready               time.Duration
 	verbose             bool
 	stopHint            string
+	aetherMethod        string
 }
 
 func defaultConnectOptions(base string) connectOptions {
@@ -126,7 +127,7 @@ func defaultConnectOptions(base string) connectOptions {
 func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
-	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, aether, psiphon (Aether to Psiphon), tor (Aether to Tor)")
+	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, windscribe-aether, aether, psiphon, tor")
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", o.windscribeCLI, "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
 	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: race WStunnel and Stealth straight to the Windscribe node with chosen SNIs")
@@ -144,6 +145,7 @@ func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs.BoolVar(&o.noDirect, "no-direct", o.noDirect, "do not race the plain, uncut connection")
 	fs.BoolVar(&o.noFront, "no-front", o.noFront, "do not use domain fronting even if the ktest CA is trusted")
 	fs.BoolVar(&o.noWarp, "no-warp", o.noWarp, "do not start Aether's WARP/Psiphon exit search even if it is enabled")
+	fs.StringVar(&o.aetherMethod, "aether-method", o.aetherMethod, "auto, masque-h2, masque-h3, wireguard, gool-h2, gool-h3, wiw, mim-h2, mim-h3, psiphon, psiphon-cdn")
 	fs.BoolVar(&o.noHTTP, "no-http", o.noHTTP, "disable the local HTTP proxy for Windscribe")
 	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
 	fs.StringVar(&o.exitSocks, "exit-socks", o.exitSocks, "optional loopback SOCKS5 exit (Tor, Psiphon or authorized Worker), TCP only")
@@ -169,7 +171,7 @@ func validateConnectOptions(o connectOptions) error {
 	if o.mode == ModePsiphon && o.exitSocks != "" {
 		return errors.New("Aether to Psiphon forbids -exit-socks: only managed Psiphon profiles may be used")
 	}
-	if o.mode == ModeWindscribe && o.exitSocks != "" {
+	if o.mode.isWindscribe() && o.exitSocks != "" {
 		return errors.New("Windscribe mode forbids -exit-socks: no foreign proxy/VPN exit may be used")
 	}
 	if err := o.ws.validate(); err != nil {
@@ -178,11 +180,23 @@ func validateConnectOptions(o connectOptions) error {
 	if o.mode != ModeWindscribe && o.ws.cdnHost != "" {
 		return errors.New("-windscribe-cdn only applies to -mode windscribe")
 	}
-	if o.mode == ModeWindscribe && o.tun {
+	if o.mode.isWindscribe() && o.tun {
 		return errors.New("Windscribe bootstrap cannot run with ktest -tun; stop ktest's whole-PC tunnel first")
 	}
 	if o.strategies < 0 || o.strategies > 12 {
 		return errors.New("-strategies must be 0..12")
+	}
+	if !validAetherMethod(o.aetherMethod) {
+		return errors.New("unknown -aether-method; use connect -h for supported methods")
+	}
+	if o.mode == ModeWindscribeAether && (o.noWarp || strings.HasPrefix(o.aetherMethod, "psiphon")) {
+		return errors.New("Windscribe through Aether requires WARP; -no-warp and Psiphon methods are not allowed")
+	}
+	if o.mode == ModeWindscribeAether && o.noHTTP {
+		return errors.New("Windscribe through Aether requires the local HTTP CONNECT bridge")
+	}
+	if o.mode == ModePsiphon && o.aetherMethod != "" && o.aetherMethod != "auto" && !strings.HasPrefix(o.aetherMethod, "psiphon") {
+		return errors.New("Psiphon mode requires a Psiphon method or auto")
 	}
 	return nil
 }
@@ -204,7 +218,13 @@ func runConnect(args []string) int {
 		u.Line(toneWarn, "Saved settings unavailable; using defaults: %v", settingsErr)
 	}
 	fs := connectFlagSet(&o)
-	if fs.Parse(args) != nil || fs.NArg() != 0 {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: ktest connect [-v]   (all other flags are for experiments; see -h)")
 		return 2
 	}
@@ -365,7 +385,11 @@ func (s *siteEvents) print(e smartproxy.Event) {
 		if slow {
 			k = toneWarn
 		}
-		t.Line(k, "%s · %s · %s · %s", t.Bold(target), t.tinted(k, state), t.tinted(k, shortDur(e.Took)), e.Path)
+		path := e.Path
+		if e.Egress != "" {
+			path += " · " + e.Egress
+		}
+		t.Line(k, "%s · %s · %s · %s", t.Bold(target), t.tinted(k, state), t.tinted(k, shortDur(e.Took)), path)
 		return
 	}
 	s.fail.Add(1)
@@ -398,6 +422,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("Coverage: %s", connectionCoverage(o))
 	t.Note("%s", o.mode.message())
+	if o.mode == ModeWindscribeAether {
+		if err := validateConnectOptions(o); err != nil {
+			t.Line(toneFail, "%v", err)
+			return 2
+		}
+	}
 	if o.mode == ModePsiphon && o.exitSocks != "" {
 		t.Line(toneFail, "Aether to Psiphon forbids external SOCKS exits (-exit-socks)")
 		return 2
@@ -411,19 +441,23 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		// Tor or foreign SOCKS, even when the user enabled them in Setup.
 		o.noWarp = true
 	}
-	if o.mode == ModeWindscribe && o.tun {
+	if o.mode.isWindscribe() && o.tun {
 		t.Line(toneFail, "Windscribe bootstrap cannot share ktest's system-wide TUN; run without -tun")
 		return 2
 	}
-	if o.mode == ModeWindscribe && runtime.GOOS == "windows" {
+	if o.mode.isWindscribe() && runtime.GOOS == "windows" {
 		if names := activeKtestTUNs(); len(names) > 0 {
 			t.Line(toneFail, "A ktest TUN is still active (%s). Stop whole-PC mode before connecting Windscribe.", strings.Join(names, ", "))
 			return 2
 		}
 	}
 	monitor := startWindscribeMonitor(ctx, o, t)
-	if monitor != nil && monitor.Connected() {
-		t.Note("Windscribe already connected. ktest standing by; waiting for the official CLI to report disconnect.")
+	if o.mode == ModeWindscribeAether && monitor == nil {
+		t.Line(toneFail, "Windscribe through Aether needs a trusted CLI state; check Windscribe/login before starting a second tunnel")
+		return 1
+	}
+	if monitor != nil && (monitor.Connected() || (o.mode == ModeWindscribeAether && monitor.State() != windscribeDisconnected)) {
+		t.Note("Windscribe is %s. Standing by until the official CLI confirms disconnect; existing VPN is left running.", monitor.State())
 		if !monitor.waitDisconnected(ctx) {
 			return 0
 		}
@@ -617,7 +651,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		ups = append(ups, smartproxy.Upstream{
 			Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port),
 			LocalDNS: c.localDNS, SoftResolve: strings.HasPrefix(c.name, "Xray") && !c.localBypass,
-			Rank: 2, LocalBypass: o.mode == ModeWindscribe && c.localBypass,
+			Rank: 2, LocalBypass: c.localBypass,
 		})
 	}
 	if !o.noSelf && !o.mode.exitOnly() {
@@ -659,6 +693,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte,
 		VerifyExit: func(ctx context.Context, u smartproxy.Upstream) error {
 			_, _, err := probeForeignExit(ctx, u.Addr)
+			return err
+		},
+		VerifyCarrier: func(ctx context.Context, u smartproxy.Upstream) error {
+			_, _, err := probeExitLocation(ctx, u.Addr)
 			return err
 		},
 		OnEvent: func(e smartproxy.Event) {
@@ -733,7 +771,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	fmt.Sscanf(portText, "%d", &lport)
 	go func() { _ = proxy.Serve(ctx, l) }()
 	probePort := 0
-	if o.mode != ModeWindscribe {
+	if !o.mode.isWindscribe() {
 		probes, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Line(toneFail, "cannot start internal site checks: %v", err)
@@ -749,9 +787,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	httpAddr := ""
 	if !o.noHTTP {
 		var stopHTTP func()
-		if o.mode == ModeWindscribe {
+		if o.mode.isWindscribe() {
 			dial := proxy.DialWindscribeLocal
-			if o.ws.enabled() {
+			if o.mode == ModeWindscribeAether {
+				dial = proxy.DialExitCarrier
+			}
+			if o.mode == ModeWindscribe && o.ws.enabled() {
 				logf := cfg.Logf
 				if logf == nil {
 					logf = func(string, ...any) {}
@@ -815,8 +856,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	var proxied []quickcheck.Result
 	var compared []quickcheck.Assessment
 	verdict := toneInfo
-	if o.mode == ModeWindscribe {
-		t.Note("Windscribe mode skips unrelated website and CDN tests; only local TCP anti-DPI is permitted")
+	if o.mode.isWindscribe() {
+		t.Note("Windscribe mode skips unrelated website tests; only the selected VPN carrier is prepared")
 	} else if monitor == nil || !monitor.Connected() {
 		if o.mode.exitOnly() && !proxy.HasVerifiedExit() {
 			wstep := t.Progress("Waiting for a verified foreign exit before site checks", 1)
@@ -875,7 +916,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// Verify requested coverage before announcing READY.
 	coverage := "Proxy · configure SOCKS5/HTTP in each application"
-	if o.mode == ModeWindscribe {
+	if o.mode.isWindscribe() {
 		coverage = "Windscribe bridge · Windscribe controls system coverage"
 	}
 	if o.tun {
@@ -898,9 +939,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// 5. The result.
 	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
-	if o.mode == ModeWindscribe {
+	if o.mode.isWindscribe() {
 		title = "WINDSCRIBE BRIDGE READY; VPN NOT YET VERIFIED"
-		if !proxy.HasLocalBypass() && !o.ws.enabled() {
+		if o.mode == ModeWindscribe && !proxy.HasLocalBypass() && !o.ws.enabled() {
 			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}
 	}
@@ -908,9 +949,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if o.mode.exitOnly() {
 		pathsDesc = "Verified foreign exits only; direct fallback blocked"
 	}
-	if o.mode == ModeWindscribe {
+	if o.mode.isWindscribe() {
 		pathsDesc = fmt.Sprintf("%d local anti-DPI paths; no plain or foreign exits", len(ups))
-		if o.ws.enabled() {
+		if o.mode == ModeWindscribeAether {
+			pathsDesc = "Aether WARP only; no plain/local/Psiphon/Tor fallback"
+		}
+		if o.mode == ModeWindscribe && o.ws.enabled() {
 			pathsDesc = o.ws.describe() + " + " + pathsDesc
 		}
 	}
@@ -929,8 +973,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	field("Paths", pathsDesc)
 	if httpAddr != "" {
 		field("HTTP", "http://"+httpAddr+t.Dim(" · CONNECT, TCP only"))
-		if o.mode == ModeWindscribe {
+		if o.mode.isWindscribe() {
 			field("VPN", t.Yellow("Windscribe on OpenVPN TCP 443; only Windscribe can confirm the VPN connected"))
+			if o.mode == ModeWindscribeAether {
+				field("Carrier", "Aether WARP -> Windscribe; keep this process running; exclude ktest/aether from Windscribe VPN routes")
+			}
 		}
 	}
 	if frontNote != "" {
@@ -941,14 +988,18 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	field("Exit", t.Dim(warpNote))
 	field("Policy", string(o.mode))
-	if o.mode != ModeWindscribe {
+	if !o.mode.isWindscribe() {
 		field("AI", "Verified foreign exit only · blocked when unavailable")
 		field("Checks", fmt.Sprintf("%d small site probes · refresh every 15 min after activity", len(quickcheck.Targets())))
 	} else {
-		field("AI", "AI requests rejected by this bridge; Windscribe owns application traffic")
+		if o.mode == ModeWindscribeAether {
+			field("AI", "SOCKS AI traffic requires verified foreign WARP; normal apps use Windscribe's VPN")
+		} else {
+			field("AI", "AI requests rejected by this bridge; Windscribe owns application traffic")
+		}
 	}
 	switch {
-	case o.mode == ModeWindscribe:
+	case o.mode.isWindscribe():
 		field("Result", t.Dim("ktest watches windscribe-cli status; Windscribe owns the public IP"))
 	case bypassed > 0:
 		field("Result", t.Green(fmt.Sprintf("%d blocked test %s opened through ktest", bypassed, plural(bypassed, "site", "sites"))))
@@ -981,6 +1032,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		t.Note("requested = Windscribe's target; entry = carrier address; VPN IP = Windscribe-reported exit, shown separately by CLI")
 	} else {
 		t.Println("  " + t.Dim("Live connections (a site is listed when its winning path is known or changes)"))
+		t.Note("System route follows the current OS network, including any existing VPN. Exit IP samples are reported separately; per-site public IP is not inferred.")
 	}
 
 	// 6. Live feed until the user disconnects.
@@ -988,7 +1040,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		<-events
 	}
 	dropped.Store(0)
-	if o.mode != ModeWindscribe {
+	if !o.mode.isWindscribe() {
 		stopRefresh := startRouteRefresh(ctx, probePort, &activity, t)
 		defer stopRefresh()
 	}

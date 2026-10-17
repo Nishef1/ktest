@@ -3,9 +3,12 @@
 package main
 
 import (
+	"os/exec"
 	"syscall"
 	"unsafe"
 )
+
+func hideConsole(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} }
 
 // Layout of JOBOBJECT_EXTENDED_LIMIT_INFORMATION (winnt.h).
 type jobIOCounters struct{ a, b, c, d, e, f uint64 }

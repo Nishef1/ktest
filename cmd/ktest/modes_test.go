@@ -35,6 +35,7 @@ func TestConnectionModes(t *testing.T) {
 		{"balanced", true, false, false},
 		{"fast", true, false, false},
 		{"windscribe", true, false, false},
+		{"windscribe-aether", true, false, false},
 		{"aether", true, true, false},
 		{"psiphon", true, true, false},
 		{"tor", true, true, false},

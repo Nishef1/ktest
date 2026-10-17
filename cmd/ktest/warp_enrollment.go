@@ -118,6 +118,10 @@ func enrollWarpIdentity(ctx context.Context, u *term, bin, protocol string, rout
 	if protocol == "wg" {
 		path = wireguardIdentityFile()
 	}
+	return enrollWarpIdentityAt(ctx, u, bin, protocol, path, routes, run)
+}
+
+func enrollWarpIdentityAt(ctx context.Context, u *term, bin, protocol, path string, routes []enrollmentRoute, run enrollmentRunner) error {
 	if err := checkWarpIdentity(path, protocol); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -137,13 +141,19 @@ func enrollWarpIdentity(ctx context.Context, u *term, bin, protocol string, rout
 			return err
 		}
 		step := u.Progress(fmt.Sprintf("Registering %s via %s", protocol, route.label), 1)
+		stage := filepath.Join(dir, filepath.Base(path))
+		masquePath, wgPath := filepath.Join(dir, "masque.toml"), filepath.Join(dir, "wg.toml")
+		if protocol == "wg" {
+			wgPath = stage
+		} else {
+			masquePath = stage
+		}
 		args := append([]string(nil), route.args...)
 		args = append(args, "--register", protocol, "--config", filepath.Join(dir, "aether.toml"),
-			"--masque-config", filepath.Join(dir, "masque.toml"), "--wg-config", filepath.Join(dir, "wg.toml"), "--log-level", "error")
+			"--masque-config", masquePath, "--wg-config", wgPath, "--log-level", "error")
 		actx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		err = run(actx, bin, args)
 		cancel()
-		stage := filepath.Join(dir, filepath.Base(path))
 		if err == nil {
 			err = checkWarpIdentity(stage, protocol)
 		}

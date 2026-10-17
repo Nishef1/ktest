@@ -181,16 +181,7 @@ func TestPsiphonModeSelectsOnlyPsiphonProfiles(t *testing.T) {
 	}
 }
 
-func TestLastGoodProfileGoesFirstAndWarpState(t *testing.T) {
-	ps := []aetherProfile{{Label: "a"}, {Label: "b"}, {Label: "c"}}
-	got := lastGoodFirst(ps, "c")
-	if got[0].Label != "c" || got[1].Label != "a" || got[2].Label != "b" || len(got) != 3 {
-		t.Fatalf("%v", got)
-	}
-	if got := lastGoodFirst(ps, "gone"); got[0].Label != "a" || len(got) != 3 {
-		t.Fatalf("%v", got)
-	}
-
+func TestWarpState(t *testing.T) {
 	t.Setenv("KTEST_WARP_DIR", t.TempDir())
 	base := t.TempDir()
 	if warpState(base) != "no core" {

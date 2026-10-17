@@ -84,6 +84,9 @@ func warpState(base string) string {
 func aetherLauncher(bin string, args []string, output io.Writer) launcher {
 	return func(ctx context.Context, _ *dnscheck.Result) error {
 		cmd := exec.CommandContext(ctx, bin, args...)
+		cmd.Env = append(os.Environ(), "AETHER_REPROVISION=0")
+		configureEnrollmentProcess(cmd)
+		hideConsole(cmd)
 		cmd.Stdout, cmd.Stderr = output, output
 		err := cmd.Run()
 		if ctx.Err() != nil {
@@ -215,13 +218,13 @@ func warpDisable(u *term) int {
 	if dir == "" {
 		return 0
 	}
-	for _, path := range []string{identityFile(), wireguardIdentityFile()} {
+	for _, path := range []string{identityFile(), wireguardIdentityFile(), filepath.Join(dir, "masque-secondary.toml"), filepath.Join(dir, "wg-secondary.toml"), filepath.Join(dir, "masque-gool.toml")} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			u.Line(toneFail, "cannot delete %s: %v", path, err)
 			return 1
 		}
 	}
-	u.Line(toneOK, "The MASQUE and WireGuard identities were deleted. Core files and other settings were kept.")
+	u.Line(toneOK, "The WARP identities (including nested hops) were deleted. Core files and other settings were kept.")
 	return 0
 }
 
@@ -246,6 +249,7 @@ func warpStatus(u *term, base string) {
 	}
 	u.Note("Initial registration uses HTTPS to the WARP API; a working gateway does not prove that registration is reachable.")
 	u.Note("Saved keys are reused. ECH or Psiphon can carry initial registration; they do not guarantee access on every network.")
+	u.Note("Gool and nested MASQUE/WireGuard prepare separate inner identities only when selected. Gool registers its inner key through the outer MASQUE tunnel.")
 	u.Note("Traffic using these exits leaves through Cloudflare or Psiphon. When they join routing depends on the selected policy.")
 	u.Note("Edit profiles/aether-profiles.txt to change what is tried; logs are in %s.", warpDir())
 }

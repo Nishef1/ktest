@@ -64,6 +64,10 @@ func plainTerm(w io.Writer) *term { return &term{w: w} }
 // Menus redraw only inside the terminal's alternate screen. Leaving it restores
 // the connection log and scrollback; plain output remains a complete transcript.
 func (t *term) menuView() {
+	t.menuViewHeight(24)
+}
+
+func (t *term) menuViewHeight(requiredRows int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.live {
@@ -75,7 +79,7 @@ func (t *term) menuView() {
 			rows = h
 		}
 	}
-	if t.width() < 60 || rows < 24 {
+	if t.width() < 60 || rows < requiredRows {
 		// A small alternate screen cannot scroll back to the first options.
 		// Preserve an ordinary scrollable transcript in that case.
 		if t.menuScreen {

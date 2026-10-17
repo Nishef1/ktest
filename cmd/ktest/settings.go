@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Keep user choices, never connection state, certificates or credentials.
@@ -19,11 +20,12 @@ type userSettings struct {
 }
 
 type toolSettings struct {
-	DiagnosisMode    string `json:"diagnosis_mode,omitempty"`
-	ScanProvider     string `json:"scan_provider,omitempty"`
-	ScanCDN          string `json:"scan_cdn,omitempty"`
-	WindscribeTarget string `json:"windscribe_target,omitempty"`
-	WindscribeSNIs   string `json:"windscribe_snis,omitempty"`
+	DiagnosisMode       string `json:"diagnosis_mode,omitempty"`
+	ScanProvider        string `json:"scan_provider,omitempty"`
+	ScanCDN             string `json:"scan_cdn,omitempty"`
+	WindscribeTarget    string `json:"windscribe_target,omitempty"`
+	WindscribeSNIs      string `json:"windscribe_snis,omitempty"`
+	WindscribeTransport string `json:"windscribe_transport,omitempty"`
 }
 
 func settingsPath() (string, error) {
@@ -90,22 +92,35 @@ func loadPreferences(base string) (userSettings, string, connectOptions, error) 
 
 func optionsForMode(o connectOptions, mode ConnectionMode) connectOptions {
 	o.mode = mode
-	if mode == ModeWindscribe {
+	if mode.isWindscribe() {
 		o.tun = false
 	} else {
 		o.ws.cdnHost, o.ws.cdnSNI, o.ws.cdnEdges = "", "", ""
 	}
-	if mode == ModeWindscribe || mode == ModePsiphon {
+	if mode.isWindscribe() || mode == ModePsiphon {
 		o.exitSocks = ""
+	}
+	if mode == ModeWindscribeAether {
+		o.ws.cdnHost, o.ws.cdnSNI, o.ws.cdnEdges = "", "", ""
+	}
+	if mode == ModePsiphon && !strings.HasPrefix(o.aetherMethod, "psiphon") {
+		o.aetherMethod = "auto"
+	}
+	if mode == ModeWindscribeAether && strings.HasPrefix(o.aetherMethod, "psiphon") {
+		o.aetherMethod = "auto"
 	}
 	return o
 }
 
 func saveSettings(path string, settings userSettings) error {
+	return saveJSONFile(path, settings)
+}
+
+func saveJSONFile(path string, value any) error {
 	if path == "" {
 		return errors.New("settings file is unavailable; changes last for this session only")
 	}
-	data, err := json.MarshalIndent(settings, "", "  ")
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}

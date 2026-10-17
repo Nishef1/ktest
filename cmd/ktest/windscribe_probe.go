@@ -247,7 +247,7 @@ func runWindscribeTest(args []string) int {
 	return runWindscribeTestContext(ctx, args, newTerm(os.Stdout))
 }
 
-func runWindscribeTestContext(parent context.Context, args []string, u *term) int {
+func runWindscribeTestContext(parent context.Context, args []string, u *term, suggestions ...func(string)) int {
 	fs := flag.NewFlagSet("windscribe-test", flag.ContinueOnError)
 	base := fs.String("base", defaultBase(), "portable folder containing cache/windscribe-nodes.json")
 	target := fs.String("target", "", "requested OpenVPN TCP IP or location name, e.g. Ashburn - Bles Park")
@@ -396,6 +396,9 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term) in
 	for _, s := range scores {
 		if s.transport == "wstunnel" && s.websocket == *rounds && s.attempts == *rounds && s.sni != "" {
 			u.Note("Candidate SNI (outer transport only): %s. Try with connect -mode windscribe -windscribe-wstunnel-sni %s; authentication still belongs to Windscribe.", s.sni, s.sni)
+			for _, suggest := range suggestions {
+				suggest(s.sni)
+			}
 			break
 		}
 	}

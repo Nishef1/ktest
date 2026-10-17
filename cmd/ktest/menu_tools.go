@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (t *terminal) chooseCoverage(in *input) bool {
@@ -79,10 +80,10 @@ func (t *terminal) diagnoseMenu(base string, in *input) bool {
 			message = ""
 		}
 		previous := t.settings.Tools.DiagnosisMode
-		if previous != "2" {
+		if previous != "2" && previous != "3" && previous != "4" && previous != "5" {
 			previous = "1"
 		}
-		t.ui.Printf("   1  General network\n   2  Windscribe\n   0  Back\n\n  Diagnose (Enter = %s) > ", previous)
+		t.ui.Printf("   1  General network\n   2  Windscribe prerequisites\n   3  Aether comparison (3 min; low data)\n   4  Aether comparison + small transfer samples\n   5  Saved recommendations for this network\n   0  Back\n\n  Diagnose (Enter = %s) > ", previous)
 		choice, ok := in.read()
 		if !ok {
 			return false
@@ -98,15 +99,25 @@ func (t *terminal) diagnoseMenu(base string, in *input) bool {
 		case "1":
 		case "2":
 			mode = ModeWindscribe
+		case "3", "4", "5":
 		default:
-			message = "Select 1, 2, or 0"
+			message = "Select 1-5, or 0"
 			continue
 		}
 		t.settings.Tools.DiagnosisMode = choice
 		t.savePreferences()
 		t.ui.leaveMenu()
 		t.ui.Note("Press Enter or Ctrl+C to cancel diagnostics and return here.")
-		if !t.foreground(func(ctx context.Context) { runDoctorMode(ctx, t.ui, base, false, mode) }, in.lines) {
+		if !t.foreground(func(ctx context.Context) {
+			switch choice {
+			case "3", "4":
+				runAetherDiagnosis(ctx, t.ui, base, choice == "4", 3*time.Minute)
+			case "5":
+				printSavedAether(ctx, t.ui, base)
+			default:
+				runDoctorMode(ctx, t.ui, base, false, mode)
+			}
+		}, in.lines) {
 			return false
 		}
 	}
@@ -139,7 +150,11 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 		} else if target == "-" {
 			target = ""
 		}
-		args := []string{"-base", base}
+		transport := t.settings.Tools.WindscribeTransport
+		if transport != "stealth" && transport != "wstunnel" {
+			transport = "both"
+		}
+		args := []string{"-base", base, "-transport", transport}
 		if target == "" {
 			args = append(args, "-verify-vpn")
 		} else {
@@ -174,8 +189,31 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 		t.savePreferences()
 		t.ui.leaveMenu()
 		t.ui.Note("Press Enter or Ctrl+C to cancel and return here.")
-		if !t.foreground(func(ctx context.Context) { runWindscribeTestContext(ctx, args, t.ui) }, in.lines) {
+		best := ""
+		if !t.foreground(func(ctx context.Context) { runWindscribeTestContext(ctx, args, t.ui, func(sni string) { best = sni }) }, in.lines) {
 			return false
+		}
+		if best != "" {
+			for {
+				t.ui.Printf("  Use suggested SNI %s first for the local Windscribe bridge? YES / Enter to keep settings / 0 back > ", best)
+				answer, ok := in.read()
+				if !ok {
+					if in.interrupted {
+						in.interrupted = false
+						break
+					}
+					return false
+				}
+				if strings.EqualFold(answer, "YES") {
+					t.options.ws.sni = best + "," + defaultWindscribeSNIs
+					t.rememberConnect("windscribe-wstunnel-sni", t.options.ws.sni)
+					break
+				}
+				if answer == "" || isBackChoice(answer) {
+					break
+				}
+				t.ui.Line(toneWarn, "Enter YES to apply, or Enter / 0 to keep settings")
+			}
 		}
 	}
 }
