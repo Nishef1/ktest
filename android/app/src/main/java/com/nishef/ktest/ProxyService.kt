@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -50,6 +51,7 @@ class ProxyService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
+                if (wanted) return START_NOT_STICKY
                 val mode = intent.getStringExtra(EXTRA_MODE) ?: "balanced"
                 val upstream = intent.getStringExtra(EXTRA_UPSTREAM) ?: ""
                 wanted = true
@@ -61,6 +63,10 @@ class ProxyService : Service() {
                             val validatedUpstream = if (mode == "tor") tor.start() else upstream
                             if (wanted) Mobilebridge.startProxyWithUpstream(mode, validatedUpstream)
                             if (!wanted) Mobilebridge.stopProxy()
+                        } catch (e: CancellationException) {
+                            wanted = false
+                            Mobilebridge.stopProxy()
+                            throw e
                         } catch (e: Exception) {
                             lastError = e.message ?: "Could not start proxy."
                             wanted = false
@@ -92,6 +98,9 @@ class ProxyService : Service() {
                 wanted = false
                 startup?.cancel()
                 tor.stop()
+                // Bump Go's start generation immediately, without waiting for
+                // a possibly slow HTTPS foreign-exit probe.
+                Mobilebridge.stopProxy()
                 worker.launch {
                     lock.withLock {
                         Mobilebridge.stopProxy()
