@@ -290,6 +290,7 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	if len(monitors) > 0 {
 		m.monitor = monitors[0]
 	}
+	t.Note("Aether v2.3.0 upstream limitation: MASQUE TLS peer verification defaults off; --tls-verify alone without pins does not establish trust. ktest verifies sampled HTTPS exits independently.")
 	m.searching.Store(true)
 	mctx, stopManager := context.WithCancel(ctx)
 	m.processCtx = mctx

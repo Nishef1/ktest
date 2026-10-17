@@ -106,7 +106,7 @@ func caStatus(u *term) {
 	ca := status.ca
 	u.Line(toneInfo, "CA folder    %s", dir)
 	u.Line(toneInfo, "Thumbprint   %s   expires %s", ca.Fingerprint(), ca.Expires().Format("2006-01-02"))
-	u.Line(toneInfo, "Limited to   %d domains (it cannot vouch for any other site, even if its key leaks)", len(ca.Permitted()))
+	u.Line(toneInfo, "CA requests constrained to %d domains; enforcement of root constraints depends on each client trust store", len(ca.Permitted()))
 	if missing := caMissing(ca); len(missing) > 0 {
 		u.Line(toneWarn, "This CA predates %d site(s) this ktest can front: %s", len(missing), strings.Join(firstN(missing, 6), ", "))
 		u.Note("`ktest ca -renew` replaces it by one that covers them (a CA's constraints cannot be extended).")

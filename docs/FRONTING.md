@@ -58,3 +58,7 @@ This creates a local certificate and private key; use the actual filename conven
 - A CDN/front probe returning a plausible response is a candidate, not independent proof that an arbitrary requested origin was reached.
 - Local root-CA installation grants interception capability to its private-key holder. Offer it only for explicit website-fronting workflows and never as an Aether/WARP tunnel repair step.
 - If the system DNS returns a private block-page address, mark the DNS path suspicious and separately verify any replacement encrypted resolver. Do not claim it works before a live check.
+
+## Name constraints are not a universal root-CA security boundary
+
+The locally generated certificate requests X.509 permitted-domain name constraints. Browsers, OS trust stores and TLS implementations may treat explicitly trusted root anchors differently. It is **not** safe to claim that an installed root key can never issue a certificate accepted for other domains merely because the root certificate embeds these constraints. Protect the local CA private key, use only the explicit optional fronting workflow, and uninstall the root when it is no longer needed. A genuine external WARP tunnel does not require this root.
