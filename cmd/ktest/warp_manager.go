@@ -33,7 +33,7 @@ import (
 const defaultAetherProfiles = `# Aether profiles, one per line:  label | flags
 # Two at a time; fresh measurements for this network/core take priority.
 # ktest adds the loopback bind address, the identity files and the prompts' answers.
-WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --no-fragment --ech {ECH} --enroll-address {ECHIP}
+WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --fragment --ech {ECH} --enroll-address {ECHIP}
 WARP, MASQUE over HTTP/3 (QUIC) with ECH | --masque --h3 --ech {ECH} --enroll-address {ECHIP}
 WARP, WireGuard | --wg --noize balanced --ech {ECH} --enroll-address {ECHIP}
 WARP, MASQUE over HTTP/2, fragmented | --masque --h2 --api-fragment
@@ -48,7 +48,7 @@ WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --
 WARP, MASQUE over HTTP/2 with ECH, IPv6 | --masque --h2 --no-fragment -6 --ech {ECH} --enroll-address {ECHIP}
 Psiphon | --psiphon-only
 Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
-WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --no-fragment --scan thorough --startup-secs 100 --ech {ECH} --enroll-address {ECHIP}
+WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --fragment --scan thorough --startup-secs 100 --ech {ECH} --enroll-address {ECHIP}
 `
 
 // aetherProfile is one way of running Aether.
@@ -143,7 +143,9 @@ func aetherRunArgs(i int, p aetherProfile, port int) []string {
 			args = append(args, "--startup-secs", "45")
 		}
 		if !has("--quick-reconnect", "--no-quick-reconnect") {
-			args = append(args, "--quick-reconnect")
+			// Aether 2.3.0 can repeatedly select a failed cached gateway (upstream #147).
+			// Explicit profile quick-reconnect settings still take precedence.
+			args = append(args, "--no-quick-reconnect")
 		}
 	}
 	return append(args,
@@ -170,6 +172,11 @@ func attemptTimeout(p aetherProfile) time.Duration {
 // tunnel before the final carrier can even start. That work cannot fit inside
 // the standard 45-second probe. Existing valid identities take the fast path.
 func profileAttemptBudget(p aetherProfile) time.Duration {
+	// Aether's own startup deadline precedes independent SOCKS/exit checks.
+	budget := attemptTimeout(p) + 15*time.Second
+	if budget < 45*time.Second {
+		budget = 45 * time.Second
+	}
 	var protocol, path string
 	switch p.method() {
 	case "gool-h2", "gool-h3":
@@ -179,24 +186,34 @@ func profileAttemptBudget(p aetherProfile) time.Duration {
 	case "mim-h2", "mim-h3":
 		protocol, path = "masque", filepath.Join(warpDir(), "masque-secondary.toml")
 	}
-	if path != "" && os.IsNotExist(checkWarpIdentity(path, protocol)) {
-		return 150 * time.Second
+	if path != "" && os.IsNotExist(checkWarpIdentity(path, protocol)) && budget < 225*time.Second {
+		// Outer core, inner enrollment, inner core; not one 45s attempt.
+		return 225 * time.Second
 	}
-	return 45 * time.Second
+	return budget
 }
 
-// searchBudget permits a first-use nested bootstrap without extending every
-// ordinary comparison. Diagnosis still obeys its separate overall user budget.
-func (m *warpManager) searchBudget() time.Duration {
-	for _, p := range m.profs {
-		if profileAttemptBudget(p) > 45*time.Second {
-			return 175 * time.Second
+// Automatic discovery keeps a short first sweep. A forced/isolated slow
+// profile must not be cancelled before its own configured startup deadline.
+func (m *warpManager) searchBudget(indices []int) time.Duration {
+	budget := 40 * time.Second
+	forced := m.o.aetherMethod != "" && m.o.aetherMethod != "auto"
+	if !forced && len(indices) > 2 {
+		return budget
+	}
+	for _, i := range indices {
+		if i < 0 || i >= len(m.profs) {
+			continue
+		}
+		candidate := profileAttemptBudget(m.profs[i]) + 12*time.Second
+		if candidate > budget {
+			budget = candidate
 		}
 	}
-	if m.o.aetherMethod != "" && m.o.aetherMethod != "auto" {
-		return 65 * time.Second
+	if budget > 250*time.Second {
+		budget = 250 * time.Second
 	}
-	return 40 * time.Second
+	return budget
 }
 
 // aetherPorts: one fixed port per profile index, so a profile that is found
@@ -427,7 +444,7 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 			limit = 1
 		}
 	}
-	searchCtx, stopSearch := context.WithTimeout(ctx, m.searchBudget())
+	searchCtx, stopSearch := context.WithTimeout(ctx, m.searchBudget(indices))
 	results := m.compare(searchCtx, limit, false, indices)
 	stopSearch()
 	var found []*warpFound

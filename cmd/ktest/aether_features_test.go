@@ -159,20 +159,20 @@ unknown | --masque --upstream socks5://127.0.0.1:9999
 func TestNestedBootstrapBudgetAndRecoverySearch(t *testing.T) {
 	t.Setenv("KTEST_WARP_DIR", t.TempDir())
 	p := aetherProfile{Args: []string{"--gool", "--h2"}}
-	if got := profileAttemptBudget(p); got != 150*time.Second {
+	if got := profileAttemptBudget(p); got != 225*time.Second {
 		t.Fatalf("pending Gool enrollment got %v", got)
 	}
 	m := &warpManager{profs: []aetherProfile{p}}
-	if got := m.searchBudget(); got != 175*time.Second {
+	if got := m.searchBudget([]int{0}); got != 237*time.Second {
 		t.Fatalf("first nested search got %v", got)
 	}
 	if err := os.WriteFile(filepath.Join(warpDir(), "masque-gool.toml"), enrollmentFixture(t, time.Now().Add(time.Hour)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if got := profileAttemptBudget(p); got != 45*time.Second {
+	if got := profileAttemptBudget(p); got != 80*time.Second {
 		t.Fatalf("existing nested identity should use fast budget, got %v", got)
 	}
-	if got := m.searchBudget(); got != 40*time.Second {
+	if got := m.searchBudget([]int{0}); got != 92*time.Second {
 		t.Fatalf("ordinary automatic search got %v", got)
 	}
 }
@@ -204,5 +204,44 @@ func TestUnavailableEgressProbeIsNotCountryRejection(t *testing.T) {
 	result := benchmarkAetherRoute(ctx, "127.0.0.1:0", false)
 	if result.State != "egress-unverified" || result.Failure == "" {
 		t.Fatalf("misclassified unreachable neutral probe: %+v", result)
+	}
+}
+
+func TestDefaultAetherH2AndFreshGatewayPolicy(t *testing.T) {
+	profiles, err := loadAetherProfiles(t.TempDir(), "ECH", "162.159.1.1", ModeAether)
+	if err != nil { t.Fatal(err) }
+	var found bool
+	for _, p := range profiles {
+		if p.Label != "WARP, MASQUE over HTTP/2 with ECH" { continue }
+		found = true
+		if !p.has("--fragment") || p.has("--no-fragment") {
+			t.Fatalf("H2 ECH disables fragmentation: %+v", p)
+		}
+		args := strings.Join(aetherRunArgs(0, p, 10830), " ")
+		if !strings.Contains(args, "--no-quick-reconnect") || strings.Contains(args, " --quick-reconnect") {
+			t.Fatalf("stale gateway reused: %s", args)
+		}
+	}
+	if !found { t.Fatal("H2 ECH profile absent") }
+	p := aetherProfile{Args: []string{"--masque", "--h2", "--quick-reconnect"}}
+	if strings.Contains(strings.Join(aetherRunArgs(0, p, 10830), " "), "--no-quick-reconnect") {
+		t.Fatal("explicit quick-reconnect overridden")
+	}
+}
+
+func TestAetherThoroughBudgetHonorsConfiguredStartup(t *testing.T) {
+	t.Setenv("KTEST_WARP_DIR", t.TempDir())
+	p := aetherProfile{Args: []string{"--masque", "--h2", "--startup-secs", "100"}}
+	if got := profileAttemptBudget(p); got < 125*time.Second {
+		t.Fatalf("thorough attempt cancelled prematurely: %v", got)
+	}
+	m := &warpManager{profs: []aetherProfile{p}, o: connectOptions{aetherMethod:"masque-h2"}}
+	if got := m.searchBudget([]int{0}); got < profileAttemptBudget(p)+10*time.Second {
+		t.Fatalf("forced scan too short: %v", got)
+	}
+	m.o.aetherMethod = "auto"
+	m.profs = append(m.profs, aetherProfile{Args: []string{"--wg"}}, aetherProfile{Args: []string{"--masque", "--h3"}})
+	if got := m.searchBudget([]int{0,1,2}); got != 40*time.Second {
+		t.Fatalf("automatic wave too long: %v",got)
 	}
 }
