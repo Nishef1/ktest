@@ -1,110 +1,70 @@
-# Engineering roadmap (2026-10-13)
+# Engineering roadmap (reviewed 2026-10-17)
 
-Scope: diagnostic research into direct access to selected filtered services without changing the public egress IP. This repository is **public**. These notes are project notes, NOT secret documentation; never commit credentials, tunnel endpoints, personal IP logs, cookies, user certificates, or sensitive field measurements.
+Current target: finish Android integration of the existing KTest modes and tools by reusing upstream cores. The Android port is **incomplete**. Source compilation, packaged executables and a listening proxy are separate milestones from an authenticated connection or a working device-wide VPN.
 
-## Ground rules
+This roadmap supersedes the October 13 research-only phase table. Historical experiments remain documented in [RESEARCH.md](RESEARCH.md), [EXPERIMENTS.md](EXPERIMENTS.md), [ACCESS.md](ACCESS.md), [REVIVE.md](REVIVE.md) and [FRONTING.md](FRONTING.md); they do not describe current Android readiness.
 
-- No claims of success without reproducible in-country measurements (ISP, access type, timestamp, version, target, baseline and treatment), preferably from multiple networks.
-- Preserve TLS certificate verification and explicitly report HTTP 403/421 rather than treating every established connection as a successful bypass.
-- Never silently install a trusted root CA, change global routes/DNS, inject firewall rules, or capture other programs' traffic.
-- By default use only test destinations that we control or have permission to test; no high-volume scanning.
-- Prefer a focused direct-access tool rather than adding a full VPN/TUN stack prematurely.
+## Architecture decision: use the existing cores
 
-## Architecture decisions
+Before adding networking code, ask: **does the selected upstream core already provide this capability?** If yes, configure and use it. Add Go/Kotlin code only for a demonstrated integration or KTest policy gap. Record that gap and its consumers before introducing another implementation.
 
-- **Language: Go 1.27.2 (2026-10-08 security release).** Single binaries across Windows, Linux and macOS, standard-library HTTP/TLS instrumentation, rapid iteration. Consider Rust/native packet adapter only when a measured requirement justifies packet capture/injection. Do not reinvent Xray or Zapret internals.
-- `cmd/ktest`: non-privileged and bounded probe CLI.
-- `internal/probe`: direct HTTP(S) trials with explicit TCP family (4/6), optional pinned dial address, TLS ServerName, HTTP Host, connection timing and JSONL results. It does not claim to evade DPI.
-- Future `internal/strategy`: isolated driver interface for validated external or local-only methods; no automatic risky network modifications.
-- Research is separated from tested capability in `docs/RESEARCH.md` and `docs/EXPERIMENTS.md`.
-
-## Phases and gates
-
-| Phase | Deliverable | Exit gate | Status |
-| --- | --- | --- | --- |
-| P0 | Reproducible direct-network diagnostic: DNS, TCP, TLS, HTTP, IPv4/IPv6, Host/SNI, optional dial override | Local TLS tests and CI pass | Done; initial GitHub Actions passed |
-| P1 | Repeatable A/B variants: baseline, pinned dial, HTTP Host, TLS SNI and combined, with phase and status summaries | Local tests and GitHub CI pass; field evidence is a separate gate | Implemented locally; GitHub CI pending |
-| P2 | Research adapters for documented TLS-layer differences and standalone Zapret2/ByeDPI/SNI-Spoofing-Go, only after permission and platform fit | Validate at least one repeatable gain over P1 and no breakage | Research only |
-| P3 | Opt-in direct service access for a small supported set of hosts, no system-wide CA | Verified certificate handling and leak tests | Not started |
-| P4 | Optional system-wide proxy/TUN integration | Prove data-plane consistency, DNS/IPv6 leak prevention, no silent fallback | Deferred |
-
-## Decision gates / possible failures
-
-1. No TCP connection: TLS/SNI adjustments cannot rescue packets discarded before handshake; diagnose routing/IP policy first.
-2. TCP works, TLS fails: examine TLS versions, SNI/certificate verification, reset behavior. This is the relevant precondition for TLS-parser differential research.
-3. TLS works but HTTP responds 421: host-routed fronting probably rejected by the service; do not misclassify as bypass. See AWS CloudFront guidance.
-4. HTTP responds 403: request arrived, but authorization/access denied; do not call it success.
-5. HTTP succeeds but end-to-end application fails: app pinning, separate hostnames, QUIC, cookies, DNS, IP-based restrictions and security model require independent investigation.
-6. Regional accessibility claims require real on-ISP evidence and must be explicitly time-bounded.
-
-## Pending field evidence
-
-- Anonymous measurements on selected Iranian mobile + fixed ISPs with **opt-in**. Record only aggregate protocol outcomes and coarse network class; keep raw logs off public GitHub.
-- Baseline TCP4 vs TCP6 behavior; SNI/Host differences with controlled test services.
-- Determine whether an existing Windscribe-connected route can bootstrap data, rather than claiming that a partial Google connection equals VPN egress.
-- Review third-party tool licenses and security posture before vendoring or integration.
-
-## P1 implementation notes
-
-- `ktest compare` produces a single JSON object containing samples and per-variant summaries, using 1–10 rounds with alternating order. Execution requires `-authorized`. Certificate verification stays enabled; no root CA is installed.
-- Optional `-connect 127.0.0.1:PORT` lets the comparison connect to a separately running local TCP forwarder. This repository neither downloads nor launches privileged packet-desync programs; comparisons are not themselves injected fake ClientHellos.
-- JSON output can contain IP addresses, URLs and network error strings. Keep raw field reports off public GitHub.
-- Go and CI dependencies were updated after checking upstream release notes. See `docs/UPSTREAM.md`.
-
-## P2: evidence-first adaptive diagnosis (2026-10-13)
-
-- New opt-in `-proof` mode verifies a fresh, random 128-bit challenge echoed by a controlled HTTPS origin. A success-looking 200 without proof, and every 3xx redirect, is **not** accepted as origin reachability. The nonce is not included in JSON results.
-- `ktest echo` binds only to loopback. For remote experiments, put it behind the HTTPS reverse proxy of infrastructure you control; do not expose its raw HTTP port.
-- `ktest compare -authorized -proof` produces per-variant proof counts plus one cautious machine-readable assessment: `baseline_available`, `candidate`, `inconclusive`, `path_unreachable`, or `unverified`.
-- A `candidate` means an alternate path verified *the controlled origin* in all tested rounds while the baseline did not. It is **not** proof of a generally functioning bypass and is not promoted without multiple networks, time windows, and independent verification.
-- Intentionally avoid downloading/executing elevated third-party packet injection tools or altering routes in this phase. A failed trial should update the hypothesis, not cause blind retry storms.
-
-### Hypothesis queue / failure-driven ordering
-
-| Observation | Next experiment | Why |
+| Responsibility | Owner | KTest integration boundary |
 | --- | --- | --- |
-| All variants fail before TCP establishment | IPv4 vs IPv6, alternate permitted access network, direct route checks | TLS/parser changes cannot restore a missing IP path |
-| TCP works but TLS fails | Compare valid TLS identities, verified certificate, timing and path on controlled endpoints | TLS/SNI inspection or server policy is plausible, not proven |
-| TLS works but HTTP 301/302/403/421 | Analyze redirect/authorization/provider routing separately | Never call these proof of internet access |
-| 2xx without matching challenge | Treat as unverified/maybe intercepted or cached response | Avoid success false positives |
-| One alternate returns repeated valid nonce | Candidate only, then collect paired negative controls and network diversity | Separate temporal fluctuation from causal mechanism |
-| Small bootstrap channel available but direct QUIC path works after setup | *Research* QUICstep connection-migration method, only with compatible sites | Potential to reduce traffic in limited channel; no blanket Iran claim |
+| MASQUE H2/H3, WireGuard, Gool and nested MASQUE | Aether | Select a supported method and private paths; run the unchanged binary |
+| Gateway discovery, native tunnel validation and reconnect within a method | Aether | Observe lifecycle; do not add another endpoint scanner or reconnect loop for that tunnel |
+| Tor circuits and bridge/transport discovery | Aether's built-in Arti integration and bundled Lyrebird | Select Aether's Tor backend; verify Tor egress; no independent Go Tor manager |
+| Psiphon transport and CDN mode | Aether and its bundled Psiphon helper | Use Aether's Psiphon options and explicit helper path; no independent Go Psiphon engine |
+| Local Xray and ByeDPI techniques | Existing Xray / ByeDPI cores | Adapt their configuration and lifecycle where Aether does not provide the required local-only behavior |
+| Windscribe VPN authentication and final tunnel | Windscribe | Integrate the required bootstrap/carrier; do not implement its VPN protocol or substitute a Psiphon exit |
+| Android TUN packet conversion | HEV / tun2socks | Supply the fd and selected SOCKS endpoint; no second TCP/IP or VPN stack in Go/Kotlin |
+| Mode policy, verified-exit eligibility and protected-route pinning | KTest | Keep only policy not supplied equivalently by the chosen core |
+| App lifecycle, permissions and UI | Android plus a narrow Go bridge | Start/stop/cancel, private state, process cleanup, progress and errors |
 
+The pinned Aether v2.3.0 release already builds Tor support with `--features tor`. Its [Psiphon build script](https://github.com/CluvexStudio/Aether/blob/v2.3.0/psiphon-build.sh) uses `CluvexStudio/psiphon-tunnel-core`, branch **`shirokhorshid`**, pinned to `83aa73b9b982e7421e00117f5b0c5aceb5dda452`. The prepared x86_64 helper's Go build metadata matches that revision with `vcs.modified=false`. A separate Psiphon download/build path is unnecessary for the selected bundle. This is provenance, not evidence that a fork is faster or that a live tunnel works. See [third-party notices](THIRD_PARTY_NOTICES.md) and the pinned upstream [release build](https://github.com/CluvexStudio/Aether/blob/v2.3.0/.github/workflows/release.yml), [runtime](https://github.com/CluvexStudio/Aether/blob/v2.3.0/aether/src/lib.rs) and [SOCKS implementation](https://github.com/CluvexStudio/Aether/blob/v2.3.0/aether/src/socks.rs).
 
-## P3: independent DNS / TCP / TLS observations (2026-10-13)
+## Current status
 
-- `ktest path` performs low-volume, independent DNS resolution, TCP connection and certificate-verified TLS handshake checks. It sends **no HTTP request** and makes no claim about a working website, tunnel or censorship bypass.
-- Uses `-network tcp4` or `-network tcp6` to isolate IP-family reachability. A pinned `-connect host:port` is measured independently of DNS: DNS may fail while pinned TCP/TLS succeeds. TLS errors remain separate from TCP errors.
-- Always verify certificate identity; never set `InsecureSkipVerify`. No packet injection, scanning engine, firewall changes or device-wide proxy installation.
-- GitHub Actions now builds user-invoked diagnostic executables for Windows amd64, Linux amd64/arm64 and macOS arm64, with SHA-256 manifests. These are temporary workflow artifacts, not public releases or VPN clients.
-- **Decision gate:** only after repeatable findings from opt-in, real-ISP controlled-target trials consider a specialized TCP/TLS strategy. QUIC-specific work requires separate UDP path evidence and a QUIC-migration-compatible origin.
+| Area | Checked implementation | Required to finish |
+| --- | --- | --- |
+| Shared lifecycle | CLI/mobile SOCKS/HTTP session lifecycle, scoped child-process cleanup | Thin Android native-core start/stop integration; do not port the whole CLI supervisor |
+| Native bundle | Pinned Android Aether/Psiphon/Lyrebird payloads, archive/file verification and packaging script | Execution under the app UID, correct private state/helper paths, distribution notices |
+| Balanced / Fast | Existing Go direct/splitting subset and shared routing policy | Wire existing native local strategies and validate mode behavior on a device |
+| Aether | External loopback SOCKS works at the API level; shared method catalog and native argument construction | Launch the packaged Aether binary from the Android service and validate a real session |
+| Tor / Psiphon | Aether already supplies these backends; desktop modes select them | Android lifecycle/configuration and mode-specific live verification; no new Tor/Psiphon engine |
+| Windscribe / through Aether | Local-only / WARP-carrier policies and a shared carrier probe exist | Android bootstrap and supported Windscribe integration; authenticated end-to-end data |
+| UDP / DNS / IPv6 | Shared Go UDP relay, wire DoH, TCP DNS and IPv6 address encoding have loopback coverage | Prefer native packet support when the selected backend supports it; prove public egress, DNS behavior and HEV/TUN forwarding per mode |
+| Whole-device VPN | VpnService and HEV adapter source exists | Device packet-path, feedback-loop, leak and reconnect validation; readiness gates remain false |
+| GUI / tools | Connection, Tools and Settings; bounded CDN scan and selected diagnostics | Connect method controls to native launch; complete required CLI tool/settings parity and interaction checks |
+| MITM / CA | Existing optional Go implementation retained | Review equivalent Xray functionality before extending it; preserve explicit consent and domain/trust restrictions |
+| Verification / release | Go CI, Android source compilation, pinned payload verification; limited emulator shell help/version checks | App-UID/JNI/device/network/battery/signing evidence; APK/AAR production remains on hold |
 
+An `Aether to Tor` / `Aether to Psiphon` label selects an Aether backend; it does not authorize adding a WARP hop to the current Tor-only/Psiphon-only policies. Aether does not replace Windscribe, Xray or ByeDPI merely by having Tor/Psiphon support. See [mode contracts](CONNECTION_MODES.md).
 
-## P4: working-method integration (2026-10-13)
+## Implementation order and acceptance gates
 
-The user requested prioritizing already deployed, user-reported anti-DPI tools over an expanding diagnostic test framework. Implemented \`ktest access\`: an explicit domain-scoped HTTP CONNECT proxy and optional lifecycle management for the official, hash-verified SNI-Spoofing-Go v0.7.2 binary. See \`docs/ACCESS.md\`.
+1. **Thin native integration.** Connect the verified native bundle to Android's service using the shared process runner, supported method flags, explicit helper paths and private state. Let Aether perform its own scans and native reconnects. Cancellation must terminate owned descendants. Native exit must clear connection eligibility. Port required behavior, not all CLI machinery.
+2. **Validate the simplest packet path.** For a compatible single-core mode, evaluate HEV directly against that core's SOCKS endpoint before extending the Go relay. A direct path is acceptable only with equivalent mode enforcement, verification expiry and fail-closed behavior. Aether SOCKS UDP support does not establish UDP support in every Tor/Psiphon backend. Mixed modes may still require KTest routing. Validate DNS/UDP/IPv6, feedback prevention, disconnect and network changes before enabling VPN readiness gates.
+3. **Remove superseded management.** For each proposed deletion, identify live callers and the upstream replacement, then verify the same behavior through that replacement. Review CLI profile racing, periodic health retirement, staged enrollment and the Go proxy in pure-core modes. Keep explicit comparison tools separate from native gateway scanning. Do not kill a reconnecting core solely because a diagnostic destination is blocked.
+4. **Finish the interface and mode adapters.** Expose existing core options and existing Go diagnostic functions. Complete the supported Windscribe path separately. Verify progress, cancellation, errors, settings and reconnect through real interaction; avoid new networking engines in Kotlin.
+5. **Validate and release only when authorized.** Run source checks first, then app/native/JNI/HEV tests on physical phones and relevant networks, leak and battery tests, licensing/notices and stable signing. The standing hold on producing a fresh APK/AAR remains in effect; do not dispatch the manual release workflow as part of source work.
 
-Status: **implemented, local pass only**. The upstream engine must still be assessed on an actual filtered network. The MITM-DomainFronting v23 route is deferred due to unresolved failure reports and CA trust implications. We will not claim universal access, a changed public IP, or full-system VPN support.
+## Code reuse audit (2026-10-17)
 
-Next meaningful improvements require a *specific confirmed-working combination* and one real destination that serves it: save only non-sensitive successful combinations, keep automatic profile switching opt-in, and do not broaden to unrelated DPI experiments without evidence.
+| Code / responsibility | Decision | Evidence / remaining condition |
+| --- | --- | --- |
+| Unused `warpManager.waitWhileConnected` / `waitRetry` | Removed | No callers; the active manager loop already handles those states |
+| `aetherLauncher` and manager DNS-result plumbing | Removed | Launcher ignored the DNS result; both native launch sites now call the shared `aether.Run` directly |
+| `internal/coreprocess` | Retain | OS process groups / Job Objects own child cleanup; upstream tunnel reconnect does not replace app-owned process lifetime |
+| `internal/aether` profile, identity and bundle contracts | Retain, keep narrow | Consumed by CLI/mobile; no MASQUE/WireGuard/Tor/Psiphon protocol implementation was added here |
+| Staged identity enrollment | Retain pending equivalent native lifecycle proof | Native core performs registration; KTest staging currently protects saved identities from replacement and suppresses credential output |
+| Go SOCKS/UDP/DNS and adaptive routing | Retain for existing consumers; do not make it mandatory for every future native mode | Current mixed-mode and mobile consumers depend on it; native-mode simplification requires equivalent policy and traffic evidence first |
+| CLI cross-profile selection and health retirement | Review before reuse on Android | Choosing between independent methods is distinct from native endpoint scanning; copying the entire supervisor is no longer a prerequisite |
+| Go MITM/fronting versus Xray | Replacement candidate, not removed yet | Compare actual configuration support and preserve explicit CA consent, certificate checks and scoped routing before deleting a working path |
 
+## Evidence and safety boundaries
 
-## P5: immediate terminal bootstrap (2026-10-15)
-
-- Added \`ktest revive\` as a shared Go-based CLI control plane for Windows, Linux, and macOS. It launches **official Xray** with the already-saved \`Serverless-for-Iran.json\` subscription profile B (or A). No network download is performed during launch.
-- Selects a single \`fragB\` or \`fragA\` profile; overwrites inbound to bind only 127.0.0.1:10808; runs \`xray version\` and \`xray run -test\` before starting. It keeps other upstream profile routing unchanged and does not mutate system proxy/DNS/TUN/firewall.
-- Xray is a separate upstream native executable with asset files, even though \`ktest\` shares Go source across OSes. No implication that a single identical binary runs natively on every platform.
-- **Critical:** this only exposes an opt-in HTTP/SOCKS proxy for applications that support one. It does **not** intercept WireGuard UDP or make Windscribe's app use that proxy; routing the VPN transport would require protocol-aware integration or OS-level packet hooks.
-- \`docs/REVIVE.md\` has offline setup and current restrictions. Root privileges and MITM CA are not required for the Xray profile itself; upstream tool/platform behavior may change.
-- Keep existing SNI-Spoofing-Go \`ktest access\` as a second method. ByeDPI remains an external standalone fallback rather than an auto-installed dependency; documented as SOCKS-only. Zapret2 can affect non-proxied traffic but is OS-specific and privileged; not falsely marketed as portable.
-- Evidence: Ahmad-2213's Sep 20–21 reports on #28 tested only Simin/Frough datacenters; specifically warned no mobile ISP/Android proof. The concrete observations are hypotheses, not globally usable values.
-
-
-## P6: narrow fronting architecture and practical edge selection (2026-10-15)
-
-Decision: **one CLI, multiple explicitly selected strategies**, not a blindly stacked chain. Use Xray's own direct/MITM functionality for sites known to support it; optional TLS/TCP splitting only for networks where it improves accepted handshakes; independently configured domain shadowing only where we control the CDN account/domain/origin. Do not pretend arbitrary CloudFront/Cloudflare Host-to-SNI mismatches work.
-
-- `ktest edges`: bounded ranker for 1–12 **explicit**, permitted candidate IPv4/IPv6 addresses. Performs 1–3 real HTTPS requests per candidate, connecting directly to the IP while retaining the configured TLS certificate name and HTTP Host. No ICMP, wide CIDR scans, root CA installation, or shell calls. Separates TLS-only from unverified 2xx and controlled-origin nonce proof.
-- No IP considered healthy solely from ping or TCP success. HTTP 421/403 is **not** fronting success; a 2xx without independently verified origin remains `http_2xx_unverified`. A valid local MITM CA does not authenticate the remote target.
-- Next fronting integration gate: parameterized Xray MITM v23 profile with **explicit** certificate paths; verify actual origin and fail closed on TLS verification failure, refuse untrusted CA auto-install; route only provider-confirmed host mappings. Keep optional shadow/CDN reverse-proxy profile separate to avoid accidental assumption of serverless reachability.
-- LICENSE decision is separate from TLS **certificate** issuance. Before vendoring GPL-3.0 components, review reciprocal-license obligations; Xray MPL-2.0, Lantern/domainfront Apache-2.0. Running a separate binary is architecturally different from copying its source into ktest.
+- DoH, DoT, ECH and individual diagnostic endpoints can be filtered independently. Failure is an observation about that path, not proof that all Internet access is unavailable. No silent plaintext DNS escape from a strict mode.
+- Normal `windscribe` stays local-only. Only explicit `windscribe-aether` uses a WARP carrier; neither may silently become a Psiphon/Tor route.
+- Preserve certificate verification for application/diagnostic HTTPS. Pinned Aether v2.3.0 has upstream TLS/API/reconnect limitations; reusing its core does not erase them. See [network diagnosis](NETWORK_DIAGNOSIS.md).
+- Never silently install a CA or enable global proxy, routes, DNS or TUN. Keep credentials, identities, personal IP logs and raw field measurements out of this public repository. Bound scans and use permitted targets.
+- Passing CI, `--help`, a SOCKS listener or HTTP CONNECT 200 is not proof of a working VPN. Report tested, failed, untested and not validated separately.

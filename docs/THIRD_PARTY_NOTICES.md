@@ -13,7 +13,7 @@ The ktest menu and scanner are an independent Go orchestration project. The pack
 
 - **Aether v2.3.0** (CluvexStudio), https://github.com/CluvexStudio/Aether — AGPL-3.0. A Rust WARP core (MASQUE over HTTP/2 and HTTP/3) run as a separate, unmodified process only when the user enables the WARP exit; the official Windows archive is SHA-256 pinned (0cc32dd2d7573f91d2e55d4f427bfe4c6f6252342494e1b410d61b12d1e4dc79) and the license text is in THIRD_PARTY/Aether-AGPL-3.0.txt. The corresponding source is at the URL above. Enabling it registers a free anonymous Cloudflare WARP identity on the user's PC; traffic that uses it leaves through Cloudflare.
 
-- **psiphon-tunnel-core** (Psiphon Labs, https://github.com/Psiphon-Labs/psiphon-tunnel-core, GPL-3.0) and **lyrebird** (Tor Project, https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird, BSD-style) are the unmodified helpers that ship in the `pt/` folder of the pinned Aether archive. They are extracted next to `aether.exe` only when the user enables the exit paths, and only Aether starts them.
+- **psiphon-tunnel-core** (Psiphon Labs; bundled build from [CluvexStudio's fork](https://github.com/CluvexStudio/psiphon-tunnel-core), branch `shirokhorshid`, revision `83aa73b9b982e7421e00117f5b0c5aceb5dda452`, GPL-3.0) and **lyrebird** (Tor Project, https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird, BSD-style) are the unmodified helpers that ship in the `pt/` folder of the pinned Aether archive. They are extracted next to `aether.exe` only when the user enables the exit paths, and only Aether starts them. Psiphon's original upstream is https://github.com/Psiphon-Labs/psiphon-tunnel-core; no separate KTest Psiphon engine is used.
 
 TUN may temporarily change system routes or DNS behavior. Windows requires Administrator approval; it is never silently enabled. An unexpected crash may require manual network adapter recovery.
 
@@ -26,7 +26,11 @@ packaging script verifies both levels before copying any file into `jniLibs`.
 
 The x86_64 Psiphon executable's Go build metadata identifies the source revision
 `83aa73b9b982e7421e00117f5b0c5aceb5dda452`, with `vcs.modified=false`; Aether's
-pinned build script uses the CluvexStudio/psiphon-tunnel-core fork at that commit.
+pinned build script uses the CluvexStudio/psiphon-tunnel-core fork's
+`shirokhorshid` branch at that commit. The same release builds Aether with Tor
+support through Arti; Lyrebird is its pluggable-transport helper, not a second
+standalone Tor engine. KTest uses these through Aether instead of acquiring or
+implementing parallel Tor/Psiphon cores.
 The x86_64 Lyrebird metadata identifies revision
 `fc105a03c0e0acc2479301c361c012ffed359c43`, also unmodified. The corresponding
 sources and license notices must be preserved in Android distribution just as

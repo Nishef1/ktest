@@ -18,13 +18,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
-func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, dns *dnscheck.Result, u *term, full bool) (*warpManager, error) {
+func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, u *term, full bool) (*warpManager, error) {
 	if o.mode == ModeWindscribe {
 		return nil, errors.New("managed exits are prohibited in local-only Windscribe mode")
 	}
@@ -94,7 +93,7 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	if len(history.Results) > 0 {
 		u.Note("Reusing this network's measured profile order; checking live tunnels again")
 	}
-	return &warpManager{o: o, proxy: proxy, dns: dns, t: u, profs: available, ech: ech, echIP: ip, network: key, core: core}, nil
+	return &warpManager{o: o, proxy: proxy, t: u, profs: available, ech: ech, echIP: ip, network: key, core: core}, nil
 }
 
 // All destinations are neutral/public. Never probe an AI service through an
@@ -300,7 +299,7 @@ func runAetherDiagnosis(ctx context.Context, u *term, base string, speed bool, b
 	}
 	o := defaultConnectOptions(base)
 	o.mode, o.tun, o.aetherMethod = ModeAether, false, "auto"
-	m, err := newWarpManager(ctx, o, nil, nil, u, true)
+	m, err := newWarpManager(ctx, o, nil, u, true)
 	if err != nil {
 		u.Line(toneWarn, "%v", err)
 		return 1

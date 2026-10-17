@@ -208,7 +208,7 @@ func TestWarpState(t *testing.T) {
 }
 
 func TestWindscribeCannotLaunchAetherOrPsiphon(t *testing.T) {
-	note, stop := startWarp(context.Background(), connectOptions{mode: ModeWindscribe}, nil, nil, nil)
+	note, stop := startWarp(context.Background(), connectOptions{mode: ModeWindscribe}, nil, nil)
 	if stop == nil {
 		t.Fatal("expected no-op teardown")
 	}

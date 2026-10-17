@@ -1,6 +1,8 @@
-# KTest Android — Go core with a native UI
+# KTest Android — existing native cores with shared Go integration
 
-Android is a **thin client of the existing KTest Go core**. Network protocols, route policy, foreign-exit checks, ECH/CDN diagnostics and SOCKS5 proxy logic must not be duplicated in Kotlin.
+Android uses the **existing upstream networking cores**, a narrow shared Go integration layer and a native UI. Aether owns MASQUE/WireGuard, native gateway scans/reconnect and its Tor/Psiphon backends. Xray, ByeDPI and Windscribe retain their respective roles. Do not reimplement these engines in Go or Kotlin, or port the entire CLI supervisor as an Android prerequisite. The [engineering roadmap](../docs/ROADMAP.md) records responsibility boundaries, remaining work and the code reuse audit.
+
+Keep Go for required KTest policy, lifecycle, shared diagnostics and existing mixed-mode routing. Prefer the selected core's native SOCKS/HTTP and packet capabilities where they satisfy the mode contract; an additional Go proxy is not a universal requirement. Any simplified path must preserve verified-exit checks, expiry and fail-closed routing.
 
 ## Single-source architecture
 
@@ -24,12 +26,12 @@ The Go policy catalog has all seven desktop modes, but **not every launcher is a
 | Balanced | Go in-process plain and ClientHello-splitting proxy subset |
 | Fast | Same Go subset with shared Fast policy |
 | Aether | Optional existing CLI-style external loopback SOCKS5 exit only |
-| Aether to Tor | Disabled until the managed CLI transport can run on Android |
+| Aether to Tor | Disabled pending Android lifecycle integration of Aether's existing Tor backend |
 | Windscribe | Disabled pending portable original WStunnel / Xray / ByeDPI orchestration |
-| Aether to Psiphon | Disabled; the CLI requires managed Aether Psiphon profiles |
+| Aether to Psiphon | Disabled pending Android lifecycle integration of Aether's bundled Psiphon backend |
 | Windscribe through Aether | Disabled until the original two-core carrier is portable |
 
-This is *not yet feature parity* with `connectSession` because the original CLI starts external binaries, profiles and helpers and performs platform-specific network changes. Do not report desktop-dependent routes as Android connections without porting that code.
+This is *not yet feature parity* with `connectSession`. Android must implement the required lifecycle and OS integration of the existing binaries and helpers; it need not copy all desktop orchestration. Do not report a mode as connected until its selected native backend actually runs and its traffic is verified.
 
 ## Android VpnService adapter
 
@@ -77,6 +79,12 @@ unmodified Aether, Psiphon and Lyrebird executable. It is shared by the Python
 packager and the Go runtime verifier; a missing, modified or wrong-ABI bundle
 cannot be accepted as a native core installation.
 
+Aether already includes Tor through Arti and ships the Psiphon helper built
+from CluvexStudio's `shirokhorshid` branch, pinned to
+`83aa73b9b982e7421e00117f5b0c5aceb5dda452`. Use these backends through Aether;
+do not add separate Tor/Psiphon implementations or a second helper acquisition
+path for this bundle. See [provenance](../docs/THIRD_PARTY_NOTICES.md).
+
 ```sh
 # Download/verify official artifacts and ELF architecture/linker/page alignment.
 # This produces no APK/AAR and does not start a tunnel.
@@ -105,26 +113,27 @@ compatibility on that emulator, **not** execution under the app UID, managed
 network connectivity, a Tor circuit, whole-device routing or leak protection.
 
 The source API now exposes `AetherProfileCatalog` and `InspectAndroidBundle`.
-Connecting the shared supervisor/enrollment flow to Android's connection service
-is still required; profile definitions or packaged files alone are not an active
-Aether/Psiphon/Tor connection.
+Connecting the existing native cores to Android's connection service through
+the shared process runner, private paths and required policy checks is still
+required. Aether owns its gateway scans and native reconnect. Profile
+definitions or packaged files alone are not an active Aether/Psiphon/Tor connection.
 
 ## Release gate
 
 **Do not run the APK/AAR workflow without approval.** `.github/workflows/android-build.yml` remains **manual-only**. Go CI runs formatting, vet, Linux/Windows tests and race tests without creating Android APKs or feature-branch distributable artifacts.
 
-Before calling this an Android port complete: finish extracting native-core orchestration from `cmd/ktest/connectSession`, package the actual managed Aether/Tor/Psiphon/Xray/ByeDPI/Windscribe contracts for Android, and validate the complete native HEV/JNI packet path on physical phones and real networks. An Aether release supporting Termux is not automatically an app integration: Android 10+ restricts executing downloaded files from a writable app home. Native packaging must meet [Android's executable-code rules](https://developer.android.com/about/versions/10/behavior-changes-10#execute-permission), rather than adding a download-and-exec workaround.
+Before calling this an Android port complete: wire the smallest required native-core lifecycle and mode adapters, use Aether's existing Tor/Psiphon support, complete the remaining Xray/ByeDPI/Windscribe integration, and validate the complete native HEV/JNI packet path on physical phones and real networks. Evaluate HEV directly against a compatible selected core before expanding the Go packet relay; preserve all mode/egress policy and validate each backend's actual UDP/DNS/IPv6 support. An Aether release supporting Termux is not automatically an app integration: Android 10+ restricts executing downloaded files from a writable app home. Native packaging must meet [Android's executable-code rules](https://developer.android.com/about/versions/10/behavior-changes-10#execute-permission), rather than adding a download-and-exec workaround.
 
 ### Implementation status, 2026-10-17
 
 | Area | Implemented in source | Still required |
 | --- | --- | --- |
-| Shared Go connection | SOCKS/HTTP/probe lifetime; Aether profiles, identity/enrollment contracts and scoped native process execution | Complete shared supervisor and Android connection integration |
+| Shared Go connection | SOCKS/HTTP/probe lifetime; Aether profiles, identity/enrollment contracts and scoped native process execution | Thin Android native-core lifecycle and policy integration; no wholesale supervisor port |
 | Balanced / Fast | Existing Go TCP routes, packet DNS and verified-exit UDP | Xray/ByeDPI/native strategy bundle and device evidence |
-| Aether | External SOCKS path; shared native profile/enrollment implementation; pinned Android packaging and runtime verification | Wire managed supervisor/enrollment to Android and validate actual native sessions |
-| Tor / Psiphon | Existing desktop implementations preserved | Managed Android transport integration |
+| Aether | External SOCKS path; shared profile/enrollment adapters; pinned Android packaging and runtime verification | Wire the packaged core to Android and validate actual native sessions; reuse core scans/reconnect |
+| Tor / Psiphon | Existing Aether backends, including bundled shirokhorshid Psiphon | Android lifecycle/configuration and live verification through those same backends |
 | Windscribe / through Aether | Shared carrier probe exposed to Android | Operational native bridge, catalog/profile integration and authenticated data |
-| UDP / DNS | Real SOCKS UDP, wire DoH, DNS over UDP/TCP, no direct UDP fallback | Public-exit data-plane tests and HEV/TUN validation |
+| UDP / DNS | Real SOCKS UDP, wire DoH, DNS over UDP/TCP, no direct UDP fallback | Evaluate native-core packet support before extending Go; public-exit data-plane tests and HEV/TUN validation |
 | IPv6 / whole-device VPN | IPv6 packet encoding and platform wiring | Dual-stack public egress, leak tests and device approval gates |
 | CDN / ECH tools | Shared four-provider scanner, one-route front/ECH UI, multi-edge Go API | Full CLI tool parity and rendered/device verification |
 | MITM / CA | Go implementation preserved, no automatic trust changes | Explicit Android consent/trust flow and optional activation |

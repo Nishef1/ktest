@@ -18,9 +18,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/Nishef1/ktest/internal/aether"
-	"github.com/Nishef1/ktest/internal/dnscheck"
 )
 
 // The WARP exit is the one path that does not depend on what a site's CDN
@@ -105,22 +102,8 @@ func warpState(base string) string {
 	return "partial"
 }
 
-// aetherLauncher runs Aether until ctx ends.
-func aetherLauncher(bin string, args []string, output io.Writer) launcher {
-	return func(ctx context.Context, _ *dnscheck.Result) error {
-		err := aether.Run(ctx, bin, args, output)
-		if ctx.Err() != nil {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("Aether exited: %w", err)
-		}
-		return errors.New("Aether exited unexpectedly")
-	}
-}
-
-// fetchAether downloads the pinned Aether release, verifies its SHA-256 and
-// extracts aether.exe into base/cores. Nothing else in the archive is used.
+// fetchAether verifies the pinned release and extracts Aether plus its
+// whitelisted Psiphon/Lyrebird helpers into base/cores.
 func fetchAether(ctx context.Context, url, sha, base string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

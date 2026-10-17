@@ -932,7 +932,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		warpNote = "disabled: local anti-DPI only; Psiphon/Aether/WARP/Tor and foreign exits prohibited"
 		stopWarp = func() {}
 	} else {
-		currentExitStatus, stopWarp = startWarp(ctx, o, proxy, &dns, t, monitor)
+		currentExitStatus, stopWarp = startWarp(ctx, o, proxy, t, monitor)
 	}
 	defer stopWarp()
 

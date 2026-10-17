@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -73,8 +74,8 @@ func startTor(ctx context.Context, o connectOptions, p *smartproxy.Proxy, t *ter
 	if o.verbose {
 		logs.tee = t.w
 	}
-	l := aetherLauncher(bin, []string{"--tor-only", "--bind", fmt.Sprintf("127.0.0.1:%d", torOnlyPort), "--log-level", "warn"}, logs)
-	go func() { rc.err = l(torCtx, nil); close(rc.done) }()
+	args := []string{"--tor-only", "--bind", fmt.Sprintf("127.0.0.1:%d", torOnlyPort), "--log-level", "warn"}
+	go func() { rc.err = aether.Run(torCtx, bin, args, logs); close(rc.done) }()
 	verified := make(chan struct{})
 	go func() {
 		defer close(verified)

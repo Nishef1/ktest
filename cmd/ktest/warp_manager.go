@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
-	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -98,7 +97,6 @@ func aetherPort(i int) int { return aetherBasePort + i }
 type warpManager struct {
 	o             connectOptions
 	proxy         *smartproxy.Proxy
-	dns           *dnscheck.Result
 	t             *term
 	profs         []aetherProfile
 	monitor       *windscribeMonitor
@@ -137,7 +135,7 @@ func (m *warpManager) status() string {
 
 // startWarp runs the search for a working exit in the background and returns
 // the note for the result box and the function that stops everything.
-func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, dns *dnscheck.Result, t *term, monitors ...*windscribeMonitor) (func() string, func()) {
+func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, t *term, monitors ...*windscribeMonitor) (func() string, func()) {
 	fixed := func(note string) (func() string, func()) { return func() string { return note }, func() {} }
 	if o.mode == ModeWindscribe {
 		// Safety boundary: even accidental calls must not launch Aether,
@@ -153,7 +151,7 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	if o.mode == ModePsiphon && !fileOK(psiphonCore(o.base)) {
 		return fixed("Psiphon unavailable: helper missing; `ktest warp -enable` fetches it")
 	}
-	m, err := newWarpManager(ctx, o, proxy, dns, t, false)
+	m, err := newWarpManager(ctx, o, proxy, t, false)
 	if err != nil {
 		return fixed("off - " + err.Error())
 	}
@@ -177,50 +175,6 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 
 // maxExits is how many tunnels are kept open at once.
 const maxExits = 3
-
-// waitWhileConnected preserves an active foreign transport if Windscribe
-// needs it as its own OpenVPN TCP upstream; it only pauses NEW discovery.
-func (m *warpManager) waitWhileConnected(ctx context.Context) bool {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for m.monitor != nil && m.monitor.Connected() {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-ticker.C:
-		}
-	}
-	return ctx.Err() == nil
-}
-
-// waitRetry allows immediate recovery when Windscribe changes from connected
-// to disconnected. Untried transports get a prompt turn; only a completed failed
-// sweep backs off, so unavailable WARP cannot starve independent carriers.
-func (m *warpManager) waitRetry(ctx context.Context, delay time.Duration) bool {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	tick := time.NewTicker(2 * time.Second)
-	defer tick.Stop()
-	sawConnected := m.monitor != nil && m.monitor.Connected()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-timer.C:
-			return true
-		case <-tick.C:
-			if m.monitor == nil {
-				continue
-			}
-			if m.monitor.Connected() {
-				sawConnected = true
-			}
-			if sawConnected && m.monitor.State() == windscribeDisconnected {
-				return true
-			}
-		}
-	}
-}
 
 // run keeps established foreign TCP transports alive when Windscribe reports
 // Connected; killing one would also kill an OpenVPN session using that path.
@@ -470,13 +424,13 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 	}
 	cctx, cancel := context.WithCancel(processCtx)
 	rc := &runningCore{cancel: cancel, done: make(chan struct{})}
-	l := aetherLauncher(aetherBinary(m.o.base), aetherRunArgs(i, p, port), logs)
+	args := aetherRunArgs(i, p, port)
 	go func() {
 		defer close(rc.done)
 		if logFile != nil {
 			defer logFile.Close()
 		}
-		rc.err = l(cctx, m.dns)
+		rc.err = aether.Run(cctx, aetherBinary(m.o.base), args, logs)
 	}()
 	// Once the VPN is back, unfinished discovery attempts must stop. Do not
 	// cancel a transport that has already passed try() and is carrying the VPN.
