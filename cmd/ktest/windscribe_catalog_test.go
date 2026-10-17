@@ -94,8 +94,11 @@ func TestCatalogRejectsUnsafeAmbiguousAndStaleMappings(t *testing.T) {
 	if err := c.replace("regional", []byte(strings.ReplaceAll(regionalNodeFixture, "node.example.com", "other.example.com")), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.endpoints("203.0.113.100"); len(got) != 0 {
-		t.Fatalf("mixed conflicting node identities: %+v", got)
+	// Conflicting snapshots must not mix IPs across node identities.
+	// The newer independently validated source remains eligible.
+	if got := c.endpoints("203.0.113.100"); len(got) != 2 ||
+		got[0].source != "regional/ip" || got[1].source != "regional/ip3" {
+		t.Fatalf("conflicting node endpoints not isolated: %+v", got)
 	}
 	for _, fetched := range []time.Time{time.Now().Add(-wsCatalogMaxAge - time.Minute), time.Now().Add(time.Hour)} {
 		c = newWSNodeCatalog()
