@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -276,13 +279,13 @@ func TestAetherHelpOptionMatchingAndEqualsValues(t *testing.T) {
 }
 
 func TestOfficialAetherAssetSelection(t *testing.T) {
-	for _, platform := range [][2]string{{"windows","amd64"},{"linux","amd64"},{"linux","arm64"},{"darwin","amd64"},{"darwin","arm64"}} {
-		url, hash, err := aetherArchiveFor(platform[0],platform[1])
+	for _, platform := range [][2]string{{"windows", "amd64"}, {"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}} {
+		url, hash, err := aetherArchiveFor(platform[0], platform[1])
 		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/v2.3.0/") {
-			t.Fatalf("%v: %s / %s / %v",platform,url,hash,err)
+			t.Fatalf("%v: %s / %s / %v", platform, url, hash, err)
 		}
 	}
-	if _,_,err := aetherArchiveFor("windows","386"); err == nil {
+	if _, _, err := aetherArchiveFor("windows", "386"); err == nil {
 		t.Fatal("unsupported package must be rejected")
 	}
 }
@@ -294,19 +297,40 @@ func TestTarGzAetherExtractionRejectsUnexpectedAndPublishesKnownEntries(t *testi
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	for _, v := range []struct{name, data string}{{"aether","core"},{"pt/psiphon-tunnel-core","psi"},{"pt/lyrebird","lyre"},{"unexpected","never"}} {
-		if err := tw.WriteHeader(&tar.Header{Name:v.name, Mode:0755, Size:int64(len(v.data)),Typeflag:tar.TypeReg}); err != nil {t.Fatal(err)}
-		if _,err := tw.Write([]byte(v.data)); err != nil {t.Fatal(err)}
+	for _, v := range []struct{ name, data string }{
+		{"aether", "core"}, {"pt/psiphon-tunnel-core", "psi"},
+		{"pt/lyrebird", "lyre"}, {"unexpected", "never"},
+	} {
+		if err := tw.WriteHeader(&tar.Header{
+			Name: v.name, Mode: 0755, Size: int64(len(v.data)), Typeflag: tar.TypeReg,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(v.data)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := tw.Close(); err != nil {t.Fatal(err)}
-	if err := gz.Close(); err != nil {t.Fatal(err)}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
 	h := sha256.Sum256(buf.Bytes())
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){_,_ = w.Write(buf.Bytes())}))
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(buf.Bytes())
+	}))
 	defer s.Close()
 	base := t.TempDir()
-	if err := fetchAether(context.Background(),s.URL+"/archive.tar.gz",hex.EncodeToString(h[:]),base); err != nil {t.Fatal(err)}
-	for _, name := range []string{"aether","pt/psiphon-tunnel-core","pt/lyrebird"} {
-		if !fileOK(filepath.Join(base,"cores",filepath.FromSlash(name))) {t.Fatalf("missing %s",name)}
+	if err := fetchAether(context.Background(), s.URL+"/archive.tar.gz", hex.EncodeToString(h[:]), base); err != nil {
+		t.Fatal(err)
 	}
-	if fileOK(filepath.Join(base,"cores","unexpected")) {t.Fatal("unexpected archive path extracted")}
+	for _, name := range []string{"aether", "pt/psiphon-tunnel-core", "pt/lyrebird"} {
+		if !fileOK(filepath.Join(base, "cores", filepath.FromSlash(name))) {
+			t.Fatalf("missing %s", name)
+		}
+	}
+	if fileOK(filepath.Join(base, "cores", "unexpected")) {
+		t.Fatal("unexpected archive path extracted")
+	}
 }
