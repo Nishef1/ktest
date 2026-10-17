@@ -147,7 +147,7 @@ func aetherRunArgs(i int, p aetherProfile, port int) []string {
 		"--bind", fmt.Sprintf("127.0.0.1:%d", port),
 		"--config", filepath.Join(warpDir(), fmt.Sprintf("run-%d.toml", i+1)),
 		"--masque-config", identityFile(),
-		"--wg-config", filepath.Join(warpDir(), "wg.toml"),
+		"--wg-config", wireguardIdentityFile(),
 	)
 }
 
@@ -185,15 +185,19 @@ func lastGoodFirst(ps []aetherProfile, last string) []aetherProfile {
 func aetherPort(i int) int { return aetherBasePort + i }
 
 type warpManager struct {
-	o         connectOptions
-	proxy     *smartproxy.Proxy
-	dns       *dnscheck.Result
-	t         *term
-	profs     []aetherProfile
-	logsMu    sync.Mutex
-	files     []*os.File
-	monitor   *windscribeMonitor
-	searching atomic.Bool
+	o            connectOptions
+	proxy        *smartproxy.Proxy
+	dns          *dnscheck.Result
+	t            *term
+	profs        []aetherProfile
+	logsMu       sync.Mutex
+	files        []*os.File
+	monitor      *windscribeMonitor
+	searching    atomic.Bool
+	enrollMu     sync.Mutex
+	enrollTried  map[string]bool
+	enrollRoutes []enrollmentRoute
+	ech, echIP   string
 }
 
 func (m *warpManager) status() string {
@@ -253,7 +257,7 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	}
 	_ = os.MkdirAll(warpDir(), 0o700)
 	last, _ := os.ReadFile(lastGoodFile())
-	m := &warpManager{o: o, proxy: proxy, dns: dns, t: t, profs: lastGoodFirst(profs, strings.TrimSpace(string(last)))}
+	m := &warpManager{o: o, proxy: proxy, dns: dns, t: t, profs: lastGoodFirst(profs, strings.TrimSpace(string(last))), ech: ech, echIP: ip}
 	if len(monitors) > 0 {
 		m.monitor = monitors[0]
 	}
@@ -482,6 +486,14 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 // try starts one profile and waits for its proxy port. On success the process
 // keeps running; on failure it is stopped.
 func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *runningCore) {
+	if !p.psiphon() {
+		if err := m.prepareIdentity(ctx, p); err != nil {
+			if ctx.Err() == nil {
+				m.t.Note("%s skipped: %v", p.Label, err)
+			}
+			return false, nil
+		}
+	}
 	port := aetherPort(i)
 	if err := portFree(port); err != nil {
 		m.t.Note("skipped %s: %v", p.Label, err)
@@ -546,6 +558,40 @@ func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *r
 		m.t.Note("%s: no tunnel (%s)", p.Label, wrapOne(why, 110))
 	}
 	return false, nil
+}
+
+// Profile workers share enrollment. A failed API bootstrap is attempted once
+// per protocol per connection, not once for every H2/H3/obfuscation profile
+// on every two-minute tunnel retry. Setup offers an explicit retry.
+func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) error {
+	if p.psiphon() || p.has("--tor-only") {
+		return nil // standalone carriers have no WARP enrollment requirement
+	}
+	m.enrollMu.Lock()
+	defer m.enrollMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	protocol, path := "masque", identityFile()
+	if p.has("--wg") {
+		protocol, path = "wg", wireguardIdentityFile()
+	}
+	if err := checkWarpIdentity(path, protocol); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if m.enrollTried[protocol] {
+		return fmt.Errorf("%s identity unavailable; retry Setup > Exit paths (automatic registration already attempted this connection)", protocol)
+	}
+	if m.enrollTried == nil {
+		m.enrollTried = make(map[string]bool)
+	}
+	m.enrollTried[protocol] = true
+	if m.enrollRoutes == nil {
+		m.enrollRoutes = enrollmentRoutes(ctx, m.o.base, m.o.listen, m.ech, m.echIP)
+	}
+	return enrollWarpIdentity(ctx, m.t, aetherBinary(m.o.base), protocol, m.enrollRoutes, runEnrollment)
 }
 
 // exitCarries waits until a request really goes through the proxy on port. The

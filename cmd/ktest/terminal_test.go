@@ -79,6 +79,81 @@ func TestSetupCertificateBackReturnsToSetupThenMainMenu(t *testing.T) {
 	}
 }
 
+func TestSubmenusKeepInvalidInputAndNestedBackInTheirOwnMenu(t *testing.T) {
+	t.Setenv("KTEST_CA_DIR", t.TempDir())
+	t.Setenv("KTEST_WARP_DIR", t.TempDir())
+	for _, tc := range []struct {
+		name, input, screen string
+		visits              int
+	}{
+		{"coverage", "7\ninvalid\nback\n0\n", "traffic coverage", 2},
+		{"diagnostics", "8\ninvalid\n0\n0\n", "Diagnose (Enter", 2},
+		{"setup", "9\ninvalid\n0\n0\n", "Certificate health and optional exit components.", 2},
+		{"certificate", "9\n1\ninvalid\n0\n0\n0\n", "Certificate health and optional exit components.", 2},
+		{"certificate offer", "1\ninvalid\nback\n0\n", "Type YES to set it up now", 2},
+		{"exit paths", "9\n2\ninvalid\n0\n0\n0\n", "Certificate health and optional exit components.", 2},
+		{"CDN provider", "10\ninvalid\n0\n0\n", "Provider: cloudflare", 2},
+		{"CDN hostname back", "10\ncloudflare\n0\n0\n0\n", "Provider: cloudflare", 2},
+		{"CDN hostname invalid", "10\ncloudflare\nhttps://invalid\n0\n0\n", "Provider: cloudflare", 2},
+		{"Windscribe target", "11\nback\n0\n", "Location or TCP IP", 1},
+		{"Windscribe SNI back", "11\nexample\n0\n0\n0\n", "Location or TCP IP", 2},
+		{"Windscribe SNI invalid", "11\nexample\nhttps://invalid\n0\n0\n", "Location or TCP IP", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := menuOutput(t, tc.input)
+			if strings.Count(out, "Free access toolkit") != 2 || strings.Count(out, tc.screen) != tc.visits || strings.Contains(out, "Unknown option") {
+				t.Fatal("submenu skipped a parent or exited unexpectedly:", out)
+			}
+		})
+	}
+}
+
+func TestCtrlCAtNestedToolPromptReturnsToToolBeforeMainMenu(t *testing.T) {
+	for _, tool := range []string{"cdn", "windscribe"} {
+		t.Run(tool, func(t *testing.T) {
+			var out bytes.Buffer
+			menu := &terminal{ui: plainTerm(&out)}
+			lines, back := make(chan string), make(chan struct{})
+			in := &input{lines: lines, back: back}
+			done := make(chan bool, 1)
+			go func() {
+				if tool == "cdn" {
+					done <- menu.cdnScanMenu(in)
+				} else {
+					done <- menu.windscribeTestMenu("unused", in)
+				}
+			}()
+			first := "example"
+			if tool == "cdn" {
+				first = "cloudflare"
+			}
+			select {
+			case lines <- first:
+			case <-time.After(time.Second):
+				t.Fatal("tool prompt unavailable")
+			}
+			select {
+			case back <- struct{}{}:
+			case <-time.After(time.Second):
+				t.Fatal("nested prompt did not receive Ctrl+C")
+			}
+			select {
+			case lines <- "0":
+			case <-time.After(time.Second):
+				t.Fatal("Ctrl+C skipped the tool menu")
+			}
+			select {
+			case alive := <-done:
+				if !alive || in.interrupted {
+					t.Fatal("nested Ctrl+C escaped the parent menu")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("tool failed to go back")
+			}
+		})
+	}
+}
+
 func TestCtrlCInSubmenuGoesBackWhileMainMenuExits(t *testing.T) {
 	menu := &terminal{}
 	back, quit := make(chan struct{}, 1), make(chan struct{})

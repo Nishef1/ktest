@@ -392,16 +392,26 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 			"invalid":   "The local certificate files cannot be used; open Setup to inspect them.",
 		}[state]
 		t.ui.Line(toneInfo, "%s", why)
-		t.print("  Type YES to set it up now (Windows asks you to confirm), or Enter to skip future offers (Setup remains available) > ")
-		ans, ok := in.read()
-		if !ok {
-			return false
-		}
-		if strings.EqualFold(ans, "YES") {
-			ensureCert(t.ui)
-		} else {
-			t.settings.SkipCertificateOffer = true
-			t.savePreferences()
+		for {
+			t.print("  Type YES to set it up now (Windows asks you to confirm), Enter to skip future offers, or 0 to go back > ")
+			ans, ok := in.read()
+			if !ok {
+				return false
+			}
+			if isBackChoice(ans) {
+				return true
+			}
+			switch {
+			case strings.EqualFold(ans, "YES"):
+				ensureCert(t.ui)
+			case ans == "":
+				t.settings.SkipCertificateOffer = true
+				t.savePreferences()
+			default:
+				t.ui.Line(toneWarn, "Select YES, Enter, or 0 to go back.")
+				continue
+			}
+			break
 		}
 	}
 	if o.tun && !systemtun.IsAdmin() {

@@ -218,38 +218,55 @@ func lastLines(s string, n int) string {
 // explicit action here and remain subject to the operating system's approval.
 func (t *terminal) frontSetup(readLine func() (string, bool)) bool {
 	u := t.ui
-	caStatus(u)
-	status := inspectCertificate()
-	switch status.state {
-	case "ok", "outdated":
-		u.Printf("  Type RENEW to replace and install the certificate, REMOVE to delete it, or Enter to go back > ")
-		ans, ok := readLine()
-		if !ok {
-			return false
-		}
-		switch strings.ToUpper(ans) {
-		case "RENEW":
-			if caRemove(u, true) == 0 {
-				caInstall(u)
+	for {
+		caStatus(u)
+		status := inspectCertificate()
+		switch status.state {
+		case "ok", "outdated":
+			u.Printf("  Type RENEW to replace and install the certificate, REMOVE to delete it, or Enter to go back > ")
+			ans, ok := readLine()
+			if !ok {
+				return false
 			}
-		case "REMOVE":
-			caRemove(u, true)
-		}
-	case "invalid":
-		u.Printf("  Repair the files shown above; press Enter to go back > ")
-		_, ok := readLine()
-		return ok
-	default:
-		u.Printf("  Type INSTALL or YES to create/install trust (Windows asks for confirmation), or Enter to go back > ")
-		ans, ok := readLine()
-		if !ok {
-			return false
-		}
-		if strings.EqualFold(ans, "YES") || strings.EqualFold(ans, "INSTALL") {
-			caInstall(u)
+			if ans == "" || isBackChoice(ans) {
+				return true
+			}
+			switch strings.ToUpper(ans) {
+			case "RENEW":
+				if caRemove(u, true) == 0 {
+					caInstall(u)
+				}
+			case "REMOVE":
+				caRemove(u, true)
+			default:
+				u.Line(toneWarn, "Select RENEW, REMOVE, or 0 to go back.")
+			}
+		case "invalid":
+			u.Printf("  Repair the files shown above; Enter / 0 = back > ")
+			ans, ok := readLine()
+			if !ok {
+				return false
+			}
+			if ans == "" || isBackChoice(ans) {
+				return true
+			}
+			u.Line(toneWarn, "Press Enter or 0 to go back.")
+		default:
+			u.Printf("  Type INSTALL or YES to create/install trust (Windows asks for confirmation), or Enter to go back > ")
+			ans, ok := readLine()
+			if !ok {
+				return false
+			}
+			if ans == "" || isBackChoice(ans) {
+				return true
+			}
+			if strings.EqualFold(ans, "YES") || strings.EqualFold(ans, "INSTALL") {
+				caInstall(u)
+			} else {
+				u.Line(toneWarn, "Select INSTALL, YES, or 0 to go back.")
+			}
 		}
 	}
-	return true
 }
 
 type certificateStatus struct {

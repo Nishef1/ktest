@@ -5,13 +5,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,7 +19,6 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
-	"github.com/Nishef1/ktest/internal/front"
 )
 
 // The WARP exit is the one path that does not depend on what a site's CDN
@@ -64,19 +61,23 @@ func psiphonCore(base string) string {
 	return filepath.Join(base, "cores", "pt", "psiphon-tunnel-core.exe")
 }
 
-func identityFile() string { return filepath.Join(warpDir(), "masque.toml") }
+func identityFile() string          { return filepath.Join(warpDir(), "masque.toml") }
+func wireguardIdentityFile() string { return filepath.Join(warpDir(), "wg.toml") }
 
-// warpState reports "no core" (the exit paths are off), "no identity" (the core
-// is there, no WARP identity yet; Psiphon needs none and the others register on
-// demand) or "ready".
+// Credentials are checked offline; this never registers a device or proves a tunnel.
 func warpState(base string) string {
-	switch {
-	case !fileOK(aetherBinary(base)):
+	if !fileOK(aetherBinary(base)) {
 		return "no core"
-	case !fileOK(identityFile()):
+	}
+	masque := checkWarpIdentity(identityFile(), "masque")
+	wg := checkWarpIdentity(wireguardIdentityFile(), "wg")
+	if masque == nil && wg == nil {
+		return "ready"
+	}
+	if errors.Is(masque, os.ErrNotExist) && errors.Is(wg, os.ErrNotExist) {
 		return "no identity"
 	}
-	return "ready"
+	return "partial"
 }
 
 // aetherLauncher runs Aether until ctx ends.
@@ -173,61 +174,8 @@ func extractZipFile(f *zip.File, dest string) error {
 	return os.Rename(tmp, dest)
 }
 
-// registerAttempts are tried in turn. The route to the WARP API (the key) is
-// closed on some networks, so the first ways in are the ones this program has
-// already shown to work there: through ktest's own proxy when it runs, and
-// with Encrypted Client Hello using a configuration ktest fetched itself and an
-// address it reached, so that neither DNS nor the API's name is needed. The
-// plain and fragmented routes come last.
-func registerAttempts(proxyUp bool, ech, ip string) [][]string {
-	var out [][]string
-	if proxyUp {
-		out = append(out, []string{"--upstream", "socks5://127.0.0.1:10800"})
-	}
-	if ech != "" && ip != "" {
-		out = append(out, []string{"--ech", ech, "--enroll-address", ip})
-	}
-	return append(out, nil, []string{"--api-fragment"})
-}
-
-func registerWarp(ctx context.Context, u *term, bin string) error {
-	if err := os.MkdirAll(warpDir(), 0o700); err != nil {
-		return err
-	}
-	conn, derr := net.DialTimeout("tcp", connectListenDefault, 300*time.Millisecond)
-	if derr == nil {
-		conn.Close()
-	}
-	var lastLine string
-	ech, ip := "", ""
-	if cfg, addr, err := front.FetchCloudflareECH(ctx); err == nil {
-		ech, ip = base64.StdEncoding.EncodeToString(cfg), addr
-	}
-	for i, extra := range registerAttempts(derr == nil, ech, ip) {
-		step := u.Progress(fmt.Sprintf("Registering a WARP identity (try %d)", i+1), 1)
-		actx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		logs := &tailBuffer{max: 4096}
-		args := append(append([]string(nil), extra...), "--register", "masque",
-			"--config", filepath.Join(warpDir(), "aether.toml"), "--masque-config", identityFile(), "--log-level", "warn")
-		cmd := exec.CommandContext(actx, bin, args...)
-		cmd.Stdout, cmd.Stderr = logs, logs
-		err := cmd.Run()
-		cancel()
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err == nil && fileOK(identityFile()) {
-			step.Finish(toneOK, "identity saved")
-			return nil
-		}
-		lastLine = logs.lastLine()
-		step.Finish(toneWarn, trimDetail(lastLine))
-	}
-	return fmt.Errorf("no registration route worked (last: %s)", lastLine)
-}
-
 // warpEnable makes the WARP exit available: the core, then the identity.
-func warpEnable(ctx context.Context, u *term, base string) int {
+func warpEnable(ctx context.Context, u *term, base, proxy string) int {
 	if !fileOK(aetherBinary(base)) || !fileOK(psiphonCore(base)) {
 		step := u.Progress("Downloading Aether "+aetherVersion, 1)
 		if err := fetchAether(ctx, aetherZipURL, aetherZipSHA, base); err != nil {
@@ -237,13 +185,28 @@ func warpEnable(ctx context.Context, u *term, base string) int {
 		}
 		step.Finish(toneOK, "verified against the pinned SHA-256")
 	}
-	if !fileOK(identityFile()) {
-		if err := registerWarp(ctx, u, aetherBinary(base)); err != nil {
-			u.Line(toneWarn, "%v", err)
-			u.Note("No WARP identity yet. That is not fatal: the Psiphon profile needs none, and the WARP profiles try to register themselves with the ECH route each time.")
+	var routes []enrollmentRoute
+	_, masqueErr := os.Stat(identityFile())
+	_, wgErr := os.Stat(wireguardIdentityFile())
+	if errors.Is(masqueErr, os.ErrNotExist) || errors.Is(wgErr, os.ErrNotExist) {
+		routes = enrollmentRoutes(ctx, base, proxy, "", "")
+	}
+	failed := false
+	for _, protocol := range []string{"masque", "wg"} {
+		if err := enrollWarpIdentity(ctx, u, aetherBinary(base), protocol, routes, runEnrollment); err != nil {
+			u.Line(toneWarn, "%s registration: %v", protocol, err)
+			failed = true
+		}
+		if ctx.Err() != nil {
+			u.Line(toneWarn, "Setup cancelled; saved identities were kept.")
+			return 1
 		}
 	}
-	u.Line(toneOK, "The exit paths are enabled. Connect searches for the one that works on this network in the background; Telegram and sites blocked by address open through it.")
+	if failed {
+		u.Line(toneWarn, "Exit components installed; WARP setup is incomplete. Psiphon needs no WARP identity. Retry YES here or `ktest warp -enable` when a registration route is available.")
+		return 1
+	}
+	u.Line(toneOK, "MASQUE and WireGuard identities ready. Connect verifies the actual tunnels separately.")
 	return 0
 }
 
@@ -252,34 +215,46 @@ func warpDisable(u *term) int {
 	if dir == "" {
 		return 0
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		u.Line(toneFail, "cannot delete %s: %v", dir, err)
-		return 1
+	for _, path := range []string{identityFile(), wireguardIdentityFile()} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			u.Line(toneFail, "cannot delete %s: %v", path, err)
+			return 1
+		}
 	}
-	u.Line(toneOK, "The WARP identity was deleted. The Aether core stays in cores/.")
+	u.Line(toneOK, "The MASQUE and WireGuard identities were deleted. Core files and other settings were kept.")
 	return 0
 }
 
 func warpStatus(u *term, base string) {
-	u.Heading("exit paths", "WARP and Psiphon leave from another address, so what is blocked by address (Telegram) opens too.")
+	u.Heading("exit paths", "WARP / Psiphon components and saved credentials. Actual tunnels are checked on Connect.")
 	switch s := warpState(base); s {
 	case "ready":
-		u.Line(toneOK, "Enabled: Connect searches for the profiles that work here, in the background.")
-		u.Note("WARP identity %s", identityFile())
-	case "no identity":
-		u.Line(toneOK, "Enabled (no WARP identity yet): Psiphon needs none, the WARP profiles register themselves or `ktest warp -enable` tries again.")
+		u.Line(toneOK, "MASQUE and WireGuard identities are locally valid; tunnel unverified.")
+	case "no identity", "partial":
+		u.Line(toneWarn, "WARP registration incomplete; Psiphon does not need a WARP identity.")
 	default:
 		u.Line(toneInfo, "Off. `ktest warp -enable` downloads Aether %s (about 24 MB, pinned SHA-256) and tries to register a free anonymous WARP identity on this PC.", aetherVersion)
 	}
-	u.Note("Traffic that uses them goes through Cloudflare or Psiphon. They are the last resort: they join a connection only after the other paths failed or took more than 3 seconds.")
+	if warpState(base) != "no core" {
+		for _, item := range []struct{ protocol, path string }{{"masque", identityFile()}, {"wg", wireguardIdentityFile()}} {
+			if err := checkWarpIdentity(item.path, item.protocol); err != nil {
+				u.Line(toneWarn, "%s identity: %v", item.protocol, err)
+			} else {
+				u.Line(toneOK, "%s identity: saved / locally valid", item.protocol)
+			}
+		}
+	}
+	u.Note("Initial registration uses HTTPS to the WARP API; a working gateway does not prove that registration is reachable.")
+	u.Note("Saved keys are reused. ECH or Psiphon can carry initial registration; they do not guarantee access on every network.")
+	u.Note("Traffic using these exits leaves through Cloudflare or Psiphon. When they join routing depends on the selected policy.")
 	u.Note("Edit profiles/aether-profiles.txt to change what is tried; logs are in %s.", warpDir())
 }
 
 const warpUsage = `usage: ktest warp [-enable | -disable] [-base DIR]
 
   (no flag)   show the state of the exit paths
-  -enable     download the Aether core if needed and try to register a WARP identity
-  -disable    delete the WARP identity
+  -enable     download Aether if needed; prepare missing MASQUE and WireGuard identities
+  -disable    delete the MASQUE and WireGuard identities (other settings are kept)
 `
 
 // runWarp is `ktest warp`.
@@ -295,7 +270,7 @@ func runWarp(args []string) int {
 	u := newTerm(os.Stdout)
 	switch {
 	case *enable:
-		return warpEnable(context.Background(), u, *base)
+		return warpEnable(context.Background(), u, *base, connectListenDefault)
 	case *disable:
 		return warpDisable(u)
 	}
@@ -307,15 +282,20 @@ func runWarp(args []string) int {
 // enables domain fronting and the WARP exit.
 func (t *terminal) setup(base string, in *input) bool {
 	u := t.ui
+	message := ""
 	for {
 		u.menuView()
 		u.Heading("setup", "Certificate health and optional exit components.")
+		if message != "" {
+			u.Line(toneWarn, "%s", message)
+			message = ""
+		}
 		cert := inspectCertificate()
 		u.menuOption("1", "Certificate", cert.summary(u))
 		if cert.ca != nil {
 			u.Note("Expires: %s", cert.ca.Expires().Format("2006-01-02"))
 		}
-		warp := map[string]string{"ready": "Configured / tunnel unverified", "no core": "Install exit components", "no identity": "Core present / WARP not registered"}[warpState(base)]
+		warp := map[string]string{"ready": "Identities valid / tunnel unverified", "no core": "Install exit components", "no identity": "Core present / WARP not registered", "partial": "WARP identities incomplete / repair or retry"}[warpState(base)]
 		u.menuOption("2", "Exit paths", warp)
 		u.Printf("\n")
 		u.Note("Certificate: optional website fronting for Balanced / Fast.")
@@ -348,39 +328,40 @@ func (t *terminal) setup(base string, in *input) bool {
 			return true
 		case "":
 		default:
-			u.Line(toneWarn, "Select 1-2, or 0 to go back.")
+			message = "Select 1-2, or 0 to go back."
 		}
 	}
 }
 
 func (t *terminal) warpSetup(base string, readLine func() (string, bool)) bool {
 	u := t.ui
-	warpStatus(u, base)
-	if warpState(base) == "ready" {
-		u.Printf("  Type REMOVE to delete the WARP identity, or Enter to go back > ")
+	for {
+		warpStatus(u, base)
+		u.Printf("  YES = prepare/retry missing identities; REMOVE = delete WARP identities; Enter / 0 = back > ")
 		ans, ok := readLine()
 		if !ok {
 			return false
 		}
+		if ans == "" || isBackChoice(ans) {
+			return true
+		}
 		if strings.EqualFold(ans, "REMOVE") {
 			warpDisable(u)
+			continue
 		}
-		return true
+		if !strings.EqualFold(ans, "YES") {
+			u.Line(toneWarn, "Select YES, REMOVE, or 0 to go back.")
+			continue
+		}
+		u.Note("Press Ctrl+C to cancel setup.")
+		if !t.foreground(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
+			defer cancel()
+			warpEnable(ctx, u, base, t.options.listen)
+		}) {
+			return false
+		}
 	}
-	u.Printf("  Type YES to enable it (downloads Aether if missing and registers a free anonymous WARP identity), or Enter to go back > ")
-	ans, ok := readLine()
-	if !ok {
-		return false
-	}
-	if !strings.EqualFold(ans, "YES") {
-		return true
-	}
-	u.Note("Press Ctrl+C to cancel setup.")
-	return t.foreground(func(ctx context.Context) {
-		ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
-		defer cancel()
-		warpEnable(ctx, u, base)
-	})
 }
 
 // wrapOne shortens a log line to n runes.

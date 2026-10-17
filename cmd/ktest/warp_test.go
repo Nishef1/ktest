@@ -181,7 +181,7 @@ func TestPsiphonModeSelectsOnlyPsiphonProfiles(t *testing.T) {
 	}
 }
 
-func TestLastGoodProfileGoesFirstAndWarpStateAndRegisterOrder(t *testing.T) {
+func TestLastGoodProfileGoesFirstAndWarpState(t *testing.T) {
 	ps := []aetherProfile{{Label: "a"}, {Label: "b"}, {Label: "c"}}
 	got := lastGoodFirst(ps, "c")
 	if got[0].Label != "c" || got[1].Label != "a" || got[2].Label != "b" || len(got) != 3 {
@@ -202,15 +202,8 @@ func TestLastGoodProfileGoesFirstAndWarpStateAndRegisterOrder(t *testing.T) {
 		t.Fatal(warpState(base))
 	}
 	os.WriteFile(identityFile(), []byte("x"), 0o600)
-	if warpState(base) != "ready" {
+	if warpState(base) != "partial" {
 		t.Fatal(warpState(base))
-	}
-	with := registerAttempts(true, "B64", "1.2.3.4")
-	if len(with) != 4 || with[0][0] != "--upstream" || with[1][0] != "--ech" || with[1][1] != "B64" || with[1][3] != "1.2.3.4" {
-		t.Fatalf("the running ktest proxy must be tried first: %v", with)
-	}
-	if without := registerAttempts(false, "", ""); len(without) != 2 || without[0] != nil {
-		t.Fatalf("%v", without)
 	}
 }
 
