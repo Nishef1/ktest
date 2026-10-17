@@ -186,3 +186,21 @@ func TestWindscribeAutoReconnectWaitsForHTTPBridgeListener(t *testing.T) {
 		t.Fatal("ready HTTP bridge did not arm CLI reconnect checks")
 	}
 }
+
+func TestWindscribeConnectedWithoutCityIsRecognized(t *testing.T) {
+	// Desktop CLI emits Connected without a colon when LocationID is invalid;
+	// pending tunnel validation and network interference must still fail closed.
+	for _, tc := range []struct {
+		status string
+		want windscribeState
+	}{
+		{"Connect state: Connected", windscribeConnected},
+		{"*Connect state: Connected", windscribeConnecting},
+		{"Connect state: Connected [Network interference]", windscribeConnecting},
+	} {
+		got, loggedIn := parseWindscribeStatus("Login state: Logged in\n" + tc.status)
+		if !loggedIn || got != tc.want {
+			t.Fatalf("status %q: got %v, login=%t; want %v", tc.status, got, loggedIn, tc.want)
+		}
+	}
+}

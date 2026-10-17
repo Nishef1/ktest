@@ -63,7 +63,7 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 		value = strings.TrimSpace(strings.TrimPrefix(value, "*"))
 		lower := strings.ToLower(value)
 		switch {
-		case strings.HasPrefix(lower, "connected:"):
+		case lower == "connected" || strings.HasPrefix(lower, "connected:"):
 			if pending || strings.Contains(lower, "[network interference]") {
 				state = windscribeConnecting
 			} else {

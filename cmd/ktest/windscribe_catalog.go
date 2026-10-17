@@ -38,6 +38,7 @@ type wsNode struct {
 	IP3      string `json:"ip3"`
 	Hostname string `json:"hostname"`
 	Group    string `json:"group"`
+	ForceDisconnect int `json:"fd"` // 1: draining node; no new sessions
 }
 
 type wsCatalogList struct {
@@ -81,6 +82,11 @@ func parseWSNodes(body []byte) (map[string]wsNode, error) {
 	nodes := make(map[string]wsNode)
 	addNodes := func(list []wsNode) error {
 		for _, node := range list {
+			// Windscribe wsnet 1.5.33 treats fd:1 as a draining
+			// server; dialing it can fail even when nearby nodes work.
+			if node.ForceDisconnect == 1 {
+				continue
+			}
 			if !publicWSIP(node.TCP) || !publicWSIP(node.IP) || !publicWSIP(node.IP3) || !validHostname(node.Hostname) {
 				return errors.New("Windscribe node list contains an invalid address or hostname")
 			}

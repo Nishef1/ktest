@@ -258,3 +258,19 @@ func TestWindscribeMobV2ProviderURLAndLegacyFallback(t *testing.T) {
 		t.Fatal("usable legacy catalog was not retained")
 	}
 }
+
+func TestWindscribeCatalogAvoidsForceDisconnectNodes(t *testing.T) {
+	// wsnet 1.5.33 exposes fd:1, instructing clients to avoid starting
+	// new connections on a draining server even in an otherwise healthy city.
+	body := []byte(`{"data":[{"groups":[{"nodes":[{"ip":"192.0.2.10","ip2":"203.0.113.10","ip3":"198.51.100.10","hostname":"old.windscribe.com","fd":1},{"ip":"192.0.2.20","ip2":"203.0.113.20","ip3":"198.51.100.20","hostname":"new.windscribe.com","fd":0}]}]}]}`)
+	nodes, err := parseWSNodes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := nodes["203.0.113.10"]; exists {
+		t.Fatal("draining server became an eligible carrier")
+	}
+	if _, exists := nodes["203.0.113.20"]; !exists {
+		t.Fatal("healthy server removed with draining server")
+	}
+}
