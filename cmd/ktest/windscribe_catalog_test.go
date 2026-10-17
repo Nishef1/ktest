@@ -356,3 +356,50 @@ func TestWindscribeCatalogReadyBeforeSlowSourceCompletes(t *testing.T) {
 		t.Fatal("catalog fetch did not cancel cleanly")
 	}
 }
+
+func TestCatalogWaitsForRequestedNodeNotUnrelatedValidSource(t *testing.T) {
+	c := newWSNodeCatalog()
+	c.beginFetch()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan bool, 1)
+	go func() { result <- c.waitForTarget(ctx, "203.0.113.200", 900*time.Millisecond) }()
+	if err := c.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.finishFetch()
+	select {
+	case <-result:
+		t.Fatal("an unrelated node caused early completion")
+	case <-time.After(25 * time.Millisecond):
+	}
+	other := []byte(`{"data":[{"nodes":[{"ip":"198.51.100.20","ip2":"203.0.113.200","ip3":"192.0.2.20","hostname":"second.example.com"}]}]}`)
+	if err := c.replace("regional", other, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.finishFetch()
+	select {
+	case ok := <-result:
+		if !ok {
+			t.Fatal("requested node did not awaken its waiter")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("target lookup remained blocked")
+	}
+}
+
+func TestCatalogConflictingSnapshotsKeepNewerValidatedNodeIsolated(t *testing.T) {
+	c := newWSNodeCatalog()
+	now := time.Now()
+	if err := c.replace("global", []byte(globalNodeFixture), now); err != nil {
+		t.Fatal(err)
+	}
+	other := []byte(strings.ReplaceAll(regionalNodeFixture, "node.example.com", "other.example.com"))
+	if err := c.replace("regional", other, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	want := []wsEndpoint{{"192.0.2.80", "regional/ip"}, {"198.51.100.240", "regional/ip3"}}
+	if got := c.endpoints("203.0.113.100"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider conflict mixed endpoints or discarded valid newer node: %+v", got)
+	}
+}

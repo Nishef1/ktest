@@ -528,11 +528,12 @@ func readOpenVPNReply(r io.Reader) ([]byte, error) {
 func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
 	key := net.JoinHostPort(host, port)
 	if b.catalog != nil && b.opts.serverIP == "" && len(b.catalog.endpoints(host)) == 0 {
-		select {
-		case <-b.catalog.ready:
-		case <-time.After(8 * time.Second):
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
+		// A valid provider source containing another node does not make
+		// this destination ready. Wait for its exact mapping, or until
+		// every in-flight source completed (with an 8-second cap).
+		b.catalog.waitForTarget(ctx, host, 8*time.Second)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
 		}
 	}
 	cs := b.ordered(key, b.carriersFor(host))
@@ -668,7 +669,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 		}
 		if b.catalog != nil && len(b.catalog.endpoints(host)) == 0 && b.opts.serverIP == "" {
-			summary = "no fresh node mapping; " + summary
+			summary = b.catalog.missingReason(host) + "; " + summary
 		}
 		if b.report != nil && ctx.Err() == nil {
 			b.report(smartproxy.Event{Host: host, Site: host, Err: "Windscribe race failed [" + summary + "]"})

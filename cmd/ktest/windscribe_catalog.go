@@ -54,14 +54,62 @@ type wsNodeCatalog struct {
 	lists     map[string]wsCatalogList
 	ready     chan struct{}
 	readyOnce sync.Once
+	changed   chan struct{} // broadcast on provider updates and finished fetches
+	fetching  int
 }
 
 func newWSNodeCatalog() *wsNodeCatalog {
-	return &wsNodeCatalog{lists: make(map[string]wsCatalogList), ready: make(chan struct{})}
+	return &wsNodeCatalog{lists: make(map[string]wsCatalogList), ready: make(chan struct{}), changed: make(chan struct{})}
 }
 
 // A cached or newly fetched *valid* source unblocks OpenVPN carrier discovery.
 // Do not wait for a second, inaccessible source to time out before using it.
+func (c *wsNodeCatalog) notifyLocked() {
+	close(c.changed)
+	c.changed = make(chan struct{})
+}
+
+func (c *wsNodeCatalog) beginFetch() {
+	c.mu.Lock()
+	if c.fetching == 0 {
+		c.fetching = len(wsCatalogURLs)
+		c.notifyLocked()
+	}
+	c.mu.Unlock()
+}
+
+func (c *wsNodeCatalog) finishFetch() {
+	c.mu.Lock()
+	if c.fetching > 0 {
+		c.fetching--
+		c.notifyLocked()
+	}
+	c.mu.Unlock()
+}
+
+func (c *wsNodeCatalog) waitForTarget(ctx context.Context, tcp string, budget time.Duration) bool {
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	for {
+		c.mu.RLock()
+		pending, changed := c.fetching > 0, c.changed
+		c.mu.RUnlock()
+		if len(c.endpoints(tcp)) > 0 {
+			return true
+		}
+		if !pending {
+			return false
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
 func (c *wsNodeCatalog) signalReady() {
 	c.readyOnce.Do(func() { close(c.ready) })
 }
@@ -135,6 +183,7 @@ func (c *wsNodeCatalog) replace(source string, body []byte, fetched time.Time) e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lists[source] = wsCatalogList{Fetched: fetched, Body: append(json.RawMessage(nil), body...), nodes: nodes}
+	c.notifyLocked()
 	c.signalReady()
 	return nil
 }
@@ -144,69 +193,102 @@ func (c *wsNodeCatalog) replace(source string, body []byte, fetched time.Time) e
 // WStunnel may test both provider-advertised alternates because its current
 // authenticated PortMap is unavailable here. Stealth is restricted to ip3
 // later in carriersFor, as specified in Windscribe's published port map.
-func (c *wsNodeCatalog) endpoints(tcp string) []wsEndpoint {
+type wsCatalogMatch struct {
+	node   wsNode
+	source string
+}
+
+// Never join fields belonging to conflicting provider node identities.
+// A newer valid source may independently supply a usable alternate for the
+// requested exact OpenVPN TCP destination.
+func (c *wsNodeCatalog) matches(tcp string) []wsCatalogMatch {
 	if c == nil {
 		return nil
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	var result []wsEndpoint
-	seen := map[string]bool{tcp: true}
-	hostname := ""
+	var newest time.Time
+	var identity string
 	for _, source := range wsCatalogURLs {
 		list, ok := c.lists[source.name]
 		if !ok || time.Since(list.Fetched) > wsCatalogMaxAge || time.Until(list.Fetched) > 5*time.Minute {
 			continue
 		}
 		node, ok := list.nodes[tcp]
-		if !ok {
+		if ok && (identity == "" || list.Fetched.After(newest)) {
+			identity, newest = node.Hostname, list.Fetched
+		}
+	}
+	if identity == "" {
+		return nil
+	}
+	var result []wsCatalogMatch
+	for _, source := range wsCatalogURLs {
+		list, ok := c.lists[source.name]
+		if !ok || time.Since(list.Fetched) > wsCatalogMaxAge || time.Until(list.Fetched) > 5*time.Minute {
 			continue
 		}
-		if hostname != "" && node.Hostname != hostname {
-			return nil // conflicting snapshots must not mix two nodes
+		node, ok := list.nodes[tcp]
+		if ok && node.Hostname == identity {
+			result = append(result, wsCatalogMatch{node: node, source: source.name})
 		}
-		hostname = node.Hostname
-		for _, alt := range []struct{ ip, field string }{{node.IP, "ip"}, {node.IP3, "ip3"}} {
+	}
+	return result
+}
+
+func (c *wsNodeCatalog) endpoints(tcp string) []wsEndpoint {
+	seen := map[string]bool{tcp: true}
+	var result []wsEndpoint
+	for _, match := range c.matches(tcp) {
+		for _, alt := range []struct{ ip, field string }{{match.node.IP, "ip"}, {match.node.IP3, "ip3"}} {
 			if alt.ip != "" && !seen[alt.ip] {
 				seen[alt.ip] = true
-				result = append(result, wsEndpoint{alt.ip, source.name + "/" + alt.field})
+				result = append(result, wsEndpoint{alt.ip, match.source + "/" + alt.field})
 			}
 		}
 	}
 	return result
 }
 
-// endpointsByField preserves the provider's protocol-specific endpoint role.
-// A node can advertise the same IP for ip and ip3; deduplicating solely by
-// address would erase the Stealth ip3 route even though it is valid.
 func (c *wsNodeCatalog) endpointsByField(tcp, field string) []wsEndpoint {
-	if c == nil || field != "ip3" {
+	if field != "ip3" {
 		return nil
+	}
+	seen := make(map[string]bool)
+	var result []wsEndpoint
+	for _, match := range c.matches(tcp) {
+		if ip := match.node.IP3; ip != "" && !seen[ip] {
+			seen[ip] = true
+			result = append(result, wsEndpoint{ip, match.source + "/ip3"})
+		}
+	}
+	return result
+}
+
+func (c *wsNodeCatalog) missingReason(tcp string) string {
+	if c == nil {
+		return "catalog disabled"
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	seen := make(map[string]bool)
-	var result []wsEndpoint
-	hostname := ""
+	var fresh int
 	for _, source := range wsCatalogURLs {
 		list, ok := c.lists[source.name]
 		if !ok || time.Since(list.Fetched) > wsCatalogMaxAge || time.Until(list.Fetched) > 5*time.Minute {
 			continue
 		}
-		node, ok := list.nodes[tcp]
-		if !ok {
-			continue
-		}
-		if hostname != "" && hostname != node.Hostname {
-			return nil
-		}
-		hostname = node.Hostname
-		if node.IP3 != "" && !seen[node.IP3] {
-			seen[node.IP3] = true
-			result = append(result, wsEndpoint{node.IP3, source.name + "/ip3"})
+		fresh++
+		if _, found := list.nodes[tcp]; found {
+			return "node found but no eligible alternate endpoint"
 		}
 	}
-	return result
+	if c.fetching > 0 {
+		return "catalog still fetching requested node"
+	}
+	if fresh == 0 {
+		return "catalog missing or expired"
+	}
+	return fmt.Sprintf("node not found in %d fresh provider source(s)", fresh)
 }
 
 func (c *wsNodeCatalog) load(path string) {
@@ -311,12 +393,14 @@ func (c *wsNodeCatalog) updateFromSource(ctx context.Context, client *http.Clien
 }
 
 func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path string, logf func(string, ...any)) bool {
+	c.beginFetch()
 	var wg sync.WaitGroup
 	updated := make(chan struct{}, len(wsCatalogURLs))
 	for _, source := range wsCatalogURLs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer c.finishFetch()
 			err := c.updateFromSource(ctx, client, source)
 			if err != nil {
 				logf("Windscribe node list %s unavailable: %v; retaining fresh cache", source.name, err)

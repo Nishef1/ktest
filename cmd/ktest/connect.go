@@ -874,6 +874,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				catalogClient := &http.Client{Transport: catalogTransport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 					return errors.New("Windscribe node-list redirects are not accepted")
 				}}
+				// Mark both sources in-flight before the HTTP proxy can receive
+				// its first CONNECT; scheduling the goroutine is not enough.
+				bridge.catalog.beginFetch()
 				go bridge.catalog.run(ctx, catalogClient, cachePath, logf)
 				bridge.note = func(f string, a ...any) { t.Line(toneInfo, f, a...) }
 				if o.ws.cdnHost != "" && o.ws.cdnEdges == "" {
