@@ -30,7 +30,8 @@ object UpdateChecker {
                     val asset = assets.getJSONObject(j)
                     val name = asset.optString("name").lowercase()
                     val url = asset.optString("browser_download_url")
-                    if (name.endsWith(".apk") && name.contains("android") &&
+                    if (name.endsWith(".apk") &&
+                        (name.startsWith("ktest-connection-") || name.contains("android")) &&
                         url.startsWith("https://github.com/Nishef1/ktest/releases/download/")
                     ) {
                         return UpdateInfo("New Android version: ${version}", url)
