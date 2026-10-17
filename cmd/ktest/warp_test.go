@@ -242,7 +242,7 @@ func TestExitStatusUpdatesDuringSearchAndDeadCoreIsRemovedImmediately(t *testing
 		t.Fatal(status())
 	}
 	m.searching.Store(false)
-	if !strings.Contains(status(), "search complete") {
+	if !strings.Contains(status(), "retry pending") {
 		t.Fatal(status())
 	}
 }

@@ -195,3 +195,14 @@ func TestStrictSiteChecksAndFrontCATrustBoundaries(t *testing.T) {
 		t.Fatal("fronting disabled but CA still recommended")
 	}
 }
+
+// A failed geo-check is unknown reachability, not evidence of a blocked
+// country. This uses a refused local SOCKS port and never contacts a website.
+func TestUnavailableEgressProbeIsNotCountryRejection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := benchmarkAetherRoute(ctx, "127.0.0.1:0", false)
+	if result.State != "egress-unverified" || result.Failure == "" {
+		t.Fatalf("misclassified unreachable neutral probe: %+v", result)
+	}
+}

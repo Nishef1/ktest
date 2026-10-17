@@ -105,7 +105,9 @@ func benchmarkAetherRoute(ctx context.Context, socks string, speed bool) aetherM
 	ip, country, err := probeExitLocation(ctx, socks)
 	r.ExitIP, r.Country = ip, country
 	if err != nil {
-		r.State = "egress-rejected"
+		// The neutral location probe may be unreachable even when the
+		// SOCKS carrier is live. That is not proof of a rejected country.
+		r.State = "egress-unverified"
 		r.Failure = err.Error()
 		return r
 	}
