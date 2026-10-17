@@ -139,6 +139,7 @@ type wsCarrier struct {
 // local dialer; OpenVPN is raced over every carrier and the first one whose
 // server returns data carries the stream, including later client writes.
 type wsActiveCarrier struct {
+	id          uint64
 	key         string
 	name        string
 	started     time.Time
@@ -166,6 +167,7 @@ type wsBridge struct {
 	retries   map[string]uint64               // attempt index for choosing independent alternatives
 	active    map[*wsActiveCarrier]bool       // streams awaiting CLI state correlation
 	shortEnds map[string]int                  // consecutive short unexpected ends of correlated sessions
+	nextAttempt uint64
 }
 
 // CLI authentication is attributed only if a single OpenVPN stream is
@@ -175,6 +177,9 @@ func (b *wsBridge) observeCLIConnected() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.active) != 1 {
+		if b.logf != nil {
+			b.logf("Windscribe CLI Connected correlation ambiguous: active-carriers=%d; no carrier promoted", len(b.active))
+		}
 		return
 	}
 	for active := range b.active {
@@ -185,6 +190,9 @@ func (b *wsBridge) observeCLIConnected() {
 			return
 		}
 		active.confirmed = true
+		if b.logf != nil {
+			b.logf("Windscribe attempt=%d target=%s carrier=%s correlated with CLI TCP Connected (not cryptographically attributable)", active.id, active.key, active.name)
+		}
 		// A real Windscribe TCP Connected transition is stronger evidence
 		// than an arbitrary 60-second/64-KiB threshold. This session is
 		// uniquely attributable, and already passed OpenVPN authentication.
@@ -577,6 +585,13 @@ func readOpenVPNReply(r io.Reader) ([]byte, error) {
 // Windscribe, rather than this bridge, authenticates the server's response.
 func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
 	key := net.JoinHostPort(host, port)
+	b.mu.Lock()
+	b.nextAttempt++
+	attemptID := b.nextAttempt
+	b.mu.Unlock()
+	if b.logf != nil {
+		b.logf("Windscribe attempt=%d started target=%s (OpenVPN authentication pending)", attemptID, key)
+	}
 	if b.catalog != nil && b.opts.serverIP == "" && len(b.catalog.endpoints(host)) == 0 {
 		// A valid provider source containing another node does not make
 		// this destination ready. Wait for its exact mapping, or until
@@ -591,7 +606,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	// every advertised entry/IP/SNI. Later retries rotate the candidates.
 	const maxRaceCandidates = 24
 	if len(cs) > maxRaceCandidates {
-		b.logf("Windscribe %s: testing %d of %d candidates this attempt; alternatives rotate on retry", key, maxRaceCandidates, len(cs))
+		b.logf("Windscribe attempt=%d target=%s: testing %d of %d candidates; alternatives rotate on retry", attemptID, key, maxRaceCandidates, len(cs))
 		cs = cs[:maxRaceCandidates]
 	}
 	live, stopLive := context.WithCancel(ctx)
@@ -635,7 +650,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		lastErr = fmt.Errorf("%s: %w", c.name, err)
 		errMu.Unlock()
 		b.demoteFailure(key, c.name, stage)
-		b.logf("Windscribe %s: %s destination=%s source=%s failed stage=%s: %v", key, c.name, c.addr, c.source, stage, err)
+		b.logf("Windscribe attempt=%d target=%s carrier=%s destination=%s source=%s failed stage=%s: %v", attemptID, key, c.name, c.addr, c.source, stage, err)
 	}
 	for i, c := range cs {
 		if c.addr == "" {
@@ -726,8 +741,8 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		}
 		return nil, nil, fmt.Errorf("no Windscribe carrier answered (%s): %w", summary, err)
 	}
-	b.logf("Windscribe %s carried by %s source=%s; tunneled data returned in %s (authentication remains with Windscribe)", key, r.c.name, r.c.source, shortDur(r.took))
-	session := &wsActiveCarrier{key: key, name: r.c.name, started: time.Now()}
+	b.logf("Windscribe attempt=%d target=%s carrier=%s source=%s; initial control reply in %s (authentication pending)", attemptID, key, r.c.name, r.c.source, shortDur(r.took))
+	session := &wsActiveCarrier{id: attemptID, key: key, name: r.c.name, started: time.Now()}
 	b.mu.Lock()
 	if b.active == nil {
 		b.active = make(map[*wsActiveCarrier]bool)
@@ -779,7 +794,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 			b.bad[key][r.c.name] = time.Now().Add(ttl)
 		}
-		b.logf("Windscribe %s carrier=%s session ended after %s, returned=%d bytes, CLI-correlated=%v, upstream-ended=%v (not proof of DPI or per-carrier authentication)", key, r.c.name, shortDur(lived), received, confirmed, session.upstreamEnd)
+		b.logf("Windscribe attempt=%d target=%s carrier=%s session ended after %s, returned=%d bytes, CLI-correlated=%v, upstream-ended=%v (not proof of DPI or per-carrier authentication)", attemptID, key, r.c.name, shortDur(lived), received, confirmed, session.upstreamEnd)
 	}
 	stopClose := context.AfterFunc(live, func() { _ = r.conn.Close() })
 	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose, logf: b.logf, name: r.c.name, destination: key, started: time.Now(), onUpstreamEnd: func() {
