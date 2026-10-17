@@ -203,8 +203,8 @@ func validateConnectOptions(o connectOptions) error {
 	if o.mode == ModeWindscribeAether && (o.noWarp || strings.HasPrefix(o.aetherMethod, "psiphon")) {
 		return errors.New("Windscribe through Aether requires WARP; -no-warp and Psiphon methods are not allowed")
 	}
-	if o.mode == ModeWindscribeAether && o.noHTTP {
-		return errors.New("Windscribe through Aether requires the local HTTP CONNECT bridge")
+	if o.mode.isWindscribe() && o.noHTTP {
+		return errors.New("Windscribe OpenVPN TCP needs the local HTTP CONNECT bridge; remove -no-http")
 	}
 	if o.mode == ModePsiphon && o.aetherMethod != "" && o.aetherMethod != "auto" && !strings.HasPrefix(o.aetherMethod, "psiphon") {
 		return errors.New("Psiphon mode requires a Psiphon method or auto")
@@ -433,7 +433,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("Coverage: %s", connectionCoverage(o))
 	t.Note("%s", o.mode.message())
-	if o.mode == ModeWindscribeAether {
+	if o.mode.isWindscribe() {
 		if err := validateConnectOptions(o); err != nil {
 			t.Line(toneFail, "%v", err)
 			return 2
@@ -862,7 +862,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String())
 		}
 		if err != nil {
-			t.Note("Windscribe HTTP proxy unavailable: %v (normal SOCKS5 still works)", err)
+			if o.mode.isWindscribe() {
+				t.Line(toneFail, "Windscribe HTTP bridge could not listen on %s: %v; VPN transport not prepared", o.httpListen, err)
+				return 1
+			}
+			t.Note("HTTP proxy unavailable: %v (SOCKS5 still works)", err)
 		} else {
 			defer stopHTTP()
 		}
@@ -1046,7 +1050,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	switch {
 	case o.mode.isWindscribe():
-		field("Result", t.Dim("ktest watches windscribe-cli status; Windscribe owns the public IP"))
+		if monitor == nil {
+			field("Result", t.Yellow("Windscribe CLI unverified; bridge listening only; VPN and auto-reconnect NOT confirmed"))
+		} else {
+			field("Result", t.Dim("Windscribe CLI monitored; carrier readiness is not VPN authentication"))
+		}
 	case bypassed > 0:
 		field("Result", t.Green(fmt.Sprintf("%d blocked test %s opened through ktest", bypassed, plural(bypassed, "site", "sites"))))
 	case passed == len(proxied) && passed > 0:
