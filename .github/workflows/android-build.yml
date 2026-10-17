@@ -33,8 +33,10 @@ jobs:
           java-version: '17'
       - name: Install Android SDK packages
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358"
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358"
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.5.0'
