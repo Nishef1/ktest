@@ -428,6 +428,7 @@ type partialUpgradeWriter struct {
 	out   bytes.Buffer
 	chunk int
 }
+
 func (w *partialUpgradeWriter) Write(b []byte) (int, error) {
 	if len(b) > w.chunk {
 		b = b[:w.chunk]
