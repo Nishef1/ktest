@@ -1,5 +1,9 @@
 package com.nishef.ktest
 
+import android.app.Activity
+import android.net.VpnService
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -65,7 +69,7 @@ private val modes = listOf(
     ConnectionMode("fast", "Fast", "Faster adaptive race · protected AI sites fail closed", true),
     ConnectionMode("aether", "Aether", "External local SOCKS5 core required", true),
     ConnectionMode("psiphon", "Psiphon", "External local SOCKS5 core required", true),
-    ConnectionMode("tor", "Tor", "Requires a Tor SOCKS5 service · Tor exit checked", true),
+    ConnectionMode("tor", "Tor", "Embedded Guardian Tor · exit verified", true),
     ConnectionMode("windscribe", "Windscribe", "Local anti-DPI bridge", false),
     ConnectionMode("windscribe-aether", "Windscribe + Aether", "WARP carrier for Windscribe", false),
 )
@@ -94,6 +98,9 @@ private fun ConnectionApp() {
     var modeId by rememberSaveable { mutableStateOf(prefs.getString("mode", "balanced") ?: "balanced") }
     var upstream by remember { mutableStateOf(prefs.getString("upstream_$modeId", "") ?: "") }
     var status by remember { mutableStateOf(JSONObject(Mobilebridge.proxyStatus())) }
+    var vpnPhase by remember { mutableStateOf(KTestVpnService.phase) }
+    var vpnSelected by rememberSaveable { mutableStateOf(false) }
+    var vpnOwner by rememberSaveable { mutableStateOf("") }
     var connecting by remember { mutableStateOf(false) }
     var checkingRoute by remember { mutableStateOf(false) }
     var routeReport by remember { mutableStateOf<JSONObject?>(null) }
@@ -115,13 +122,43 @@ private fun ConnectionApp() {
     var checkingUpdates by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
     val scope = rememberCoroutineScope()
-    val running = status.optBoolean("running")
+    val proxyRunning = status.optBoolean("running")
+    val vpnRunning = vpnPhase == "tun_unverified" || vpnPhase == "blocking"
+    val vpnStarting = vpnPhase == "verifying"
+    val running = proxyRunning || vpnRunning
+    val startVpn: () -> Unit = {
+        val request = Intent(context, KTestVpnService::class.java).apply {
+            action = KTestVpnService.ACTION_CONNECT
+            putExtra(KTestVpnService.EXTRA_SOCKS, upstream.trim())
+            putExtra(KTestVpnService.EXTRA_OWNER, vpnOwner.trim())
+            putExtra(KTestVpnService.EXTRA_MODE, modeId)
+        }
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(context, request)
+        } catch (e: Exception) {
+            error = e.message ?: "Could not start VPN service"
+            connecting = false
+        }
+    }
+    val vpnConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) startVpn()
+        else {
+            connecting = false
+            error = "Android VPN permission was not granted"
+        }
+    }
     val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
 
     LaunchedEffect(Unit) {
         while (isActive) {
             status = runCatching { JSONObject(Mobilebridge.proxyStatus()) }
                 .getOrElse { JSONObject() }
+            vpnPhase = KTestVpnService.phase
+            if (vpnPhase == "failed" || vpnPhase == "revoked") {
+                error = KTestVpnService.detail.ifBlank { "VPN startup failed" }
+                connecting = false
+            }
+            if (vpnPhase == "tun_unverified") connecting = false
             if (status.optBoolean("running") || ProxyService.lastError != null) connecting = false
             if (ProxyService.lastError != null) error = ProxyService.lastError
             delay(900)
@@ -156,6 +193,12 @@ private fun ConnectionApp() {
                         activeMode = activeMode,
                         running = running,
                         status = status,
+                        vpnSelected = vpnSelected,
+                        vpnRunning = vpnRunning,
+                        vpnPhase = vpnPhase,
+                        onVpnSelected = { if (!running && !vpnStarting) vpnSelected = it },
+                        vpnOwner = vpnOwner,
+                        onVpnOwner = { if (!running && !vpnStarting) vpnOwner = it },
                         connecting = connecting,
                         routeReport = routeReport, checkingRoute = checkingRoute,
                         onCheckRoute = {
@@ -185,27 +228,42 @@ private fun ConnectionApp() {
                             }
                         },
                         onPower = {
-                            if (!running) {
+                            error = null
+                            if (vpnRunning || vpnStarting) {
+                                context.startService(Intent(context, KTestVpnService::class.java).apply {
+                                    action = KTestVpnService.ACTION_DISCONNECT
+                                })
+                                connecting = false
+                            } else if (proxyRunning) {
+                                context.startService(Intent(context, ProxyService::class.java).apply {
+                                    action = ProxyService.ACTION_STOP
+                                })
+                            } else if (vpnSelected) {
+                                if (upstream.isBlank() || vpnOwner.isBlank()) {
+                                    error = "Enter a local UDP-capable SOCKS5 endpoint and its owning app package"
+                                } else {
+                                    connecting = true
+                                    val consent = VpnService.prepare(context)
+                                    if (consent != null) vpnConsent.launch(consent)
+                                    else startVpn()
+                                }
+                            } else {
                                 connecting = true
                                 routeReport = null
-                                scope.launch { delay(15000); connecting = false }
-                            }
-                            error = null
-                            ProxyService.lastError = null
-                            try {
-                                val intent = Intent(context, ProxyService::class.java).apply {
-                                    action = if (running) ProxyService.ACTION_STOP else ProxyService.ACTION_CONNECT
-                                    putExtra(ProxyService.EXTRA_MODE, modeId)
-                                    putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
+                                ProxyService.lastError = null
+                                try {
+                                    androidx.core.content.ContextCompat.startForegroundService(
+                                        context,
+                                        Intent(context, ProxyService::class.java).apply {
+                                            action = ProxyService.ACTION_CONNECT
+                                            putExtra(ProxyService.EXTRA_MODE, modeId)
+                                            putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
+                                        }
+                                    )
+                                } catch (e: Exception) {
+                                    error = e.message ?: "Unable to control local proxy"
+                                    connecting = false
                                 }
-                                if (running) context.startService(intent)
-                                else androidx.core.content.ContextCompat.startForegroundService(context, intent)
-                            } catch (e: Exception) {
-                                error = e.message ?: "Unable to control local proxy"
-                            }
-                            scope.launch {
-                                delay(250)
-                                status = JSONObject(Mobilebridge.proxyStatus())
                             }
                         },
                         onCopy = { text ->
@@ -314,6 +372,8 @@ private fun ConnectionApp() {
 @Composable
 private fun ConnectionScreen(
     activeMode: ConnectionMode, running: Boolean, status: JSONObject,
+    vpnSelected: Boolean, vpnRunning: Boolean, vpnPhase: String,
+    onVpnSelected: (Boolean) -> Unit, vpnOwner: String, onVpnOwner: (String) -> Unit,
     connecting: Boolean, routeReport: JSONObject?, checkingRoute: Boolean,
     onCheckRoute: () -> Unit,
     upstream: String, onUpstream: (String) -> Unit, error: String?,
@@ -331,9 +391,15 @@ private fun ConnectionScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                val coreNeeded = activeMode.id in listOf("aether", "psiphon", "tor")
-                val canConnect = activeMode.available && (!coreNeeded || upstream.isNotBlank())
+                val coreNeeded = activeMode.id in listOf("aether", "psiphon")
+                val canConnect = activeMode.available &&
+                    (if (vpnSelected) {
+                        activeMode.id != "tor" && upstream.isNotBlank() && vpnOwner.isNotBlank()
+                    } else !coreNeeded || upstream.isNotBlank())
                 val stateLabel = when {
+                    vpnPhase == "blocking" -> "VPN TRAFFIC BLOCKED · FAIL-CLOSED"
+                    vpnRunning -> "VPN TUN ACTIVE · UNVERIFIED"
+                    vpnPhase == "verifying" -> "VERIFYING VPN TRANSPORT"
                     running -> "PROXY ACTIVE"
                     connecting -> "CHECKING ROUTE"
                     !activeMode.available -> "NOT AVAILABLE YET"
@@ -349,10 +415,12 @@ private fun ConnectionScreen(
                     Text(stateLabel, color = if (running) accent else muted,
                         fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 1.4.sp)
                 }
-                PowerOrb(enabled = (canConnect || running) && !connecting, active = running, onClick = onPower)
+                PowerOrb(enabled = canConnect || running || vpnPhase == "verifying",
+                    active = running && vpnPhase != "blocking", onClick = onPower)
                 Text(
                     when {
                         running -> "Disconnect"
+                        vpnPhase == "verifying" -> "Cancel"
                         connecting -> "Connecting..."
                         !activeMode.available -> "Unavailable on Android"
                         !canConnect -> "Configure SOCKS5 first"
@@ -362,6 +430,8 @@ private fun ConnectionScreen(
                 )
                 Text(
                     when {
+                        vpnPhase == "blocking" -> "Upstream failed; VPN TUN is holding traffic. Disconnect to release."
+                        vpnRunning -> "HEV tunnel is running · app traffic still requires device verification"
                         running -> "Local proxy active · Not a system VPN"
                         connecting -> "Verifying local upstream and foreign exit..."
                         !activeMode.available -> "This desktop core has not been ported."
@@ -370,7 +440,7 @@ private fun ConnectionScreen(
                     },
                     color = muted, textAlign = TextAlign.Center, fontSize = 12.sp
                 )
-                if (running) {
+                if (running && !vpnRunning) {
                     Spacer(Modifier.height(8.dp))
                     Button(onClick = onCheckRoute, enabled = !checkingRoute,
                         colors = ButtonDefaults.buttonColors(containerColor = edge, contentColor = white)) {
@@ -455,7 +525,9 @@ private fun ConnectionScreen(
                 Text("OPTIONAL UPSTREAM SOCKS5", color = accent, fontWeight = FontWeight.Bold,
                     fontSize = 11.sp, letterSpacing = 1.sp)
                 Text(
-                    if (activeMode.id in listOf("aether", "psiphon", "tor"))
+                    if (activeMode.id == "tor")
+                        "Guardian Tor runs inside KTest. Tor is TCP-only; VPN mode requires an extra DNS/UDP bridge."
+                    else if (activeMode.id in listOf("aether", "psiphon"))
                         "Required: start the corresponding core separately and enter its loopback SOCKS5 address."
                     else
                         "Balanced and Fast can add a separately running, verified foreign SOCKS5 exit.",
@@ -464,7 +536,7 @@ private fun ConnectionScreen(
                 OutlinedTextField(
                     value = upstream,
                     onValueChange = onUpstream,
-                    enabled = !running,
+                    enabled = !running && activeMode.id != "tor",
                     singleLine = true,
                     label = { Text("Local address (e.g. 127.0.0.1:9050)") },
                     modifier = Modifier.fillMaxWidth(),
@@ -482,6 +554,30 @@ private fun ConnectionScreen(
             }
         }
 
+        Surface(color = surface, shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("TRAFFIC COVERAGE", color = accent, fontSize = 11.sp, letterSpacing = 1.4.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Experimental whole-device VPN", color = white, fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold)
+                        Text("Requires a verified external SOCKS5 core with UDP. Tor and the current built-in Go proxy do not qualify.",
+                            color = muted, fontSize = 11.sp)
+                    }
+                    Switch(checked = vpnSelected, onCheckedChange = onVpnSelected,
+                        enabled = !running && vpnPhase != "verifying")
+                }
+                if (vpnSelected) {
+                    OutlinedTextField(value = vpnOwner, onValueChange = onVpnOwner,
+                        label = { Text("SOCKS app package ID (excluded from VPN)") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    Text("Your external core app and KTest will bypass the VPN to prevent routing loops. Requires Android consent; do not claim a kill switch without Android's 'Block connections without VPN' enabled.",
+                        color = amber, fontSize = 11.sp)
+                }
+            }
+        }
         Surface(color = Color(0xFF1A2832), shape = RoundedCornerShape(19.dp)) {
             Column(Modifier.fillMaxWidth().padding(17.dp),
                 verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -721,7 +817,7 @@ private fun SettingsScreen(
             Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("ENGINE & PRIVACY", color = accent, fontSize = 11.sp, letterSpacing = 1.5.sp)
                 Text("Go local proxy core", color = white, fontWeight = FontWeight.SemiBold)
-                Text("Balanced and Fast use Go TCP paths. Aether/Psiphon/Tor can use a separately running local SOCKS5 upstream after live verification; their engines are not bundled.",
+                Text("Balanced and Fast use Go TCP paths. Guardian Tor is included as an Android library; Aether and Psiphon still require an external SOCKS5 core. Tor full-device VPN is not available.",
                     color = muted, fontSize = 12.sp)
                 HorizontalDivider(color = edge)
                 Text("System VPN / HEV", color = white, fontWeight = FontWeight.SemiBold)

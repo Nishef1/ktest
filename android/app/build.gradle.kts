@@ -31,6 +31,9 @@ android {
 dependencies {
     // Built from the real ktest Go core; not a placeholder/mock.
     implementation(files("libs/mobilebridge.aar"))
+    // Version 2.19.0; SHA-256 verified by android/scripts/fetch-hev-aar.sh.
+    // Fetched only on explicit manual Android release/test command.
+    implementation(files("libs/hev-socks5-tunnel.aar"))
     val composeBom = platform("androidx.compose:compose-bom:2025.09.01")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")
@@ -40,4 +43,6 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("info.guardianproject:tor-android:0.4.9.14")
+    implementation("info.guardianproject:jtorctl:0.4.5.7")
 }

@@ -9,9 +9,12 @@ import android.content.Intent
 import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -31,6 +34,8 @@ class ProxyService : Service() {
 
     private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
+    private val tor = TorController(this)
+    private var startup: Job? = null
     @Volatile private var wanted = false
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -50,10 +55,11 @@ class ProxyService : Service() {
                 wanted = true
                 lastError = null
                 startForeground(NOTIFICATION_ID, notification(mode))
-                worker.launch {
+                startup = worker.launch {
                     lock.withLock {
                         try {
-                            if (wanted) Mobilebridge.startProxyWithUpstream(mode, upstream)
+                            val validatedUpstream = if (mode == "tor") tor.start() else upstream
+                            if (wanted) Mobilebridge.startProxyWithUpstream(mode, validatedUpstream)
                             if (!wanted) Mobilebridge.stopProxy()
                         } catch (e: Exception) {
                             lastError = e.message ?: "Could not start proxy."
@@ -61,7 +67,20 @@ class ProxyService : Service() {
                             Mobilebridge.stopProxy()
                         }
                     }
+                    if (wanted && mode == "tor") {
+                        var failures = 0
+                        while (wanted && isActive) {
+                            delay(5000)
+                            failures = if (tor.isAlive()) 0 else failures + 1
+                            if (failures >= 3) {
+                                wanted = false
+                                lastError = "Tor circuit/service unavailable; proxy stopped"
+                                Mobilebridge.stopProxy()
+                            }
+                        }
+                    }
                     if (!wanted) {
+                        tor.stop()
                         withContext(Dispatchers.Main) {
                             stopForeground(STOP_FOREGROUND_REMOVE)
                             stopSelf()
@@ -71,6 +90,8 @@ class ProxyService : Service() {
             }
             ACTION_STOP -> {
                 wanted = false
+                startup?.cancel()
+                tor.stop()
                 worker.launch {
                     lock.withLock {
                         Mobilebridge.stopProxy()
@@ -88,6 +109,8 @@ class ProxyService : Service() {
 
     override fun onDestroy() {
         wanted = false
+        startup?.cancel()
+        tor.stop()
         Mobilebridge.stopProxy()
         worker.cancel()
         super.onDestroy()

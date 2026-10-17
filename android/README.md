@@ -1,5 +1,13 @@
 # KTest Connection for Android — active development (no new APK builds)
 
+## Reference-driven native integration (work in progress)
+
+Source integration now includes the Guardian Project `tor-android:0.4.9.14` and `jtorctl:0.4.5.7`, bound to the KTest foreground proxy service. A Tor circuit must be established and a Tor exit verified through Go before using the Tor proxy. A bounded watchdog stops proxy listeners if Tor repeatedly becomes unavailable. **No Android device compile/runtime test was performed for these changes.**
+
+An experimental `VpnService` + HEV adapter is also added. It can only start with an **external**, loopback, UDP-capable SOCKS5 listener from an explicitly named installed app package. It checks verified foreign egress and an actual SOCKS UDP DNS response before establishing the TUN, and marks the result `TUN ACTIVE / UNVERIFIED` rather than Connected. Direct Tor/SOCKS and the existing TCP-only Go proxy are not eligible for this HEV mode. Upstream HEV 2.19.0 AAR is fetched by the version-pinned and SHA-256-pinned `android/scripts/fetch-hev-aar.sh` **during a manual build only**.
+
+
+
 **Scope:** an English-only Jetpack Compose client with a real Go SOCKS5 + HTTP proxy service, bounded network diagnostics, CDN/ECH research tools and user-initiated official-update checks. It is **not** a system VPN and it does not embed Aether, Psiphon or Tor cores.
 
 ## Current development gate (2026-10-17)
