@@ -158,3 +158,14 @@ func TestWindscribeCLIStatusGraceExpiresWithoutInventingDisconnection(t *testing
 		})
 	}
 }
+
+func TestWindscribeInitialUnknownCLINeverEnablesNestedTunnel(t *testing.T) {
+	if !monitorUnknownCLIAllowed(ModeWindscribe) {
+		t.Fatal("read-only bridge should keep watching after transient CLI startup failure")
+	}
+	for _, mode := range []ConnectionMode{ModeWindscribeAether, ModeAether, ModeFast} {
+		if monitorUnknownCLIAllowed(mode) {
+			t.Fatalf("unknown CLI would authorize unsafe mode %s", mode)
+		}
+	}
+}

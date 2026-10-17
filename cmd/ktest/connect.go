@@ -1051,7 +1051,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	switch {
 	case o.mode.isWindscribe():
-		if monitor == nil {
+		if monitor == nil || monitor.State() == windscribeUnknown {
 			field("Result", t.Yellow("Windscribe CLI unverified; bridge listening only; VPN and auto-reconnect NOT confirmed"))
 		} else {
 			field("Result", t.Dim("Windscribe CLI monitored; carrier readiness is not VPN authentication"))

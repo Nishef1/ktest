@@ -324,6 +324,10 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	}
 }
 
+// Unknown initial CLI state is safe for read-only Windscribe observation,
+ // but never authorizes a nested Aether carrier or automatic reconnect.
+func monitorUnknownCLIAllowed(mode ConnectionMode) bool { return mode == ModeWindscribe }
+
 func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *windscribeMonitor {
 	if !o.mode.isWindscribe() {
 		return nil
@@ -336,13 +340,15 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 	m := &windscribeMonitor{cli: path, t: t, autoReconnect: o.windscribeReconnect, aetherCarrier: o.mode == ModeWindscribeAether}
 	m.refresh(ctx) // initial state before external tunnel scanning
 	if m.State() == windscribeUnknown {
-		if o.mode == ModeWindscribeAether {
+		if !monitorUnknownCLIAllowed(o.mode) {
 			t.Note("Windscribe CLI did not confirm a safe disconnected state; no extra Aether tunnel will start")
-		} else {
-			t.Note("Windscribe CLI state unverified; the local bridge can listen but automatic reconnect is disabled")
+			return nil
 		}
+		// Continue read-only polling so a transient IPC failure does not
+		// permanently disable confirmation of a later healthy TCP session.
+		m.autoReconnect = false
+		t.Note("Initial Windscribe CLI status unknown; continuing read-only monitoring with automatic reconnect disabled")
 		t.Note("Run windscribe-cli.exe status directly; use -windscribe-cli with the absolute executable path for a custom installation.")
-		return nil
 	}
 	go func() {
 		ticker := time.NewTicker(3 * time.Second)
