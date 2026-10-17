@@ -192,7 +192,7 @@ func TestWindscribeConnectedWithoutCityIsRecognized(t *testing.T) {
 	// pending tunnel validation and network interference must still fail closed.
 	for _, tc := range []struct {
 		status string
-		want windscribeState
+		want   windscribeState
 	}{
 		{"Connect state: Connected", windscribeConnected},
 		{"*Connect state: Connected", windscribeConnecting},

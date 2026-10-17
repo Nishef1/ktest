@@ -33,12 +33,12 @@ var wsCatalogURLs = []wsCatalogSource{
 }
 
 type wsNode struct {
-	IP       string `json:"ip"`
-	TCP      string `json:"ip2"`
-	IP3      string `json:"ip3"`
-	Hostname string `json:"hostname"`
-	Group    string `json:"group"`
-	ForceDisconnect int `json:"fd"` // 1: draining node; no new sessions
+	IP              string `json:"ip"`
+	TCP             string `json:"ip2"`
+	IP3             string `json:"ip3"`
+	Hostname        string `json:"hostname"`
+	Group           string `json:"group"`
+	ForceDisconnect int    `json:"fd"` // 1: draining node; no new sessions
 }
 
 type wsCatalogList struct {
