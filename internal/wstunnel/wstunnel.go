@@ -266,15 +266,15 @@ func acceptKey(key string) string {
 
 // Conn carries a byte stream in binary WebSocket messages (client side).
 type Conn struct {
-	c         net.Conn
-	r         *bufio.Reader
-	wmu       sync.Mutex
-	remaining int64 // unread payload of the current data frame
-	mask      [4]byte
-	masked    bool
-	maskPos   int
+	c          net.Conn
+	r          *bufio.Reader
+	wmu        sync.Mutex
+	remaining  int64 // unread payload of the current data frame
+	mask       [4]byte
+	masked     bool
+	maskPos    int
 	fragmented bool
-	closed    bool
+	closed     bool
 }
 
 const (
