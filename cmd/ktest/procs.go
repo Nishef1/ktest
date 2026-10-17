@@ -26,6 +26,16 @@ func runTracked(cmd *exec.Cmd) error {
 		return err
 	}
 	pid := cmd.Process.Pid
+	// Windows Job Objects ensure Psiphon/Tor descendants die even if Aether
+	// exits first. Untracked descendants must never outlive this session.
+	closeJob, err := confineTrackedProcess(cmd.Process)
+	if err != nil {
+		killProcessTree(pid)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	defer closeJob()
 	liveProcs.mu.Lock()
 	liveProcs.procs[pid] = cmd
 	liveProcs.mu.Unlock()
