@@ -156,9 +156,9 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 		lyre += ".exe"
 	}
 	want := map[string]string{
-		core: aetherBinary(base),
+		core:          aetherBinary(base),
 		"pt/" + ptBin: psiphonCore(base),
-		"pt/" + lyre: filepath.Join(base, "cores", "pt", lyre),
+		"pt/" + lyre:  filepath.Join(base, "cores", "pt", lyre),
 	}
 	found := false
 	if strings.HasSuffix(url, ".zip") {
