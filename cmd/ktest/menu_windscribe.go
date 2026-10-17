@@ -70,7 +70,7 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 			{"5", "Run local bridge / observe VPN", "Real client owns OpenVPN authentication"},
 			{"6", "Compare Aether carrier methods", "3 min · neutral requests"},
 			{"7", "Run Windscribe through Aether", "OpenVPN TCP; explicit extra tunnel"},
-			{"8", "Verify connected VPN data", "Stable CLI IP + separate system HTTPS request"},
+			{"8", "Verify connected VPN data", "System HTTPS + optional app-reported VPN IP"},
 			{"9", "Test own CDN route", "Requires your configured hostname"},
 		} {
 			t.ui.menuOption(row.key, row.name, row.detail)
@@ -99,16 +99,30 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 			alive = t.connectFromMenu(base, in, mode)
 		case "9":
 			alive = t.cdnScanMenu(in)
-		case "1", "6", "8":
+		case "8":
+			t.ui.Printf("  VPN IP shown in Windscribe app (Enter = measure only; 0 = back) > ")
+			expected, ok := in.read()
+			if !ok {
+				return false
+			}
+			if isBackChoice(expected) {
+				continue
+			}
+			args := []string{"-base", base, "-verify-vpn"}
+			if expected != "" {
+				args = append(args, "-expected-vpn-ip", expected)
+			}
 			t.ui.leaveMenu()
 			alive = t.tool(in, func(ctx context.Context) {
-				switch answer {
-				case "1":
+				runWindscribeTestContext(ctx, args, t.ui)
+			})
+		case "1", "6":
+			t.ui.leaveMenu()
+			alive = t.tool(in, func(ctx context.Context) {
+				if answer == "1" {
 					runDoctorMode(ctx, t.ui, base, false, ModeWindscribe)
-				case "6":
+				} else {
 					runAetherDiagnosis(ctx, t.ui, base, false, 3*time.Minute)
-				case "8":
-					runWindscribeTestContext(ctx, []string{"-base", base, "-verify-vpn"}, t.ui)
 				}
 			})
 		default:
