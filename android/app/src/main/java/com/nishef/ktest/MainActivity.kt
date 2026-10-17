@@ -234,10 +234,11 @@ private fun ConnectionApp() {
                                     action = KTestVpnService.ACTION_DISCONNECT
                                 })
                                 connecting = false
-                            } else if (proxyRunning) {
+                            } else if (proxyRunning || (connecting && !vpnSelected)) {
                                 context.startService(Intent(context, ProxyService::class.java).apply {
                                     action = ProxyService.ACTION_STOP
                                 })
+                                connecting = false
                             } else if (vpnSelected) {
                                 if (upstream.isBlank() || vpnOwner.isBlank()) {
                                     error = "Enter a local UDP-capable SOCKS5 endpoint and its owning app package"
