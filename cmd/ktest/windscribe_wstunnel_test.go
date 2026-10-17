@@ -770,10 +770,15 @@ func TestWindscribeCarrierReportsUnexpectedUpstreamEOFOnce(t *testing.T) {
 	defer a.Close()
 	var logs []string
 	c := &carrierConn{
-		Conn: a, cancel: func(){}, stopClose: func() bool {return true},
-		name: "Stealth entry=198.51.100.4", destination: "203.0.113.2:443",
-		started: time.Now(),
-		logf: func(format string, args ...any) {logs = append(logs, fmt.Sprintf(format, args...))},
+		Conn:        a,
+		cancel:      func() {},
+		stopClose:   func() bool { return true },
+		name:        "Stealth entry=198.51.100.4",
+		destination: "203.0.113.2:443",
+		started:     time.Now(),
+		logf: func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		},
 	}
 	_ = peer.Close()
 	buf := make([]byte, 8)
