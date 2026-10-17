@@ -273,6 +273,7 @@ type Conn struct {
 	mask      [4]byte
 	masked    bool
 	maskPos   int
+	fragmented bool
 	closed    bool
 }
 
@@ -345,6 +346,9 @@ func (w *Conn) Write(p []byte) (int, error) {
 
 // Read returns tunneled bytes, answering pings and ending at a close frame.
 func (w *Conn) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	for w.remaining == 0 {
 		if err := w.nextFrame(); err != nil {
 			return 0, err
@@ -373,7 +377,17 @@ func (w *Conn) nextFrame() error {
 		return err
 	}
 	op := h[0] & 0x0F
+	if h[0]&0x70 != 0 {
+		return errors.New("wstunnel: unexpected reserved bits in frame")
+	}
+	fin := h[0]&0x80 != 0
 	masked := h[1]&0x80 != 0
+	if masked {
+		return errors.New("wstunnel: masked server frame violates RFC 6455")
+	}
+	if !fin && op >= 8 {
+		return errors.New("wstunnel: fragmented control frame")
+	}
 	length := int64(h[1] & 0x7F)
 	switch length {
 	case 126:
@@ -400,7 +414,18 @@ func (w *Conn) nextFrame() error {
 		}
 	}
 	switch op {
-	case opBinary, opCont:
+	case opBinary:
+		if w.fragmented {
+			return errors.New("wstunnel: new binary message before previous fragments completed")
+		}
+		w.fragmented = !fin
+		w.remaining, w.mask, w.masked, w.maskPos = length, mask, masked, 0
+		return nil
+	case opCont:
+		if !w.fragmented {
+			return errors.New("wstunnel: continuation without an initial binary fragment")
+		}
+		w.fragmented = !fin
 		w.remaining, w.mask, w.masked, w.maskPos = length, mask, masked, 0
 		return nil
 	case opText:
@@ -424,7 +449,8 @@ func (w *Conn) nextFrame() error {
 	case opPong:
 		return nil
 	case opClose:
-		_ = w.writeFrame(opClose, nil)
+		// Do not block the upstream reader writing a control reply: the
+		// caller's Close performs a bounded best-effort close handshake.
 		return io.EOF
 	}
 	return fmt.Errorf("wstunnel: unknown opcode %d", op)

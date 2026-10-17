@@ -351,3 +351,62 @@ func TestWindscribeOfficialClientHelloWebSocketAndStealth(t *testing.T) {
 		})
 	}
 }
+
+func TestWebSocketRejectsUnexpectedControlAndContinuationFrames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"continuation without start", []byte{0x80, 0}},
+		{"unexpected RSV", []byte{0xC2, 0}},
+		{"server sends masked frame", []byte{0x82, 0x80, 0, 0, 0, 0}},
+		{"fragmented control frame", []byte{0x09, 0}},
+		{"new binary before continuation", []byte{0x02, 1, 'a', 0x82, 1, 'b'}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := net.Pipe()
+			defer a.Close()
+			defer b.Close()
+			go func() { _, _ = b.Write(tc.data) }()
+			c := &Conn{c: a, r: bufio.NewReader(a)}
+			_ = c.SetReadDeadline(time.Now().Add(time.Second))
+			buf := make([]byte, 4)
+			_, err := c.Read(buf)
+			if tc.name == "new binary before continuation" && err == nil {
+				_, err = c.Read(buf)
+			}
+			if err == nil {
+				t.Fatal("invalid WebSocket stream accepted")
+			}
+		})
+	}
+}
+
+func TestWebSocketZeroLengthReadDoesNotBlock(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	c := &Conn{c: a, r: bufio.NewReader(a)}
+	if n, err := c.Read(nil); n != 0 || err != nil {
+		t.Fatalf("empty read = (%d,%v)", n, err)
+	}
+}
+
+func TestReceivedWebSocketCloseDoesNotBlockReadingPeer(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	// Peer sends a close but never reads our close acknowledgement.
+	go func() { _, _ = b.Write([]byte{0x88, 0}) }()
+	c := &Conn{c: a, r: bufio.NewReader(a)}
+	done := make(chan error, 1)
+	go func() { _, err := c.Read(make([]byte, 8)); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("expected EOF on close, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("incoming close frame blocked waiting for peer to read a reply")
+	}
+}
