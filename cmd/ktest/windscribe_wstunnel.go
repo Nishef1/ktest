@@ -159,13 +159,13 @@ type wsBridge struct {
 	// candidates overrides the carrier list (tests).
 	candidates func(host string) []wsCarrier
 
-	mu      sync.Mutex
-	edges   []string                        // CDN edges found by the scan, best first
-	good    map[string]string               // destination -> carrier that carried a working VPN
-	bad     map[string]map[string]time.Time // destination -> carrier -> demoted until
-	retries map[string]uint64               // attempt index for choosing independent alternatives
-	active  map[*wsActiveCarrier]bool       // streams awaiting CLI state correlation
-	shortEnds map[string]int                // consecutive short unexpected ends of correlated sessions
+	mu        sync.Mutex
+	edges     []string                        // CDN edges found by the scan, best first
+	good      map[string]string               // destination -> carrier that carried a working VPN
+	bad       map[string]map[string]time.Time // destination -> carrier -> demoted until
+	retries   map[string]uint64               // attempt index for choosing independent alternatives
+	active    map[*wsActiveCarrier]bool       // streams awaiting CLI state correlation
+	shortEnds map[string]int                  // consecutive short unexpected ends of correlated sessions
 }
 
 // CLI authentication is attributed only if a single OpenVPN stream is
@@ -435,6 +435,14 @@ func wsSpreadSNIs(cs []wsCarrier, attempt uint64) []wsCarrier {
 			keys = append(keys, label)
 		}
 		buckets[label] = append(buckets[label], candidate)
+	}
+	// Rotate inside each SNI too, including inventories with only one SNI.
+	for _, key := range keys {
+		bucket := buckets[key]
+		if len(bucket) > 1 {
+			shift := int(attempt % uint64(len(bucket)))
+			buckets[key] = append(append([]wsCarrier{}, bucket[shift:]...), bucket[:shift]...)
+		}
 	}
 	rotation := int(attempt % uint64(len(keys)))
 	keys = append(append([]string{}, keys[rotation:]...), keys[:rotation]...)
@@ -793,7 +801,7 @@ type carrierConn struct {
 	destination string
 	started     time.Time
 	ended       sync.Once
-	closed      atomic.Bool
+	closed        atomic.Bool
 	onUpstreamEnd func()
 }
 
