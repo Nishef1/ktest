@@ -11,7 +11,7 @@ func TestAIDomainRulesPrecise(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"chatgpt.com", "api.openai.com", "assets.oaistatic.com", "claude.ai", "claudeusercontent.com", "gemini.google.com", "aistudio.google.com", "notebooklm.google.com", "generativelanguage.googleapis.com", "copilot.microsoft.com", "grok.com", "api.my-ai.example", "special.example"} {
+	for _, name := range []string{"chatgpt.com", "api.openai.com", "assets.oaistatic.com", "claude.ai", "claude.com", "platform.claude.com", "claudeusercontent.com", "gemini.google.com", "aistudio.google.com", "notebooklm.google.com", "generativelanguage.googleapis.com", "copilot.microsoft.com", "grok.com", "api.my-ai.example", "special.example"} {
 		if !rules.Match(name) {
 			t.Errorf("should be protected: %s", name)
 		}
@@ -39,7 +39,7 @@ func TestAIRequiresVerifiedExitAndStaysPinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	order := p.order("chatgpt.com")
+	order := p.order("chatgpt.com", "443")
 	if len(order) != 2 {
 		t.Fatalf("expected only 2 verified foreign routes, got %d", len(order))
 	}
@@ -48,7 +48,7 @@ func TestAIRequiresVerifiedExitAndStaysPinned(t *testing.T) {
 			t.Fatalf("unsafe AI upstream: %s", u.Name)
 		}
 	}
-	if len(p.order("example.com")) != 4 {
+	if len(p.order("example.com", "443")) != 4 {
 		t.Fatal("non-AI sites lost their ordinary paths")
 	}
 	var chosen *upstreamState
@@ -60,15 +60,15 @@ func TestAIRequiresVerifiedExitAndStaysPinned(t *testing.T) {
 	if chosen == nil {
 		t.Fatal("missing verified A")
 	}
-	p.record(chosen, "chatgpt.com", true, 1)
+	p.record(chosen, "chatgpt.com", "443", true, 1)
 	for _, name := range []string{"claude.ai", "api.openai.com", "grok.com"} {
-		selected := p.order(name)
+		selected := p.order(name, "443")
 		if len(selected) != 1 || selected[0].Name != "verified A" {
 			t.Fatalf("AI route changed for %s", name)
 		}
 	}
-	p.record(chosen, "chatgpt.com", false, 1)
-	if len(p.order("gemini.google.com")) != 1 {
+	p.record(chosen, "chatgpt.com", "443", false, 1)
+	if len(p.order("gemini.google.com", "443")) != 1 {
 		t.Fatal("failed exit should remain pinned; never silently rotate identity")
 	}
 }
@@ -79,7 +79,7 @@ func TestNoVerifiedAIExitFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.order("chatgpt.com")) != 0 {
+	if len(p.order("chatgpt.com", "443")) != 0 {
 		t.Fatal("AI leaked to direct/unverified route")
 	}
 	if _, err := p.race(context.Background(), "chatgpt.com", "443", []byte{}); err == nil || !strings.Contains(err.Error(), "fail-closed") {

@@ -144,6 +144,24 @@ func TestConnectionFeedPreservesOutcomesAndVerboseError(t *testing.T) {
 	}
 }
 
+func TestConnectionFeedSeparatesHostsPortsAndResponseStages(t *testing.T) {
+	var out bytes.Buffer
+	feed := &siteEvents{t: plainTerm(&out)}
+	for _, target := range []struct{ host, port string }{{"api.example.org", "443"}, {"assets.example.org", "443"}, {"api.example.org", "8443"}} {
+		feed.print(smartproxy.Event{Host: target.host, Port: target.port, Site: "example.org", Path: "route", OK: true, TLSResponse: true})
+	}
+	feed.print(smartproxy.Event{Host: "front.example.org", Port: "443", Path: "front", OK: true, Prepared: true})
+	feed.print(smartproxy.Event{Host: "api.example.org", Port: "443", Path: "route", EarlyClose: true, Err: "upstream closed"})
+	if feed.ok.Load() != 3 || feed.prepared.Load() != 1 || feed.earlyClosed.Load() != 1 || feed.fail.Load() != 0 {
+		t.Fatal("response stages were mixed in the counters")
+	}
+	for _, value := range []string{"api.example.org", "assets.example.org", "api.example.org:8443", "TLS RESPONSE", "ROUTE READY", "EARLY CLOSE"} {
+		if !strings.Contains(out.String(), value) {
+			t.Fatalf("missing destination or stage %q: %s", value, out.String())
+		}
+	}
+}
+
 func TestLiveProgressKeepsStatusMessagesAndFitsWidth(t *testing.T) {
 	var out bytes.Buffer
 	u := &term{w: &out, columns: 40, color: true, unicode: true, live: true}

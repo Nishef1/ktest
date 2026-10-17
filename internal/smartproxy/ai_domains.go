@@ -11,7 +11,7 @@ import (
 // x.com) are intentionally NOT covered as a whole.
 var aiDefaultRules = []string{
 	"chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com",
-	"claude.ai", "anthropic.com", "claudeusercontent.com",
+	"claude.ai", "claude.com", "anthropic.com", "claudeusercontent.com",
 	"grok.com", "x.ai", "perplexity.ai", "poe.com", "deepseek.com", "deepseek.ai",
 	"mistral.ai", "character.ai", "meta.ai", "huggingface.co",
 	"stability.ai", "midjourney.com", "runwayml.com", "ideogram.ai",

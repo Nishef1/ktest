@@ -107,13 +107,13 @@ type Config struct {
 	// LocalOnly forbids any path other than explicitly marked local anti-DPI
 	// SOCKS cores or built-in ClientHello modifiers on direct connections.
 	LocalOnly bool
-	// Stagger is how long the best path gets alone before the next one joins.
+	// Stagger is the minimum head start before the small fallback wave.
 	Stagger time.Duration
 	// ConnectTimeout bounds dial plus SOCKS handshake; FirstByteTimeout bounds
 	// the wait for the server's first TLS record after the flight was sent.
 	ConnectTimeout   time.Duration
 	FirstByteTimeout time.Duration
-	// MemoryTTL is how long a per-host winner is trusted first.
+	// MemoryTTL bounds exact host:port history and initial sibling hints.
 	MemoryTTL time.Duration
 	// Resolve (A records) and Resolve6 (AAAA records) are used for LocalDNS
 	// upstreams; nil leaves them on system DNS.
@@ -128,12 +128,16 @@ type Config struct {
 
 // Event reports a connection outcome, or unverified TCP establishment.
 type Event struct {
-	Host string
-	Site string // host reduced to the name the memory is keyed by
-	Path string // winning path; empty when none answered
-	Took time.Duration
-	OK   bool
-	Err  string // last failure reason when no path answered
+	Host        string
+	Site        string // grouped domain for aggregate reporting; never the exact history key
+	Port        string
+	TLSResponse bool   // a complete, structurally valid ServerHello was received
+	Prepared    bool   // takeover prepared; application TLS acceptance is still pending
+	EarlyClose  bool   // route ended before post-hello response data; not a second request
+	Path        string // winning path; empty when none answered
+	Took        time.Duration
+	OK          bool
+	Err         string // last failure reason when no path answered
 	// TCPOnly means only the upstream TCP/SOCKS handshake succeeded. It must
 	// not be counted as an answered application connection or a working VPN.
 	TCPOnly bool
@@ -180,7 +184,9 @@ type Proxy struct {
 	cfg             Config
 	mu              sync.Mutex
 	ups             []*upstreamState
-	mem             map[string]memo
+	mem             map[string]*destinationMemory
+	hints           map[string]memo
+	historyUpdates  uint64
 	aiPinned        string          // first working AI exit stays selected until this session ends
 	bootstrapPinned string          // legacy verified foreign-exit dialer; never used for local bypass
 	localAttempts   map[string]memo // last local method attempted per exact host:port
@@ -208,7 +214,7 @@ func New(cfg Config) (*Proxy, error) {
 		return nil, errors.New("at least one upstream is required")
 	}
 	cfg.defaults()
-	p := &Proxy{cfg: cfg, mem: map[string]memo{}}
+	p := &Proxy{cfg: cfg, mem: map[string]*destinationMemory{}, hints: map[string]memo{}}
 	seen := map[string]bool{}
 	for _, u := range cfg.Upstreams {
 		if cfg.RejectExits && u.Exit {
@@ -244,102 +250,39 @@ func (p *Proxy) Stats() []Stat {
 	return out
 }
 
-// Winners returns the remembered upstream per site (for display only).
+// Winners returns the preferred upstream per exact host:port (for display only).
 func (p *Proxy) Winners() map[string]string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := make(map[string]string, len(p.mem))
 	for h, m := range p.mem {
-		if time.Since(m.at) < p.cfg.MemoryTTL {
-			out[h] = m.name
+		if time.Since(m.updated) < p.cfg.MemoryTTL && m.winner != "" {
+			out[h] = m.winner
 		}
 	}
 	return out
 }
 
-// order lists upstreams: the remembered winner for the site first, then by
-// success rate, static rank and average latency.
-func (p *Proxy) order(host string) []*upstreamState {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	list := make([]*upstreamState, 0, len(p.ups))
-	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
-	for _, u := range p.ups {
-		if u.Match != nil && !u.Match(host) {
-			continue
-		}
-		if protected && (!u.Exit || !u.AIEligible || (p.aiPinned != "" && u.Name != p.aiPinned)) {
-			continue // No plain/Xray/ByeDPI/fronting fallback for AI.
-		}
-		list = append(list, u)
-	}
-	remembered := ""
-	if m, ok := p.mem[siteKey(host)]; ok && time.Since(m.at) < p.cfg.MemoryTTL {
-		remembered = m.name
-	}
-	// Success rate (smoothed, in tenths) rather than raw win counts: counting
-	// wins makes whichever path won early win forever, even when every path is
-	// equally good, and prefers noisy cut paths over the plain one.
-	rate := func(u *upstreamState) int {
-		return int(10*(float64(u.wins)+1)/(float64(u.wins+u.fails)+2) + 0.5)
-	}
-	sort.SliceStable(list, func(i, j int) bool {
-		a, b := list[i], list[j]
-		if p.cfg.PreferVerifiedExit && (a.Exit && a.AIEligible) != (b.Exit && b.AIEligible) {
-			return a.Exit && a.AIEligible
-		}
-		if (a.Name == remembered) != (b.Name == remembered) {
-			return a.Name == remembered
-		}
-		if ra, rb := rate(a), rate(b); ra != rb {
-			return ra > rb
-		}
-		if a.Rank != b.Rank {
-			return a.Rank < b.Rank
-		}
-		if a.ewmaMS != b.ewmaMS && a.ewmaMS != 0 && b.ewmaMS != 0 {
-			return a.ewmaMS < b.ewmaMS
-		}
-		return false
-	})
-	return list
-}
-
-func (p *Proxy) record(u *upstreamState, host string, ok bool, took time.Duration) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !ok {
-		u.fails++
-		if m, has := p.mem[siteKey(host)]; has && m.name == u.Name {
-			delete(p.mem, siteKey(host))
-		}
-		return
-	}
-	u.wins++
-	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) && u.Exit && u.AIEligible && p.aiPinned == "" {
-		p.aiPinned = u.Name
-		p.logf("AI exit pinned for this session: %s", u.Name)
-	}
-	ms := float64(took.Milliseconds())
-	if u.ewmaMS == 0 {
-		u.ewmaMS = ms
-	} else {
-		u.ewmaMS = 0.8*u.ewmaMS + 0.2*ms
-	}
-	p.mem[siteKey(host)] = memo{name: u.Name, at: time.Now()}
-}
-
 // HasVerifiedExit reports whether a foreign TCP exit has been verified.
 // Opening an arbitrary local SOCKS port or reaching a web front is not enough.
 func (p *Proxy) HasVerifiedExit() bool {
+	_, verified := p.ExitCounts()
+	return verified > 0
+}
+
+// ExitCounts reports registered exits and those independently geo-verified.
+func (p *Proxy) ExitCounts() (total, verified int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, u := range p.ups {
-		if u.Exit && u.AIEligible {
-			return true
+		if u.Exit {
+			total++
+			if u.AIEligible {
+				verified++
+			}
 		}
 	}
-	return false
+	return
 }
 
 // Remove unregisters a dead external exit without breaking active sessions
@@ -353,9 +296,18 @@ func (p *Proxy) Remove(name string) {
 			break
 		}
 	}
-	for host, m := range p.mem {
-		if m.name == name {
-			delete(p.mem, host)
+	for _, m := range p.mem {
+		delete(m.routes, name)
+		if m.winner == name {
+			m.winner = ""
+		}
+		if m.challenger == name {
+			m.challenger, m.challengeWins = "", 0
+		}
+	}
+	for host, hint := range p.hints {
+		if hint.name == name {
+			delete(p.hints, host)
 		}
 	}
 	// The AI policy must not silently jump between identities; it remains
@@ -438,13 +390,13 @@ func (p *Proxy) dialLocalBypass(ctx context.Context, host, port string, report b
 		began := time.Now()
 		conn, err := p.dial(ctx, u.Upstream, host, port)
 		if err != nil {
-			p.record(u, host, false, time.Since(began))
+			p.record(u, host, port, false, time.Since(began))
 			lastErr = err
 			continue
 		}
 		p.logf("Windscribe CONNECT %s:%s accepted via local anti-DPI %s (destination/VPN negotiation not yet verified)", host, port, u.Name)
 		if report {
-			p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
+			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
 		}
 		return conn, nil
 	}
@@ -471,7 +423,7 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 	p.mu.Lock()
 	pinned := p.bootstrapPinned
 	p.mu.Unlock()
-	candidates := p.order(host)
+	candidates := p.order(host, port)
 	var lastErr error
 	any := false
 	for _, u := range candidates {
@@ -482,7 +434,7 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 		began := time.Now()
 		conn, err := p.dial(ctx, u.Upstream, host, port)
 		if err != nil {
-			p.record(u, host, false, time.Since(began))
+			p.record(u, host, port, false, time.Since(began))
 			lastErr = err
 			continue
 		}
@@ -496,9 +448,13 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 			_ = conn.Close()
 			continue
 		}
-		p.record(u, host, true, time.Since(began))
+		if !p.record(u, host, port, true, time.Since(began)) {
+			_ = conn.Close()
+			lastErr = errors.New("foreign exit changed while connecting")
+			continue
+		}
 		p.logf("Windscribe CONNECT %s:%s carried through verified exit %s", host, port, u.Name)
-		p.emit(Event{Host: host, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
+		p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
 		return conn, nil
 	}
 	if !any {
@@ -562,7 +518,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	if win.sess != nil {
 		if err := win.sess.Serve(client, flight); err != nil {
 			p.logf("%s:%s %s: %v", host, port, win.path, err)
-			p.emit(Event{Host: host, Site: siteKey(host), Path: win.path, Err: err.Error(), Rejected: true})
+			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: win.path, Err: err.Error(), Rejected: true})
 		}
 		return
 	}
@@ -572,7 +528,10 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 			return
 		}
 	}
-	pipe(client, win.conn)
+	result := pipe(client, win.conn)
+	if win.tls && ctx.Err() == nil {
+		p.observeRelay(host, port, win.path, result)
+	}
 }
 
 // nameFor returns the name a connection is about: the SOCKS host, except when
@@ -610,6 +569,7 @@ type winner struct {
 	conn  net.Conn
 	first []byte
 	sess  Session
+	tls   bool
 	path  string
 }
 
@@ -622,19 +582,20 @@ func (w winner) release() {
 	}
 }
 
-// race sends the TLS flight in two waves. The first wave is one path: the one
-// remembered for the site, else the best-ranked. If it does not answer within
-// the stagger (longer when it is a remembered winner) or fails, the second wave
-// starts every other path at once. One-by-one staggering would delay the right
-// path of a blocked site by 300 ms for each path ranked above it.
+// race first tries the preferred path, then up to three concurrent candidates.
+// If these stay silent, all remaining normal routes join after a bounded
+// 250ms hedge. Explicit Late routes retain their separate last-resort gate.
 func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (winner, error) {
-	order := p.order(host)
+	if err := parent.Err(); err != nil {
+		return winner{}, err
+	}
+	order := p.order(host, port)
 	if len(order) == 0 {
 		return winner{}, fmt.Errorf("%s: no permitted foreign exit; protected site blocked (fail-closed)", host)
 	}
 	// Late paths go to the back, behind a gate that opens when everything else
 	// has failed or after lateAfter.
-	remembered := p.rememberedName(host)
+	remembered := p.rememberedName(host, port)
 	var ordered, late []*upstreamState
 	for _, u := range order {
 		if u.Late && u.Name != remembered && !(p.cfg.PreferVerifiedExit && u.Exit && u.AIEligible) {
@@ -664,16 +625,27 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 			}()
 		}
 	}
-	wave := p.firstWave(order[0], host)
+	wave := p.firstWave(order[0], host, port)
 	launch(1)
 	timer := time.NewTimer(wave)
 	defer timer.Stop()
+	hedge := time.NewTimer(wave + 250*time.Millisecond)
+	defer hedge.Stop()
+	expanded := false
+	refill := func() {
+		if expanded {
+			launch(-1)
+		} else {
+			launch(max(3-pending, 0))
+		}
+	}
 	lateGate := time.NewTimer(lateAfter)
 	defer lateGate.Stop()
 	var lastErr error
 	for pending > 0 || next < len(order) {
 		if pending == 0 && next >= limit && limit < len(order) {
 			limit = len(order) // everything else failed: the last resort may go
+			expanded = true
 			launch(-1)
 		}
 		select {
@@ -682,21 +654,35 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 			return winner{}, parent.Err()
 		case <-lateGate.C:
 			limit = len(order)
+			expanded = true
 			launch(-1)
 		case <-timer.C:
+			refill()
+		case <-hedge.C:
+			expanded = true
 			launch(-1)
 		case r := <-results:
 			pending--
+			if parent.Err() != nil {
+				r.win.release()
+				go drain(results, pending)
+				return winner{}, parent.Err()
+			}
 			if r.err != nil {
 				lastErr = fmt.Errorf("%s: %w", r.u.Name, r.err)
-				p.record(r.u, host, false, r.took)
+				p.record(r.u, host, port, false, r.took)
 				p.logf("%s:%s %s failed: %v", host, port, r.u.Name, r.err)
-				launch(-1) // the first wave failed: open the second at once
+				refill()
 				continue
 			}
-			p.record(r.u, host, true, r.took)
+			if !p.record(r.u, host, port, true, r.took) {
+				r.win.release()
+				lastErr = errors.New("another connection pinned a different foreign exit")
+				refill()
+				continue
+			}
 			p.logf("%s:%s won by %s in %dms", host, port, r.u.Name, r.took.Milliseconds())
-			p.emit(Event{Host: host, Site: siteKey(host), Path: r.u.Name, Took: r.took, OK: true})
+			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: r.u.Name, Took: r.took, OK: true, TLSResponse: r.win.tls, Prepared: r.win.sess != nil})
 			cancel()
 			go drain(results, pending)
 			r.win.path = r.u.Name
@@ -706,27 +692,12 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	if lastErr == nil {
 		lastErr = errors.New("no upstream")
 	}
-	p.emit(Event{Host: host, Site: siteKey(host), Err: lastErr.Error()})
+	p.emit(Event{Host: host, Port: port, Site: siteKey(host), Err: lastErr.Error()})
 	return winner{}, lastErr
 }
 
 // lateAfter is how long a Late path waits behind the others at most.
 const lateAfter = 3 * time.Second
-
-// firstWave is how long the first path gets alone. It scales with that path's
-// own typical time to a TLS record: on an open network the plain path then
-// finishes before any duplicate flight is sent, while a blocked site still
-// opens the second wave at once on a reset or after at most 1.5 s of silence.
-func (p *Proxy) firstWave(first *upstreamState, host string) time.Duration {
-	p.mu.Lock()
-	typical := time.Duration(first.ewmaMS * 1.5 * float64(time.Millisecond))
-	p.mu.Unlock()
-	wave := max(p.cfg.Stagger, typical)
-	if p.hasMemory(host) {
-		wave = max(wave, 4*p.cfg.Stagger) // trust a learned path a little longer
-	}
-	return min(wave, 1500*time.Millisecond)
-}
 
 func (p *Proxy) emit(e Event) {
 	if p.cfg.OnEvent != nil {
@@ -734,26 +705,9 @@ func (p *Proxy) emit(e Event) {
 	}
 }
 
-// rememberedName is the path remembered for the site, or "".
-func (p *Proxy) rememberedName(host string) string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if m, ok := p.mem[siteKey(host)]; ok && time.Since(m.at) < p.cfg.MemoryTTL {
-		return m.name
-	}
-	return ""
-}
-
-func (p *Proxy) hasMemory(host string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	m, ok := p.mem[siteKey(host)]
-	return ok && time.Since(m.at) < p.cfg.MemoryTTL
-}
-
-// siteKey reduces a host to the name the memory is keyed by, so that one win on
-// r1---sn-abc.googlevideo.com speeds up every googlevideo.com node. It is an
-// approximation of the registrable domain without a public-suffix list.
+// siteKey groups hosts for reporting and initial hints only. Exact routing
+// history always uses host:port. This is an approximation of the registrable
+// domain without a public-suffix list.
 func siteKey(host string) string {
 	if net.ParseIP(host) != nil {
 		return host
@@ -782,8 +736,7 @@ func drain(results <-chan outcome, pending int) {
 	}
 }
 
-// attempt connects through one upstream, sends the flight and requires a TLS
-// handshake record back.
+// attempt requires a complete, structurally valid ServerHello before selection.
 func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string, flight []byte) (winner, error) {
 	if u.Takeover != nil {
 		tctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout+p.cfg.FirstByteTimeout)
@@ -816,19 +769,16 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 	if err := send(conn, flight); err != nil {
 		return fail(err)
 	}
-	header := make([]byte, 5)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		return fail(fmt.Errorf("no server response: %w", err))
-	}
-	if header[0] != 0x16 || header[1] != 3 {
-		return fail(fmt.Errorf("not a TLS handshake record (type 0x%02x)", header[0]))
+	response, err := readServerHello(conn)
+	if err != nil {
+		return fail(err)
 	}
 	if !stop() { // ctx already ended, the race was decided elsewhere
 		_ = conn.Close()
 		return winner{}, context.Canceled
 	}
 	_ = conn.SetDeadline(time.Time{})
-	return winner{conn: conn, first: header}, nil
+	return winner{conn: conn, first: response, tls: true}, nil
 }
 
 // plain handles non-TLS traffic: nothing cuts a protocol it cannot parse, so
@@ -844,7 +794,7 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 // to answer is kept. Only the application's own first flight is repeated, to
 // machines it was already sending it to.
 func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (winner, error) {
-	all := p.order(host)
+	all := p.order(host, port)
 	var cands []*upstreamState
 	for _, u := range all {
 		if p.cfg.LocalOnly {
@@ -881,7 +831,7 @@ func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (wi
 			}
 		}
 	}
-	if len(cands) > 1 && len(flight) > 0 && net.ParseIP(host) != nil && p.rememberedName(host) == "" {
+	if len(cands) > 1 && len(flight) > 0 && net.ParseIP(host) != nil && p.rememberedName(host, port) == "" {
 		return p.racePlain(ctx, cands, host, port, flight)
 	}
 	var lastErr error
@@ -898,11 +848,15 @@ func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (wi
 			if ctx.Err() != nil {
 				return winner{}, ctx.Err()
 			}
-			p.record(u, host, false, time.Since(began))
+			p.record(u, host, port, false, time.Since(began))
 			lastErr = fmt.Errorf("%s: %w", u.Name, err)
 			continue
 		}
-		p.record(u, host, true, time.Since(began))
+		if !p.record(u, host, port, true, time.Since(began)) {
+			_ = conn.Close()
+			lastErr = errors.New("foreign exit changed while connecting")
+			continue
+		}
 		return winner{conn: conn, path: u.Name}, nil
 	}
 	if lastErr == nil {
@@ -991,13 +945,18 @@ func (p *Proxy) racePlain(parent context.Context, cands []*upstreamState, host, 
 			pending--
 			if r.err != nil {
 				if parent.Err() == nil {
-					p.record(r.u, host, false, r.took)
+					p.record(r.u, host, port, false, r.took)
 				}
 				lastErr = fmt.Errorf("%s: %w", r.u.Name, r.err)
 				launch(1) // the one in front failed: the next goes now
 				continue
 			}
-			p.record(r.u, host, true, r.took)
+			if !p.record(r.u, host, port, true, r.took) {
+				_ = r.conn.Close()
+				lastErr = errors.New("foreign exit changed while connecting")
+				launch(1)
+				continue
+			}
 			p.logf("%s:%s answered through %s in %dms", host, port, r.u.Name, r.took.Milliseconds())
 			cancel()
 			go func(left int) {
@@ -1078,21 +1037,6 @@ func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Co
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn, nil
-}
-
-func pipe(a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	cp := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
-		if tc, ok := dst.(*net.TCPConn); ok {
-			_ = tc.CloseWrite()
-		}
-		done <- struct{}{}
-	}
-	go cp(a, b)
-	go cp(b, a)
-	<-done
-	<-done
 }
 
 // readFirstFlight reads the client's first bytes. A TLS ClientHello is read

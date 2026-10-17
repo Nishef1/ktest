@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
 func zipOf(t *testing.T, files map[string]string) []byte {
@@ -217,7 +220,45 @@ func TestWindscribeCannotLaunchAetherOrPsiphon(t *testing.T) {
 		t.Fatal("expected no-op teardown")
 	}
 	defer stop()
-	if !strings.Contains(note, "prohibited") {
-		t.Fatalf("Aether not rejected: %s", note)
+	if !strings.Contains(note(), "prohibited") {
+		t.Fatalf("Aether not rejected: %s", note())
+	}
+}
+
+func TestExitStatusUpdatesDuringSearchAndDeadCoreIsRemovedImmediately(t *testing.T) {
+	p, err := smartproxy.New(smartproxy.Config{ExitOnly: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	m := &warpManager{proxy: p, t: plainTerm(&output)}
+	m.searching.Store(true)
+	status := m.status
+	if !strings.Contains(status(), "0 exits available") {
+		t.Fatal(status())
+	}
+	if err := p.Add(smartproxy.Upstream{Name: "Exit: test", Exit: true, AIEligible: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status(), "1 exit available") || !strings.Contains(status(), "search continuing") {
+		t.Fatal(status())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rc := &runningCore{done: make(chan struct{})}
+	finished := make(chan struct{})
+	go func() { m.watchExit(ctx, "test", rc); close(finished) }()
+	close(rc.done)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("dead exit remained registered while search was active")
+	}
+	if total, _ := p.ExitCounts(); total != 0 {
+		t.Fatal(status())
+	}
+	m.searching.Store(false)
+	if !strings.Contains(status(), "search complete") {
+		t.Fatal(status())
 	}
 }

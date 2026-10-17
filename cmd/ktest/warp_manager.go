@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/dnscheck"
@@ -184,32 +185,43 @@ func lastGoodFirst(ps []aetherProfile, last string) []aetherProfile {
 func aetherPort(i int) int { return aetherBasePort + i }
 
 type warpManager struct {
-	o       connectOptions
-	proxy   *smartproxy.Proxy
-	dns     *dnscheck.Result
-	t       *term
-	profs   []aetherProfile
-	logsMu  sync.Mutex
-	files   []*os.File
-	monitor *windscribeMonitor
+	o         connectOptions
+	proxy     *smartproxy.Proxy
+	dns       *dnscheck.Result
+	t         *term
+	profs     []aetherProfile
+	logsMu    sync.Mutex
+	files     []*os.File
+	monitor   *windscribeMonitor
+	searching atomic.Bool
+}
+
+func (m *warpManager) status() string {
+	total, verified := m.proxy.ExitCounts()
+	phase := "search complete"
+	if m.searching.Load() {
+		phase = "search continuing"
+	}
+	return fmt.Sprintf("%d %s available · %d verified · %s", total, plural(total, "exit", "exits"), verified, phase)
 }
 
 // startWarp runs the search for a working exit in the background and returns
 // the note for the result box and the function that stops everything.
-func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, dns *dnscheck.Result, t *term, monitors ...*windscribeMonitor) (string, func()) {
+func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, dns *dnscheck.Result, t *term, monitors ...*windscribeMonitor) (func() string, func()) {
+	fixed := func(note string) (func() string, func()) { return func() string { return note }, func() {} }
 	if o.mode == ModeWindscribe {
 		// Safety boundary: even accidental calls must not launch Aether,
 		// Psiphon, WARP or a foreign proxy in Windscribe mode.
-		return "prohibited (Windscribe local-only mode)", func() {}
+		return fixed("prohibited (Windscribe local-only mode)")
 	}
 	if o.noWarp {
-		return "off (-no-warp)", func() {}
+		return fixed("managed exit search off (-no-warp)")
 	}
 	if warpState(o.base) == "no core" {
-		return "off - optional: `ktest warp -enable` adds exit paths (WARP, Psiphon) for Telegram and sites blocked by address", func() {}
+		return fixed("off - `ktest warp -enable` adds WARP/Psiphon exits")
 	}
 	if o.mode == ModePsiphon && !fileOK(psiphonCore(o.base)) {
-		return "Psiphon unavailable: helper missing; `ktest warp -enable` fetches it", func() {}
+		return fixed("Psiphon unavailable: helper missing; `ktest warp -enable` fetches it")
 	}
 	ech, ip := "", ""
 	if o.mode != ModePsiphon {
@@ -225,7 +237,7 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 		if err != nil {
 			msg = err.Error()
 		}
-		return "off - " + msg + " (" + aetherProfilesFile(o.base) + ")", func() {}
+		return fixed("off - " + msg + " (" + aetherProfilesFile(o.base) + ")")
 	}
 	if !fileOK(psiphonCore(o.base)) {
 		var kept []aetherProfile
@@ -245,13 +257,14 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, d
 	if len(monitors) > 0 {
 		m.monitor = monitors[0]
 	}
+	m.searching.Store(true)
 	mctx, stopManager := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		m.run(mctx)
 	}()
-	return fmt.Sprintf("searching: %d ways to try, two at a time (up to a few minutes)", len(profs)), func() {
+	return m.status, func() {
 		stopManager()
 		<-done
 		m.logsMu.Lock()
@@ -317,7 +330,12 @@ func (m *warpManager) run(ctx context.Context) {
 		if !m.waitWhileConnected(ctx) {
 			return
 		}
+		m.searching.Store(true)
 		found := m.search(ctx)
+		m.searching.Store(false)
+		if ctx.Err() == nil {
+			m.t.Note("Exit status: %s", m.status())
+		}
 		if len(found) == 0 {
 			if !m.waitRetry(ctx) {
 				return
@@ -345,12 +363,24 @@ func (m *warpManager) run(ctx context.Context) {
 				return
 			case ended := <-done:
 				remaining--
-				m.proxy.Remove("Exit: " + ended.p.Label)
-				m.t.Line(toneWarn, "%s ended; no longer eligible for new connections", ended.p.Label)
 				ended.rc.stop()
 			}
 		}
-		m.t.Line(toneWarn, "Every exit path ended; searching again when Windscribe needs recovery")
+		m.t.Line(toneWarn, "Every exit path ended; searching again")
+	}
+}
+
+// Deregister a dead exit immediately, even while other profiles are still
+// being searched. Waiting for search to finish could advertise a dead core.
+func (m *warpManager) watchExit(ctx context.Context, name string, rc *runningCore) {
+	select {
+	case <-ctx.Done():
+	case <-rc.done:
+	}
+	m.proxy.Remove("Exit: " + name)
+	if ctx.Err() == nil {
+		m.t.Line(toneWarn, "%s ended; no longer eligible for new connections", name)
+		m.t.Note("Exit status: %s", m.status())
 	}
 }
 
@@ -406,23 +436,37 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 				if geoErr != nil {
 					m.t.Note("%s: AI protection rejects this exit until non-Iran egress is verified (%v)", p.Label, geoErr)
 				}
+				mu.Lock()
+				if len(found) >= maxExits {
+					mu.Unlock()
+					rc.stop()
+					continue
+				}
 				err := m.proxy.Add(smartproxy.Upstream{
 					Name: "Exit: " + p.Label, Addr: exitAddr, Rank: rank, Exit: true, AIEligible: geoErr == nil, Late: m.o.mode != ModeFast,
 				})
-				mu.Lock()
-				found = append(found, &warpFound{p: p, port: aetherPort(i), rc: rc})
-				first := len(found) == 1
-				mu.Unlock()
+				first := len(found) == 0
 				if err == nil {
-					if first {
-						_ = os.WriteFile(lastGoodFile(), []byte(p.Label), 0o600)
-					}
-					m.t.Line(toneOK, "Exit ready: %s %s", p.Label, m.t.Dim("("+shortDur(time.Since(began))+"). Telegram and sites blocked by address can open now"))
-					if m.o.mode == ModeWindscribe {
-						m.t.Note("Verified TCP exit discovered. Retry Windscribe with OpenVPN TCP/443 or WStunnel/443, not WireGuard via HTTP proxy.")
-					}
-					if geoErr == nil {
-						m.t.Line(toneOK, "AI foreign exit verified and available: %s (%s)", ip, country)
+					found = append(found, &warpFound{p: p, port: aetherPort(i), rc: rc})
+				}
+				mu.Unlock()
+				if err != nil {
+					rc.stop()
+					continue
+				}
+				go m.watchExit(ctx, p.Label, rc)
+				if first {
+					_ = os.WriteFile(lastGoodFile(), []byte(p.Label), 0o600)
+				}
+				m.t.Line(toneOK, "Exit ready: %s · %s", p.Label, shortDur(time.Since(began)))
+				m.t.Note("Exit status: %s", m.status())
+				if m.o.mode == ModeWindscribe {
+					m.t.Note("Verified TCP exit discovered. Retry Windscribe with OpenVPN TCP/443 or WStunnel/443, not WireGuard via HTTP proxy.")
+				}
+				if geoErr == nil {
+					m.t.Line(toneOK, "Foreign exit verified and available: %s (%s)", ip, country)
+					if m.o.mode == ModeFast {
+						m.t.Note("Fast may still select direct routes, including for AI domains.")
 					}
 				}
 			}

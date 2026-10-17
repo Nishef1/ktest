@@ -1,0 +1,245 @@
+package smartproxy
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestExactDestinationHistoryAndHysteresis(t *testing.T) {
+	p, _ := New(Config{Upstreams: []Upstream{{Name: "a"}, {Name: "b", Rank: 1}}, Stagger: 80 * time.Millisecond})
+	a, b := p.ups[0], p.ups[1]
+	p.record(a, "api.example.org", "443", true, 100*time.Millisecond)
+	p.record(b, "assets.example.org", "443", true, 20*time.Millisecond)
+	p.record(b, "api.example.org", "8443", true, 20*time.Millisecond)
+	if p.rememberedName("api.example.org", "443") != "a" {
+		t.Fatal("a sibling or port overwrote the winner")
+	}
+	if p.hasMemory("fresh.example.org", "443") {
+		t.Fatal("group hint became exact history")
+	}
+	p.record(b, "api.example.org", "443", true, 20*time.Millisecond)
+	if p.rememberedName("api.example.org", "443") != "a" {
+		t.Fatal("one concurrent faster result replaced a proven route")
+	}
+	p.record(b, "api.example.org", "443", true, 20*time.Millisecond)
+	if p.rememberedName("api.example.org", "443") != "b" {
+		t.Fatal("repeated substantial improvement was ignored")
+	}
+	p.record(b, "api.example.org", "443", false, time.Second)
+	if p.rememberedName("api.example.org", "443") != "b" {
+		t.Fatal("one transient failure erased the winner")
+	}
+	p.record(b, "api.example.org", "443", false, time.Second)
+	if p.order("api.example.org", "443")[0].Name != "a" {
+		t.Fatal("repeated failures did not demote the route")
+	}
+	p.record(a, "slow.example.net", "443", true, time.Second)
+	if got := p.firstWave(a, "new.example.net", "443"); got != 80*time.Millisecond {
+		t.Fatalf("another host changed timing: %s", got)
+	}
+}
+
+func TestConcurrentProtectedConnectionsAcceptOnlyOneExitRoute(t *testing.T) {
+	p, _ := New(Config{ExitOnly: func(string) bool { return true }, Upstreams: []Upstream{
+		{Name: "exit-a", Exit: true, AIEligible: true}, {Name: "exit-b", Exit: true, AIEligible: true},
+	}})
+	start := make(chan struct{})
+	accepted := make(chan string, 64)
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			u := p.ups[i%2]
+			if p.record(u, "ai.example", "443", true, time.Millisecond) {
+				accepted <- u.Name
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(accepted)
+	identities := map[string]bool{}
+	for name := range accepted {
+		identities[name] = true
+	}
+	if len(identities) != 1 {
+		t.Fatalf("accepted multiple identities: %v", identities)
+	}
+}
+
+func TestCanceledRaceAndClientAlertDoNotPoisonRouteHistory(t *testing.T) {
+	p, _ := New(Config{Upstreams: []Upstream{{Name: "a"}, {Name: "b"}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.race(ctx, "cancel.example", "443", clientHello()); err == nil {
+		t.Fatal("canceled race accepted")
+	}
+	for _, s := range p.Stats() {
+		if s.Wins != 0 || s.Failures != 0 {
+			t.Fatal("cancellation changed route scores")
+		}
+	}
+	p.record(p.ups[0], "alert.example", "443", true, time.Millisecond)
+	for i := 0; i < 3; i++ {
+		p.observeRelay("alert.example", "443", "a", relayResult{remoteFirst: true, up: 7, elapsed: time.Millisecond})
+	}
+	if got := p.order("alert.example", "443")[0].Name; got != "a" {
+		t.Fatal("small client TLS alert penalized the route")
+	}
+}
+
+func silentSocks(t *testing.T, hits *atomic.Int32) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				if _, _, err := socksRequest(c); err != nil {
+					return
+				}
+				hits.Add(1)
+				_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+				_, _ = io.Copy(io.Discard, c)
+			}()
+		}
+	}()
+	return l.Addr().String()
+}
+
+func TestSmallWaveSavesAttemptsAndFullFallbackStillReachesTheLastRoute(t *testing.T) {
+	for _, goodIndex := range []int{1, 19} {
+		t.Run(fmt.Sprint(goodIndex), func(t *testing.T) {
+			dest := destination(t)
+			var hits [20]atomic.Int32
+			var ups []Upstream
+			for i := range hits {
+				addr := silentSocks(t, &hits[i])
+				u := Upstream{Name: fmt.Sprint("route-", i), Addr: addr, Rank: i}
+				if i == goodIndex {
+					u.Addr = fakeSocks(t, dest, true, &hits[i])
+					u.Send = func(c net.Conn, f []byte) error { time.Sleep(25 * time.Millisecond); _, err := c.Write(f); return err }
+				}
+				ups = append(ups, u)
+			}
+			p, _ := New(Config{Upstreams: ups, Stagger: 50 * time.Millisecond, FirstByteTimeout: time.Second})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			began := time.Now()
+			win, err := p.race(ctx, "race.example", "443", clientHello())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer win.release()
+			if !bytes.Equal(win.first, serverHello) {
+				t.Fatalf("reply %x", win.first)
+			}
+			attempts := int32(0)
+			for i := range hits {
+				attempts += hits[i].Load()
+			}
+			if goodIndex == 1 && attempts > 3 {
+				t.Fatalf("short successful race opened %d of 20 routes", attempts)
+			}
+			if time.Since(began) > 1500*time.Millisecond {
+				t.Fatal("fallback incurred serial delays")
+			}
+			t.Logf("working index=%d attempts=%d elapsed=%s", goodIndex, attempts, time.Since(began))
+		})
+	}
+}
+
+func TestEarlyCloseFeedbackDemotesRouteWithoutReplayingRequests(t *testing.T) {
+	var requests [2]atomic.Int32
+	makeDest := func(good bool, index int) string {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { l.Close() })
+		go func() {
+			for {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer c.Close()
+					if _, err := c.Read(make([]byte, 4096)); err != nil {
+						return
+					}
+					_, _ = c.Write(serverHello)
+					if _, err := io.ReadFull(c, make([]byte, 64)); err != nil {
+						return
+					}
+					requests[index].Add(1)
+					if good {
+						_, _ = c.Write([]byte("post-hello response"))
+					}
+				}()
+			}
+		}()
+		return l.Addr().String()
+	}
+	bad, good := makeDest(false, 0), makeDest(true, 1)
+	var a, b atomic.Int32
+	events := make(chan Event, 32)
+	p, _ := New(Config{Upstreams: []Upstream{{Name: "bad", Addr: fakeSocks(t, bad, true, &a)}, {Name: "backup", Addr: fakeSocks(t, good, true, &b), Rank: 1}}, Stagger: 100 * time.Millisecond, OnEvent: func(e Event) { events <- e }})
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Serve(ctx, l)
+	for i := 0; i < 3; i++ {
+		c, err := net.Dial("tcp", l.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+		if err := socksConnect(c, "quality.example", "443"); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = c.Write(clientHello())
+		if _, err := io.ReadFull(c, make([]byte, len(serverHello))); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = c.Write(make([]byte, 64))
+		data, _ := io.ReadAll(c)
+		_ = c.Close()
+		if i < 2 {
+			deadline := time.After(time.Second)
+		waitEarly:
+			for {
+				select {
+				case e := <-events:
+					if e.EarlyClose {
+						break waitEarly
+					}
+				case <-deadline:
+					t.Fatal("missing early-close feedback")
+				}
+			}
+		} else if string(data) != "post-hello response" {
+			t.Fatalf("backup not selected: %q", data)
+		}
+	}
+	if requests[0].Load() != 2 || requests[1].Load() != 1 {
+		t.Fatalf("application requests were replayed or route not demoted: bad=%d backup=%d", requests[0].Load(), requests[1].Load())
+	}
+}

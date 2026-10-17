@@ -211,12 +211,14 @@ func runConnect(args []string) int {
 // siteEvents prints the live feed: one line per site when its winning path is
 // first known or changes, and at most one failure line per site every 20 s.
 type siteEvents struct {
-	t        *term
-	last     map[string]string
-	failedAt map[string]time.Time
-	ok, fail atomic.Int64
-	tcpOnly  atomic.Int64
-	verbose  bool
+	t           *term
+	last        map[string]string
+	failedAt    map[string]time.Time
+	ok, fail    atomic.Int64
+	tcpOnly     atomic.Int64
+	prepared    atomic.Int64
+	earlyClosed atomic.Int64
+	verbose     bool
 }
 
 func (s *siteEvents) print(e smartproxy.Event) {
@@ -226,6 +228,24 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	}
 	if s.failedAt == nil {
 		s.failedAt = make(map[string]time.Time)
+	}
+	host := e.Host
+	if host == "" {
+		host = e.Site
+	}
+	key := net.JoinHostPort(strings.ToLower(strings.TrimSuffix(host, ".")), e.Port)
+	target := host
+	if e.Port != "" && e.Port != "443" {
+		target = net.JoinHostPort(host, e.Port)
+	}
+	if e.EarlyClose {
+		s.earlyClosed.Add(1)
+		if time.Since(s.failedAt[key+"|early"]) >= 20*time.Second {
+			s.failedAt[key+"|early"] = time.Now()
+			t.Line(toneWarn, "%s · %s · %s", t.Bold(target), t.Yellow("EARLY CLOSE"), e.Path)
+			s.detail(e.Err)
+		}
+		return
 	}
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
@@ -238,41 +258,50 @@ func (s *siteEvents) print(e smartproxy.Event) {
 			t.Note("Control framing only; VPN authentication and data not verified.")
 			return
 		}
-		t.Line(toneInfo, "%s · %s · %s · %s", t.Bold(e.Host), t.Cyan("TCP OPEN"), e.Path, t.Dim(shortDur(e.Took)))
+		t.Line(toneInfo, "%s · %s · %s · %s", t.Bold(target), t.Cyan("TCP OPEN"), e.Path, t.Dim(shortDur(e.Took)))
 		t.Note("Proxy TCP accepted; destination reply and VPN handshake not verified.")
 		return
 	}
 	if e.Rejected {
-		if time.Since(s.failedAt[e.Site]) >= 20*time.Second {
-			s.failedAt[e.Site] = time.Now()
+		if time.Since(s.failedAt[key]) >= 20*time.Second {
+			s.failedAt[key] = time.Now()
 			reason := e.Err
 			if i := strings.LastIndex(reason, "): "); !s.verbose && i >= 0 {
 				reason = reason[i+3:]
 			}
-			t.Line(toneWarn, "%s · %s", t.Bold(e.Host), t.Yellow("CERTIFICATE REFUSED"))
+			t.Line(toneWarn, "%s · %s", t.Bold(target), t.Yellow("CERTIFICATE REFUSED"))
 			s.detail(reason)
 		}
 		return
 	}
 	if e.OK {
-		s.ok.Add(1)
-		if s.last[e.Site] == e.Path {
+		state := "ANSWERED"
+		if e.Prepared {
+			s.prepared.Add(1)
+			state = "ROUTE READY"
+		} else {
+			s.ok.Add(1)
+		}
+		if e.TLSResponse {
+			state = "TLS RESPONSE"
+		}
+		if s.last[key] == e.Path+state {
 			return
 		}
-		s.last[e.Site] = e.Path
-		t.Line(toneOK, "%s · %s · %s · %s", t.Bold(e.Site), t.Green("ANSWERED"), e.Path, t.Dim(shortDur(e.Took)))
+		s.last[key] = e.Path + state
+		t.Line(toneOK, "%s · %s · %s · %s", t.Bold(target), t.Green(state), e.Path, t.Dim(shortDur(e.Took)))
 		return
 	}
 	s.fail.Add(1)
-	if time.Since(s.failedAt[e.Site]) < 20*time.Second {
+	if time.Since(s.failedAt[key]) < 20*time.Second {
 		return
 	}
-	s.failedAt[e.Site] = time.Now()
+	s.failedAt[key] = time.Now()
 	reason := e.Err
 	if i := strings.LastIndex(reason, ": "); !s.verbose && i >= 0 && len(reason) > 60 {
 		reason = reason[i+2:]
 	}
-	t.Line(toneFail, "%s · %s", t.Bold(e.Host), t.Red("NO REPLY"))
+	t.Line(toneFail, "%s · %s", t.Bold(target), t.Red("NO REPLY"))
 	s.detail(reason)
 }
 
@@ -673,6 +702,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 	}
 	var warpNote string
+	var currentExitStatus func() string
 	var stopWarp func()
 	if o.mode == ModeTor {
 		warpNote, stopWarp = startTor(ctx, o, proxy, t)
@@ -680,7 +710,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		warpNote = "disabled: local anti-DPI only; Psiphon/Aether/WARP/Tor and foreign exits prohibited"
 		stopWarp = func() {}
 	} else {
-		warpNote, stopWarp = startWarp(ctx, o, proxy, &dns, t, monitor)
+		currentExitStatus, stopWarp = startWarp(ctx, o, proxy, &dns, t, monitor)
 	}
 	defer stopWarp()
 
@@ -759,6 +789,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	if frontNote != "" {
 		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))
+	}
+	if currentExitStatus != nil {
+		warpNote = currentExitStatus()
 	}
 	lines = append(lines, t.Bold("Exit    ")+"  "+t.Dim(warpNote))
 	lines = append(lines, t.Bold("Mode    ")+"  "+t.Dim(o.mode.message()))
@@ -843,6 +876,12 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 	if n := feed.tcpOnly.Load(); n > 0 {
 		t.Note("%d TCP proxy requests accepted; application/VPN negotiation unverified", n)
 	}
+	if n := feed.prepared.Load(); n > 0 {
+		t.Note("%d fronting routes prepared; application acceptance checked separately", n)
+	}
+	if n := feed.earlyClosed.Load(); n > 0 {
+		t.Note("%d connections closed before post-hello response data", n)
+	}
 	if total := ok + fail; total > 0 {
 		pct := float64(ok) / float64(total)
 		k := toneOK
@@ -852,8 +891,8 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 		if pct < 0.5 {
 			k = toneFail
 		}
-		t.Note("%s %3d%%  %d of %d connections answered", t.Bar(pct, 12, k), int(pct*100+0.5), ok, total)
-	} else if feed.tcpOnly.Load() == 0 {
+		t.Note("%s %3d%%  %d of %d connections returned an initial response", t.Bar(pct, 12, k), int(pct*100+0.5), ok, total)
+	} else if feed.tcpOnly.Load() == 0 && feed.prepared.Load() == 0 {
 		t.Note("No connections were made through the proxy")
 	}
 	stats := proxy.Stats()

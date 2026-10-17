@@ -20,7 +20,43 @@ func clientHello() []byte {
 }
 
 // serverHello answers with a TLS handshake record header plus payload.
-var serverHello = []byte{0x16, 3, 3, 0, 4, 2, 0, 0, 0}
+var serverHello = func() []byte {
+	body := append([]byte{3, 3}, make([]byte, 32)...)
+	body = append(body, 0, 0, 0x2f, 0) // session ID, cipher suite, compression
+	hello := append([]byte{2, 0, 0, byte(len(body))}, body...)
+	return append([]byte{0x16, 3, 3, 0, byte(len(hello))}, hello...)
+}()
+
+func TestPartialTLSHeaderCannotWinTheRace(t *testing.T) {
+	partial, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { partial.Close() })
+	go func() {
+		for {
+			c, err := partial.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_, _ = c.Read(make([]byte, 4096))
+				_, _ = c.Write(serverHello[:5])
+			}()
+		}
+	}()
+	good := destination(t)
+	var a, b atomic.Int32
+	_, addr := startProxy(t, []Upstream{
+		{Name: "partial", Addr: fakeSocks(t, partial.Addr().String(), true, &a)},
+		{Name: "complete", Addr: fakeSocks(t, good, true, &b)},
+	})
+	_, port, _ := net.SplitHostPort(good)
+	if got := viaProxy(t, addr, "tls.example", port, clientHello()); !bytes.Equal(got, serverHello) {
+		t.Fatalf("partial record won: got %x", got)
+	}
+}
 
 func TestFirstFlightReadsTLSHeaderSplitAcrossWrites(t *testing.T) {
 	for split := 1; split < 5; split++ {
@@ -236,7 +272,7 @@ func TestRaceSkipsBlockedPathAndLearnsWinner(t *testing.T) {
 	if got := viaProxy(t, addr, "site.example", port, clientHello()); !bytes.Equal(got, serverHello) {
 		t.Fatalf("first connection got %x", got)
 	}
-	if got := p.Winners()["site.example"]; got != "good" {
+	if got := p.Winners()[net.JoinHostPort("site.example", port)]; got != "good" {
 		t.Fatalf("winner not remembered: %q", got)
 	}
 	before := blockedHits.Load()
@@ -367,7 +403,7 @@ func TestSiteKeyGroupsNodesOfOneService(t *testing.T) {
 	}
 }
 
-func TestMemoryIsSharedAcrossHostsOfOneSiteAndEventsReportTheWinner(t *testing.T) {
+func TestSiblingUsesAnInitialHintWithoutSharingExactMemory(t *testing.T) {
 	dest := destination(t)
 	_, port, _ := net.SplitHostPort(dest)
 	var h1, h2 atomic.Int32
@@ -393,13 +429,15 @@ func TestMemoryIsSharedAcrossHostsOfOneSiteAndEventsReportTheWinner(t *testing.T
 	if !e.OK || e.Path != "good" || e.Site != "example.com" {
 		t.Fatalf("event %+v", e)
 	}
-	// A different host of the same site starts with the remembered winner.
-	if !p.hasMemory("r2.cdn.example.com") {
-		t.Fatal("memory should be shared by every host of the site")
+	if p.hasMemory("r2.cdn.example.com", port) {
+		t.Fatal("a sibling must not share the exact destination's history")
+	}
+	if first := p.order("r2.cdn.example.com", port)[0]; first.Name != "good" {
+		t.Fatal("a fresh sibling should still benefit from the initial group hint")
 	}
 }
 
-func TestSecondWaveStartsEveryRemainingPathAtOnce(t *testing.T) {
+func TestFallbackDoesNotAccumulateSerialDelays(t *testing.T) {
 	dest := destination(t)
 	_, port, _ := net.SplitHostPort(dest)
 	var hits [5]atomic.Int32
@@ -422,7 +460,7 @@ func TestSecondWaveStartsEveryRemainingPathAtOnce(t *testing.T) {
 		t.Fatalf("got %x", got)
 	}
 	if took := time.Since(began); took > 3500*time.Millisecond {
-		t.Fatalf("took %s: the second wave must not be staggered one path at a time", took)
+		t.Fatalf("took %s: fallback must not wait for one timeout per path", took)
 	}
 }
 
@@ -437,7 +475,7 @@ func TestOrderPrefersPlainWhenTrackRecordsAreEqualAndDemotesFailingPaths(t *test
 	}
 	names := func() []string {
 		var out []string
-		for _, u := range p.order("site.example") {
+		for _, u := range p.order("site.example", "443") {
 			out = append(out, u.Name)
 		}
 		return out
@@ -446,14 +484,20 @@ func TestOrderPrefersPlainWhenTrackRecordsAreEqualAndDemotesFailingPaths(t *test
 		t.Fatalf("static rank order wrong: %v", got)
 	}
 	// Equal success rates must not let an early winner run away with the order.
-	p.record(p.ups[0], "a.example", true, 10*time.Millisecond)
-	p.record(p.ups[2], "a.example", true, 10*time.Millisecond)
+	p.record(p.ups[0], "a.example", "443", true, 10*time.Millisecond)
+	p.record(p.ups[2], "a.example", "443", true, 10*time.Millisecond)
 	if got := names(); got[0] != "plain" {
 		t.Fatalf("a single win must not outrank plain: %v", got)
 	}
-	// A path that keeps failing sinks below the others.
+	// Failures at an unrelated destination must not poison this one.
 	for i := 0; i < 6; i++ {
-		p.record(p.ups[2], "b.example", false, time.Second)
+		p.record(p.ups[2], "b.example", "443", false, time.Second)
+	}
+	if got := names(); got[0] != "plain" {
+		t.Fatalf("unrelated failures changed this destination: %v", got)
+	}
+	for i := 0; i < 6; i++ {
+		p.record(p.ups[2], "site.example", "443", false, time.Second)
 	}
 	if got := names(); got[len(got)-1] != "plain" {
 		t.Fatalf("failing plain path should rank last: %v", got)
@@ -626,7 +670,7 @@ func TestNonTLSFirstFlightIsOfferedToTheExitWhenTheDirectRouteOpensButStaysSilen
 	if hits.Load() != 2 {
 		t.Fatalf("the exit carried %d of 2 connections", hits.Load())
 	}
-	if w := p.Winners()[host]; w != "exit" {
+	if w := p.Winners()[net.JoinHostPort(host, port)]; w != "exit" {
 		t.Fatalf("remembered %q for %s, want exit", w, host)
 	}
 }
