@@ -274,8 +274,21 @@ func (w *Conn) writeFrame(op byte, payload []byte) error {
 	}
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
-	_, err := w.c.Write(frame)
-	return err
+	// net.Conn.Write is permitted to return a short successful write.
+	// A partial WebSocket frame corrupts *all* later OpenVPN bytes.
+	for len(frame) > 0 {
+		n, err := w.c.Write(frame)
+		if n > 0 {
+			frame = frame[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrNoProgress
+		}
+	}
+	return nil
 }
 
 // Write sends p as one or more binary messages, like the official client

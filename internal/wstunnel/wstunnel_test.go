@@ -271,3 +271,47 @@ func TestStealthCarriesRawStreamOverTLS(t *testing.T) {
 		t.Fatalf("%q %v", got, err)
 	}
 }
+
+type shortWebSocketWriteConn struct {
+	net.Conn
+	maxWrite int
+}
+
+func (c *shortWebSocketWriteConn) Write(p []byte) (int, error) {
+	if len(p) > c.maxWrite {
+		p = p[:c.maxWrite]
+	}
+	return c.Conn.Write(p)
+}
+
+func TestClientWebSocketFrameSurvivesShortSuccessfulWrites(t *testing.T) {
+	a, peer := net.Pipe()
+	defer a.Close()
+	defer peer.Close()
+	conn := &Conn{c: &shortWebSocketWriteConn{Conn: a, maxWrite: 3}, r: bufio.NewReader(a)}
+	received := make(chan []byte, 1)
+	failed := make(chan error, 1)
+	go func() {
+		_, payload, err := readClientFrame(bufio.NewReader(peer))
+		if err != nil {
+			failed <- err
+			return
+		}
+		received <- payload
+	}()
+	payload := bytes.Repeat([]byte("OpenVPN handshake bytes"), 20)
+	n, err := conn.Write(payload)
+	if err != nil || n != len(payload) {
+		t.Fatalf("short frame writes lost payload: %d/%d, %v", n, len(payload), err)
+	}
+	select {
+	case got := <-received:
+		if !bytes.Equal(got, payload) {
+			t.Fatal("WebSocket framing was corrupted by short successful writes")
+		}
+	case err := <-failed:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("failed to decode complete WebSocket frame")
+	}
+}
