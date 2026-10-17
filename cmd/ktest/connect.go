@@ -216,10 +216,17 @@ type siteEvents struct {
 	failedAt map[string]time.Time
 	ok, fail atomic.Int64
 	tcpOnly  atomic.Int64
+	verbose  bool
 }
 
 func (s *siteEvents) print(e smartproxy.Event) {
 	t := s.t
+	if s.last == nil {
+		s.last = make(map[string]string)
+	}
+	if s.failedAt == nil {
+		s.failedAt = make(map[string]time.Time)
+	}
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
 		if isWindscribeCarrier(e.Path) {
@@ -227,20 +234,23 @@ func (s *siteEvents) print(e smartproxy.Event) {
 			if strings.HasPrefix(path, "raw OpenVPN") {
 				path += " entry=" + e.Host
 			}
-			t.Line(toneInfo, "Windscribe requested=%s | %s (%s); OpenVPN control reply (framing only); VPN auth/data not yet verified", e.Host, path, shortDur(e.Took))
+			t.Line(toneInfo, "requested=%s · %s · %s · %s", t.Bold(e.Host), t.Cyan("OPENVPN REPLY"), path, t.Dim(shortDur(e.Took)))
+			t.Note("Control framing only; VPN authentication and data not verified.")
 			return
 		}
-		t.Line(toneInfo, "TCP proxy requested=%s entry=%s via %s (%s); VPN handshake not verified", e.Host, e.Host, e.Path, shortDur(e.Took))
+		t.Line(toneInfo, "%s · %s · %s · %s", t.Bold(e.Host), t.Cyan("TCP OPEN"), e.Path, t.Dim(shortDur(e.Took)))
+		t.Note("Proxy TCP accepted; destination reply and VPN handshake not verified.")
 		return
 	}
 	if e.Rejected {
 		if time.Since(s.failedAt[e.Site]) >= 20*time.Second {
 			s.failedAt[e.Site] = time.Now()
 			reason := e.Err
-			if i := strings.LastIndex(reason, "): "); i >= 0 {
+			if i := strings.LastIndex(reason, "): "); !s.verbose && i >= 0 {
 				reason = reason[i+3:]
 			}
-			t.Line(toneWarn, "%-26s %s", e.Host, t.Yellow("the application refused the ktest certificate")+t.Dim("  "+trimDetail(reason)))
+			t.Line(toneWarn, "%s · %s", t.Bold(e.Host), t.Yellow("CERTIFICATE REFUSED"))
+			s.detail(reason)
 		}
 		return
 	}
@@ -250,7 +260,7 @@ func (s *siteEvents) print(e smartproxy.Event) {
 			return
 		}
 		s.last[e.Site] = e.Path
-		t.Line(toneOK, "%-26s %s %s", e.Site, t.Dim("←"), t.Bold(e.Path)+t.Dim("  "+shortDur(e.Took)))
+		t.Line(toneOK, "%s · %s · %s · %s", t.Bold(e.Site), t.Green("ANSWERED"), e.Path, t.Dim(shortDur(e.Took)))
 		return
 	}
 	s.fail.Add(1)
@@ -259,10 +269,22 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	}
 	s.failedAt[e.Site] = time.Now()
 	reason := e.Err
-	if i := strings.LastIndex(reason, ": "); i >= 0 && len(reason) > 60 {
+	if i := strings.LastIndex(reason, ": "); !s.verbose && i >= 0 && len(reason) > 60 {
 		reason = reason[i+2:]
 	}
-	t.Line(toneFail, "%-26s %s", e.Host, t.Red("no path answered")+t.Dim("  "+reason))
+	t.Line(toneFail, "%s · %s", t.Bold(e.Host), t.Red("NO REPLY"))
+	s.detail(reason)
+}
+
+func (s *siteEvents) detail(reason string) {
+	if s.verbose {
+		s.t.Note("%s", reason)
+		return
+	}
+	s.t.Note("%s", trimDetail(reason))
+	if len([]rune(reason)) > 70 {
+		s.t.Note("Use -v for the full error.")
+	}
 }
 
 // connectSession runs until ctx ends. preflight may carry a Google DNS check
@@ -715,7 +737,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}
 	}
-	pathsDesc := fmt.Sprintf("%d racing: plain, %d external, %d built-in", len(ups), len(up), len(ups)-len(up)-countPlain(ups)) + frontSuffix(fronter)
+	pathsDesc := fmt.Sprintf("%d configured routes · per-site selection", len(proxy.Stats()))
+	if o.mode.exitOnly() {
+		pathsDesc = "Verified foreign exits only; direct fallback blocked"
+	}
 	if o.mode == ModeWindscribe {
 		pathsDesc = fmt.Sprintf("%d local anti-DPI paths; no plain or foreign exits", len(ups))
 		if o.ws.enabled() {
@@ -790,7 +815,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	for len(events) > 0 { // self-test traffic is already reported above
 		<-events
 	}
-	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}}
+	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose}
 	for {
 		select {
 		case <-ctx.Done():
@@ -802,19 +827,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 }
 
-func countPlain(ups []smartproxy.Upstream) int {
-	n := 0
-	for _, u := range ups {
-		if strings.HasPrefix(u.Name, "plain") {
-			n++
-		}
-	}
-	return n
-}
-
 func trimDetail(s string) string {
-	if len(s) > 70 {
-		return s[:70] + "…"
+	runes := []rune(s)
+	if len(runes) > 70 {
+		return string(runes[:70]) + "…"
 	}
 	return s
 }
@@ -825,7 +841,7 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 	t.Println("  " + t.Bold("Session summary"))
 	ok, fail := feed.ok.Load(), feed.fail.Load()
 	if n := feed.tcpOnly.Load(); n > 0 {
-		t.Printf("    %d TCP proxy requests accepted; destination/application/VPN negotiation not verified by these counts\n", n)
+		t.Note("%d TCP proxy requests accepted; application/VPN negotiation unverified", n)
 	}
 	if total := ok + fail; total > 0 {
 		pct := float64(ok) / float64(total)
@@ -836,9 +852,9 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 		if pct < 0.5 {
 			k = toneFail
 		}
-		t.Printf("    %s %3d%%  %d of %d connections answered\n", t.Bar(pct, 20, k), int(pct*100+0.5), ok, total)
+		t.Note("%s %3d%%  %d of %d connections answered", t.Bar(pct, 12, k), int(pct*100+0.5), ok, total)
 	} else if feed.tcpOnly.Load() == 0 {
-		t.Println("    " + t.Dim("no connections were made through the proxy"))
+		t.Note("No connections were made through the proxy")
 	}
 	stats := proxy.Stats()
 	maxWins := 0
@@ -851,18 +867,18 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 			continue
 		}
 		shown++
-		t.Printf("    %s %-44s %s\n", t.Bar(float64(s.Wins)/float64(maxWins), 12, toneInfo), s.Name, t.Dim(fmt.Sprintf("%d %s · %d ms avg", s.Wins, plural(s.Wins, "win", "wins"), s.AvgMS)))
+		t.Note("%s %s · %d %s · %dms avg", t.Bar(float64(s.Wins)/float64(maxWins), 8, toneInfo), s.Name, s.Wins, plural(s.Wins, "win", "wins"), s.AvgMS)
 	}
 	if fronter != nil {
 		for _, l := range frontHosts.problems() {
-			t.Println("    " + t.Dim(l))
+			t.Note("%s", l)
 		}
 		acc, ref := fronter.Stats()
 		if acc+ref > 0 || fronter.Disabled() != "" {
-			t.Printf("    %s\n", t.Dim(fmt.Sprintf("domain fronting: %d accepted, %d refused by applications", acc, ref)))
+			t.Note("domain fronting: %d accepted, %d refused by applications", acc, ref)
 		}
 		if learned := fronter.Learned(); len(learned) > 0 {
-			t.Printf("    %s\n", t.Dim("fronts that worked here: "+strings.Join(learned, "; ")))
+			t.Note("fronts that worked here: %s", strings.Join(learned, "; "))
 		}
 	}
 	t.Println("")
@@ -955,11 +971,4 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 		return f, "on, but the CA predates " + strings.Join(firstN(missing, 3), ", ") + " - run `ktest ca -renew` to cover them"
 	}
 	return f, "on - Google, YouTube, X, Meta, Discord and Fastly-hosted sites can use fronting / ECH"
-}
-
-func frontSuffix(f *front.Fronter) string {
-	if f == nil {
-		return ""
-	}
-	return " + domain fronting"
 }

@@ -144,6 +144,10 @@ Use ktest windscribe-test -target "Ashburn - Bles Park" for a fixed-node SNI com
 
 Colors, box drawing and the in-place progress line are used only on an interactive terminal. In a pipe, a file, CI, with `NO_COLOR` or `TERM=dumb`, output is plain ASCII. Set `KTEST_ASCII=1` to force ASCII on a terminal that cannot show the glyphs.
 
+The menu uses aligned columns in wider windows and puts descriptions below each choice in narrower windows. Panels, status messages, and prompts wrap to the current terminal width; redirected output uses 80 columns. Connection events show the destination, outcome, selected route, and elapsed time. Repeated successes on the same route are counted without repeating the line, and repeated failures are shown at most once every 20 seconds per site. Long errors are shortened in normal output; `-v` preserves their full context.
+
+`TCP OPEN` reports proxy TCP establishment only. `OPENVPN REPLY` reports an OpenVPN control-frame response on a Windscribe carrier; authentication and usable VPN data are still unverified. `ANSWERED` reports a response on the selected route, not proof that an entire page or application works. The session summary keeps TCP-only requests separate from answered/failed connections.
+
 ## Options of `ktest connect`
 
 None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-front`, `-front`, `-no-warp`, `-tun`, `-cert`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`. Windscribe mode: `-windscribe-wstunnel`, `-windscribe-wstunnel-sni`, `-windscribe-wstunnel-ip`, `-windscribe-cdn`, `-windscribe-cdn-sni`, `-windscribe-cdn-edge`, `-windscribe-auto-reconnect`, `-windscribe-cli` (see [WINDSCRIBE_BOOTSTRAP.md](WINDSCRIBE_BOOTSTRAP.md)).

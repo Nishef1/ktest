@@ -51,28 +51,28 @@ var menuSections = []struct {
 	items []menuItem
 }{
 	{"Connection policy", []menuItem{
-		connectItem("1", "Balanced", "everyday access; known AI domains need a verified foreign exit", ModeBalanced),
-		connectItem("2", "Fast", "first working route; direct ISP IP or another exit may be used", ModeFast),
-		connectItem("3", "Aether", "WARP/Psiphon profiles; verified foreign exit only; block if unavailable", ModeAether),
-		connectItem("4", "Aether to Tor", "Tor-only via Aether; verified Tor exit required", ModeTor),
-		connectItem("5", "Windscribe", "bridge for the Windscribe app; its VPN owns coverage and exit IP", ModeWindscribe),
-		connectItem("6", "Aether to Psiphon", "Psiphon-only via Aether; verified foreign exit required", ModePsiphon),
+		connectItem("1", "Balanced", "Adaptive routes; AI requires a verified foreign exit", ModeBalanced),
+		connectItem("2", "Fast", "First working route; your ISP IP may be used", ModeFast),
+		connectItem("3", "Aether", "WARP / Psiphon; verified foreign exit only", ModeAether),
+		connectItem("4", "Aether to Tor", "Tor only; verified exit required", ModeTor),
+		connectItem("5", "Windscribe", "Local bridge; Windscribe owns the VPN", ModeWindscribe),
+		connectItem("6", "Aether to Psiphon", "Psiphon only; verified foreign exit required", ModePsiphon),
 	}},
 	{"Traffic coverage (policies 1-4, 6)", []menuItem{
 		{key: "7", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},
 	}},
 	{"Tools", []menuItem{
-		{key: "8", name: "Diagnose", desc: "choose general network or Windscribe checks; reports test limits", action: func(t *terminal, base string, in *input) bool {
+		{key: "8", name: "Diagnose", desc: "Network or Windscribe checks; no changes", action: func(t *terminal, base string, in *input) bool {
 			return t.diagnoseMenu(base, in)
 		}},
 		{key: "9", name: "Setup", action: func(t *terminal, base string, in *input) bool {
 			t.setup(base, in.read)
 			return true
 		}},
-		{key: "10", name: "CDN scan", desc: "provider HTTPS reachability or your own Windscribe CDN route", action: func(t *terminal, _ string, in *input) bool {
+		{key: "10", name: "CDN scan", desc: "Check CDN HTTPS or your Windscribe CDN route", action: func(t *terminal, _ string, in *input) bool {
 			return t.cdnScanMenu(in)
 		}},
-		{key: "11", name: "Windscribe test", desc: "compare SNIs by TCP/TLS/WebSocket; verify a connected VPN separately", action: func(t *terminal, base string, in *input) bool { return t.windscribeTestMenu(base, in) }},
+		{key: "11", name: "Windscribe test", desc: "Compare carriers or verify a connected VPN", action: func(t *terminal, base string, in *input) bool { return t.windscribeTestMenu(base, in) }},
 	}},
 }
 
@@ -85,7 +85,7 @@ func setupSummary(base string) string {
 
 func (t *terminal) mainMenu(base string) {
 	u := t.ui
-	u.Heading("free access toolkit", "")
+	u.Heading("free access toolkit", "Choose coverage, then a connection policy.")
 	for _, s := range menuSections {
 		u.Printf("  %s\n", u.Dim(strings.ToUpper(s.title)))
 		for _, it := range s.items {
@@ -94,16 +94,30 @@ func (t *terminal) mainMenu(base string) {
 				desc = setupSummary(base)
 			}
 			if it.key == "7" {
-				desc = "Proxy apps: configure apps on 10800/10801; change here to Whole PC (TCP)"
+				desc = "Proxy apps · select for Whole PC TCP"
 				if t.wholePC {
-					desc = "Whole PC (TCP): TUN + chosen policy; Administrator; most UDP blocked (change here)"
+					desc = "Whole PC TCP · Administrator · most UDP blocked"
 				}
 			}
-			u.Printf("   %s  %-17s %s\n", u.Bold(u.Cyan(it.key)), u.Bold(it.name), u.Dim(desc))
+			u.menuOption(it.key, it.name, desc)
 		}
 		u.Println("")
 	}
-	u.Printf("   %s  %s\n\n  Select > ", u.Bold(u.Cyan("0")), u.Bold("Exit"))
+	u.menuOption("0", "Exit", "")
+	u.Printf("\n  Select > ")
+}
+
+func (t *term) menuOption(key, name, description string) {
+	prefix := "  " + strings.Repeat(" ", max(2-visibleLen(key), 0)) + t.Bold(t.Cyan(key)) + "  "
+	if description == "" || t.width() < 76 {
+		t.text(prefix, "      ", t.Bold(name))
+		if description != "" {
+			t.text("      ", "      ", t.Dim(description))
+		}
+		return
+	}
+	prefix += t.Bold(name) + strings.Repeat(" ", max(20-visibleLen(name), 1))
+	t.text(prefix, strings.Repeat(" ", visibleLen(prefix)), t.Dim(description))
 }
 
 func findItem(key string) (menuItem, bool) {
