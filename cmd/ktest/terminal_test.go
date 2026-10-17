@@ -599,3 +599,16 @@ func TestMenuInputReportsOversizedLine(t *testing.T) {
 		t.Fatal("menu closed without an input error")
 	}
 }
+
+func TestLongMenuNoticeUsesScrollableScreen(t *testing.T) {
+	var out bytes.Buffer
+	u := &term{w: &out, columns: 80, live: true}
+	menu := &terminal{ui: u, notice: strings.Repeat("A detailed connection warning. ", 30)}
+	menu.mainMenu(t.TempDir())
+	if strings.Contains(out.String(), "\x1b[?1049h") {
+		t.Fatal("wrapped notice entered an alternate screen too short to scroll")
+	}
+	if !strings.Contains(out.String(), "A detailed connection warning.") {
+		t.Fatal("notice disappeared when the scrollable fallback was selected")
+	}
+}

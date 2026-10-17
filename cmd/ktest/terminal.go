@@ -122,7 +122,15 @@ func (t *terminal) setupDescription(base string) string {
 
 func (t *terminal) mainMenu(base string) {
 	u := t.ui
-	u.menuView()
+	// Most menus fit 24 rows, but a long warning may wrap to additional
+	// rows. Preserve scrollback instead of trapping important options below
+	// the bottom of a short alternate-screen terminal.
+	requiredRows := 24
+	if t.notice != "" {
+		noticeRows := len(wrapText(t.notice, max(u.width()-4, 1)))
+		requiredRows += max(noticeRows-1, 0)
+	}
+	u.menuViewHeight(requiredRows)
 	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Free access toolkit"))
 	previous := "Default policy: "
 	if t.settings.Connect["mode"] != "" {
