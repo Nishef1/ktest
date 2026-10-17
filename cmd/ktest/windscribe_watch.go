@@ -147,6 +147,7 @@ type windscribeMonitor struct {
 	proxy               *smartproxy.Proxy
 	nextReconnect       time.Time
 	disconnectedSamples int
+	onTCPConnected      func() // optional, once the CLI confirms TCP Connected
 }
 
 func (m *windscribeMonitor) State() windscribeState {
@@ -156,6 +157,15 @@ func (m *windscribeMonitor) State() windscribeState {
 }
 
 func (m *windscribeMonitor) Connected() bool { return m != nil && m.State() == windscribeConnected }
+
+func (m *windscribeMonitor) onConnected(fn func()) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.onTCPConnected = fn
+	m.mu.Unlock()
+}
 
 // waitDisconnected holds the bootstrap process inactive when ktest launches
 // during a live Windscribe VPN session. Only a confirmed disconnection permits
@@ -252,6 +262,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 			ready = p.HasLocalBypass()
 		}
 	}
+	onConnected := m.onTCPConnected
 	shouldReconnect := m.autoReconnect && state == windscribeDisconnected &&
 		m.disconnectedSamples >= 3 && ready &&
 		!time.Now().Before(m.nextReconnect)
@@ -259,6 +270,9 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		m.nextReconnect = time.Now().Add(3 * time.Minute)
 	}
 	m.mu.Unlock()
+	if changed && state == windscribeConnected && strings.HasPrefix(strings.ToLower(protocol), "tcp:") && onConnected != nil {
+		onConnected()
+	}
 	if changed {
 		switch state {
 		case windscribeConnected:

@@ -137,6 +137,12 @@ type wsCarrier struct {
 // target is held until Windscribe's first bytes arrive: TLS/HTTP keeps the
 // local dialer; OpenVPN is raced over every carrier and the first one whose
 // server returns data carries the stream, including later client writes.
+type wsActiveCarrier struct {
+	key       string
+	name      string
+	confirmed bool // an observed CLI Connected transition while this was the only active OpenVPN stream
+}
+
 type wsBridge struct {
 	opts         wsOptions
 	path         string
@@ -155,6 +161,21 @@ type wsBridge struct {
 	good    map[string]string               // destination -> carrier that carried a working VPN
 	bad     map[string]map[string]time.Time // destination -> carrier -> demoted until
 	retries map[string]uint64               // attempt index for choosing independent alternatives
+	active  map[*wsActiveCarrier]bool        // streams awaiting real VPN confirmation
+}
+
+// CLI authentication is attributed only if a single OpenVPN stream is
+// active at the moment Windscribe transitions to Connected over TCP.
+// Concurrent candidate streams are ambiguous, so none is credited.
+func (b *wsBridge) observeCLIConnected() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.active) != 1 {
+		return
+	}
+	for active := range b.active {
+		active.confirmed = true
+	}
 }
 
 // windscribeServerCert rejects certificates without a Windscribe hostname.
@@ -178,7 +199,7 @@ func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.C
 		path = wstunnel.DefaultPath
 	}
 	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 250 * time.Millisecond,
-		good: map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}}
+		good: map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}}
 	for _, e := range splitList(o.cdnEdges) {
 		if _, _, err := net.SplitHostPort(e); err != nil {
 			e = net.JoinHostPort(e, "443")
@@ -617,16 +638,27 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		return nil, nil, fmt.Errorf("no Windscribe carrier answered (%s): %w", summary, err)
 	}
 	b.logf("Windscribe %s carried by %s source=%s; tunneled data returned in %s (authentication remains with Windscribe)", key, r.c.name, r.c.source, shortDur(r.took))
+	session := &wsActiveCarrier{key: key, name: r.c.name}
+	b.mu.Lock()
+	if b.active == nil {
+		b.active = make(map[*wsActiveCarrier]bool)
+	}
+	b.active[session] = true
+	b.mu.Unlock()
 	if b.report != nil {
 		b.report(smartproxy.Event{Host: host, Site: host, Path: r.c.name, Took: r.took, TCPOnly: true})
 	}
 	done := func(lived time.Duration, received int64) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
+		confirmed := session.confirmed
+		delete(b.active, session)
 		switch {
-		case lived >= time.Minute && received >= 64<<10:
-			// Long-lived traffic is useful evidence, not authenticated VPN proof.
+		case confirmed && lived >= time.Minute && received >= 64<<10:
+			// This stream was the only active OpenVPN carrier when Windscribe
+			// CLI reported a real TCP Connected transition, and moved data.
 			b.good[key] = r.c.name
+			delete(b.bad[key], r.c.name)
 		case lived < 20*time.Second:
 			// Answered the first packet but died early (DPI reset, auth on a
 			// wrong node): try the others first for ten minutes.

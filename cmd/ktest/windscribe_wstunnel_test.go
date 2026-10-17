@@ -658,3 +658,44 @@ func TestWindscribeTransportFailureHasTemporaryCooldown(t *testing.T) {
 		t.Fatalf("cooldown incorrectly became a permanent block: %+v", next)
 	}
 }
+
+func TestWindscribeOnlyLearnsCLIAuthenticatedSingleCarrier(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "Stealth a"})
+	key := "68.67.118.163:443"
+	reply, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reply.Close()
+	done(2*time.Minute, 128<<10)
+	if b.good[key] != "" {
+		t.Fatal("long-lived OpenVPN-shaped traffic was mistaken for authenticated Windscribe")
+	}
+	reply, done, err = b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reply.Close()
+	b.observeCLIConnected()
+	done(2*time.Minute, 128<<10)
+	if b.good[key] != "Stealth a" {
+		t.Fatalf("CLI-authenticated stable carrier not remembered: %q", b.good[key])
+	}
+}
+
+func TestAmbiguousConcurrentWindscribeSessionsAreNotPromoted(t *testing.T) {
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	first := &wsActiveCarrier{key: "one:443", name: "WStunnel first"}
+	second := &wsActiveCarrier{key: "two:443", name: "Stealth second"}
+	b.active[first] = true
+	b.active[second] = true
+	b.observeCLIConnected()
+	if first.confirmed || second.confirmed {
+		t.Fatal("ambiguous concurrent sessions were credited with one CLI status")
+	}
+	delete(b.active, second)
+	b.observeCLIConnected()
+	if !first.confirmed || second.confirmed {
+		t.Fatal("single active carrier was not attributed correctly")
+	}
+}

@@ -833,6 +833,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				}
 				bridge := newWSBridge(o.ws, apiDial, cfg.OnEvent, logf)
 				bridge.carrierLocal = proxy.DialWindscribeCarrier
+				monitor.onConnected(bridge.observeCLIConnected)
 				bridge.catalog = newWSNodeCatalog()
 				cachePath := filepath.Join(o.base, "cache", "windscribe-nodes.json")
 				bridge.catalog.load(cachePath)
