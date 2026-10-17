@@ -59,9 +59,9 @@ func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
 		var output bytes.Buffer
 		menu := &terminal{wholePC: wholePC, ui: plainTerm(&output)}
 		menu.mainMenu(t.TempDir())
-		want := "7 Proxy"
+		want := "7 Current Mode: Proxy"
 		if wholePC {
-			want = "7 TUN"
+			want = "7 Current Mode: TUN"
 		}
 		found := false
 		for _, line := range strings.Split(output.String(), "\n") {

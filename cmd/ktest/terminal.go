@@ -95,9 +95,9 @@ func (t *terminal) mainMenu(base string) {
 				desc = setupSummary(base)
 			}
 			if it.key == "7" {
-				name = "Proxy"
+				name = "Current Mode: Proxy"
 				if t.wholePC {
-					name = "TUN"
+					name = "Current Mode: TUN"
 				}
 			}
 			u.menuOption(it.key, name, desc)

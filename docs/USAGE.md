@@ -116,7 +116,7 @@ CONNECTION POLICY                            TOOLS
  5 Windscribe        (-mode windscribe)
  6 Aether to Psiphon  (-mode psiphon)
 TRAFFIC COVERAGE (for 1-4, 6)                  0 Exit
- 7 Proxy             shows TUN when Whole PC TCP is selected
+ 7 Current Mode: Proxy   shows Current Mode: TUN when Whole PC TCP is selected
 ```
 
 `Aether` searches WARP/Psiphon profiles. `Aether to Psiphon` selects only the normal/CDN Psiphon profiles, while `Aether to Tor` uses Aether's Tor-only backend. These labels select Aether backends, not an extra VPN hop.
