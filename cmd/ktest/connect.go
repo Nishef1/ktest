@@ -322,6 +322,10 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	// Windscribe's serverlist ping_host uses HTTP on port 6464/latency.
 	// This is a latency probe, not an OpenVPN handshake or data-plane failure.
 	if s.windscribe && e.Port == "6464" && !e.EarlyClose {
+		if e.TCPOnly {
+			// A SOCKS CONNECT acknowledgement is not a completed HTTP ping.
+			return
+		}
 		if e.OK {
 			s.latencyOK.Add(1)
 			if s.last[key] != "latency|ok" {
