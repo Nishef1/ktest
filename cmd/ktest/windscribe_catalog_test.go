@@ -275,7 +275,7 @@ func TestWindscribeCatalogAvoidsForceDisconnectNodes(t *testing.T) {
 	}
 }
 
- 
+
 // wsnet's official InventoryParser permits an ip3 null: Stealth is unavailable
 // for that node, while the advertised TCP and general-IP routes remain usable.
 func TestWindscribeCatalogAcceptsNullIP3AndSkipsIsolatedInvalidNodes(t *testing.T) {
