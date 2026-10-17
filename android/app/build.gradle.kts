@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.nishef.ktest"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.nishef.ktest"
@@ -30,7 +30,7 @@ android {
 dependencies {
     // Built from the real ktest Go core; not a placeholder/mock.
     implementation(files("libs/mobilebridge.aar"))
-    val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
+    val composeBom = platform("androidx.compose:compose-bom:2025.09.01")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.ui:ui")

@@ -14,7 +14,7 @@ This first Android slice is **not a VPN**. It runs the real Go `internal/pathdia
 
 ## Build
 
-Prerequisites: Android SDK (API 37), NDK r28+, Java 17+, Go version from `go.mod`, `gomobile`, Gradle 9.5+.
+Prerequisites: Android SDK (API 36), NDK r28+, Java 17+, Go version from `go.mod`, `gomobile`, Gradle 9.5+.
 
 From the repository root:
 
