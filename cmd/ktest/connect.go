@@ -113,6 +113,17 @@ type connectOptions struct {
 	aetherMethod        string
 }
 
+// Strict tunnel-only modes cannot safely probe sites before verifying an exit.
+func canProbeSites(mode ConnectionMode, verifiedExit bool) bool {
+	return !mode.exitOnly() || verifiedExit
+}
+
+// A local MITM CA powers optional website fronting, not WARP/Aether tunnels.
+// Suggesting its installation in strict exit-only modes grants unnecessary trust.
+func frontCARelevant(o connectOptions) bool {
+	return !o.mode.exitOnly() && o.mode != ModeWindscribe && !o.noFront
+}
+
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
 		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12, windscribeReconnect: true,
@@ -891,22 +902,29 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				wstep.Finish(toneWarn, "still searching; no direct fallback will be used")
 			}
 		}
-		vstep := t.Progress("Checking representative sites and learning routes", 1)
-		vctx, vcancel := context.WithTimeout(ctx, 30*time.Second)
-		proxied, compared = measure(vctx, probePort)
-		vcancel()
-		if ctx.Err() != nil {
-			return 0
-		}
-		passedNow := proxiedPassCount(proxied)
-		verdict = toneOK
-		switch {
-		case passedNow == 0:
+		if !canProbeSites(o.mode, proxy.HasVerifiedExit()) {
+			// Never turn "no exit yet" into five fabricated site failures.
+			// In strict modes the proxy must remain fail-closed while discovery runs.
 			verdict = toneFail
-		case passedNow < len(proxied):
-			verdict = toneWarn
+			t.Note("Site checks deferred: no verified foreign exit; discovery continues without direct fallback")
+		} else {
+			vstep := t.Progress("Checking representative sites and learning routes", 1)
+			vctx, vcancel := context.WithTimeout(ctx, 30*time.Second)
+			proxied, compared = measure(vctx, probePort)
+			vcancel()
+			if ctx.Err() != nil {
+				return 0
+			}
+			passedNow := proxiedPassCount(proxied)
+			verdict = toneOK
+			switch {
+			case passedNow == 0:
+				verdict = toneFail
+			case passedNow < len(proxied):
+				verdict = toneWarn
+			}
+			vstep.Finish(verdict, fmt.Sprintf("%d of %d reachable through ktest", passedNow, len(proxied)))
 		}
-		vstep.Finish(verdict, fmt.Sprintf("%d of %d reachable through ktest", passedNow, len(proxied)))
 	} else {
 		t.Note("Windscribe active: skipping extra website probes")
 	}
@@ -938,7 +956,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		coverage = "Windscribe bridge · Windscribe controls system coverage"
 	}
 	if o.tun {
-		coverage = "TUN inactive · proxy available only"
+		coverage = "TUN inactive · local proxy listener only"
 		if verdict != toneFail {
 			tn := startTunnel(ctx, o.base, lport, o.verbose, t)
 			defer tn.stop(t)
@@ -1008,7 +1026,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	field("Policy", string(o.mode))
 	if !o.mode.isWindscribe() {
 		field("AI", "Verified foreign exit only · blocked when unavailable")
-		field("Checks", fmt.Sprintf("%d small site probes · refresh every 15 min after activity", len(quickcheck.Targets())))
+		if len(proxied) == 0 && o.mode.exitOnly() {
+			field("Checks", "deferred until a verified exit becomes available")
+		} else {
+			field("Checks", fmt.Sprintf("%d small site probes · refresh every 15 min after activity", len(quickcheck.Targets())))
+		}
 	} else {
 		if o.mode == ModeWindscribeAether {
 			field("AI", "SOCKS AI traffic requires verified foreign WARP; normal apps use Windscribe's VPN")
@@ -1023,10 +1045,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		field("Result", t.Green(fmt.Sprintf("%d blocked test %s opened through ktest", bypassed, plural(bypassed, "site", "sites"))))
 	case passed == len(proxied) && passed > 0:
 		field("Result", "Tested sites also open directly; a bypass is not established by these checks")
+	case passed == 0 && len(proxied) == 0 && o.mode.exitOnly():
+		field("Result", t.Yellow("No verified upstream yet; sites were not tested"))
 	case passed == 0:
 		field("Result", t.Red("No tested site was reachable; run `ktest doctor` to see why"))
 	}
-	if o.mode != ModeWindscribe && verdict != toneOK && fronter == nil && !o.noFront && ctx.Err() == nil {
+	if frontCARelevant(o) && verdict != toneOK && fronter == nil && ctx.Err() == nil {
 		// The paths that need no certificate did not reach everything. If fronting
 		// would, say so now instead of leaving the user with a red result.
 		fctx, fcancel := context.WithTimeout(ctx, 8*time.Second)

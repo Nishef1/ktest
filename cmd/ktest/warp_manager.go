@@ -166,6 +166,39 @@ func attemptTimeout(p aetherProfile) time.Duration {
 	return time.Duration(secs+20) * time.Second
 }
 
+// A first-use nested method must bootstrap its inner identity over an outer
+// tunnel before the final carrier can even start. That work cannot fit inside
+// the standard 45-second probe. Existing valid identities take the fast path.
+func profileAttemptBudget(p aetherProfile) time.Duration {
+	var protocol, path string
+	switch p.method() {
+	case "gool-h2", "gool-h3":
+		protocol, path = "wg", filepath.Join(warpDir(), "masque-gool.toml")
+	case "wiw":
+		protocol, path = "wg", filepath.Join(warpDir(), "wg-secondary.toml")
+	case "mim-h2", "mim-h3":
+		protocol, path = "masque", filepath.Join(warpDir(), "masque-secondary.toml")
+	}
+	if path != "" && os.IsNotExist(checkWarpIdentity(path, protocol)) {
+		return 150 * time.Second
+	}
+	return 45 * time.Second
+}
+
+// searchBudget permits a first-use nested bootstrap without extending every
+// ordinary comparison. Diagnosis still obeys its separate overall user budget.
+func (m *warpManager) searchBudget() time.Duration {
+	for _, p := range m.profs {
+		if profileAttemptBudget(p) > 45*time.Second {
+			return 175 * time.Second
+		}
+	}
+	if m.o.aetherMethod != "" && m.o.aetherMethod != "auto" {
+		return 65 * time.Second
+	}
+	return 40 * time.Second
+}
+
 // aetherPorts: one fixed port per profile index, so a profile that is found
 // again after a drop is the same upstream.
 func aetherPort(i int) int { return aetherBasePort + i }
@@ -194,9 +227,11 @@ type warpManager struct {
 
 func (m *warpManager) status() string {
 	total, verified := m.proxy.ExitCounts()
-	phase := "search complete"
+	phase := "retry pending"
 	if m.searching.Load() {
 		phase = "search continuing"
+	} else if total > 0 {
+		phase = "active"
 	}
 	status := fmt.Sprintf("%d %s available · %d AI-verified · %s", total, plural(total, "exit", "exits"), verified, phase)
 	m.measureMu.Lock()
@@ -392,7 +427,7 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 			limit = 1
 		}
 	}
-	searchCtx, stopSearch := context.WithTimeout(ctx, 40*time.Second)
+	searchCtx, stopSearch := context.WithTimeout(ctx, m.searchBudget())
 	results := m.compare(searchCtx, limit, false, indices)
 	stopSearch()
 	var found []*warpFound
@@ -429,23 +464,26 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 
 // try starts one profile and waits for its proxy port. On success the process
 // keeps running; on failure it is stopped.
-func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *runningCore) {
+func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *runningCore, string) {
 	if !p.psiphon() {
 		if err := m.prepareIdentity(ctx, p); err != nil {
 			if ctx.Err() == nil {
 				m.t.Note("%s skipped: %v", p.Label, err)
 			}
-			return false, nil
+			if ctx.Err() != nil {
+				return false, nil, "identity bootstrap cancelled or timed out"
+			}
+			return false, nil, "identity bootstrap unavailable (see diagnostic)"
 		}
 	}
 	return m.startProfile(ctx, i, p)
 }
 
-func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) (bool, *runningCore) {
+func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) (bool, *runningCore, string) {
 	port := aetherPort(i)
 	if err := portFree(port); err != nil {
 		m.t.Note("skipped %s: %v", p.Label, err)
-		return false, nil
+		return false, nil, "local SOCKS port occupied"
 	}
 	logs := &tailBuffer{max: 8192}
 	logPath := filepath.Join(warpDir(), fmt.Sprintf("aether-%d.log", i+1))
@@ -499,19 +537,29 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 		}()
 	}
 	deadline := time.Now().Add(attemptTimeout(p))
-	if waitForPort(ctx, rc.done, port, time.Until(deadline)) && exitCarries(ctx, rc.done, port, time.Until(deadline)) {
-		return true, rc
+	ready := waitForPort(ctx, rc.done, port, time.Until(deadline))
+	if ready && exitCarries(ctx, rc.done, port, time.Until(deadline)) {
+		return true, rc, ""
+	}
+	reason := "SOCKS listener did not open"
+	switch {
+	case ctx.Err() != nil:
+		reason = "attempt cancelled or timed out"
+	case ready:
+		reason = "SOCKS opened but upstream TLS carrier did not verify"
+	default:
+		select {
+		case <-rc.done:
+			reason = "Aether process exited before SOCKS readiness"
+		default:
+		}
 	}
 	rc.cancel()
 	rc.stop()
 	if ctx.Err() == nil {
-		why := logs.lastLine()
-		if rc.err != nil && why == "" {
-			why = rc.err.Error()
-		}
-		m.t.Note("%s: no tunnel (%s)", p.Label, wrapOne(why, 110))
+		m.t.Note("%s: %s (local core log: %s)", p.Label, reason, logPath)
 	}
-	return false, nil
+	return false, nil, reason
 }
 
 // Profile workers share enrollment. A failed API bootstrap is attempted once
@@ -570,10 +618,15 @@ func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) erro
 			args = append(args, arg)
 		}
 		outer := aetherProfile{Label: "Gool registration carrier " + p.method(), Args: args}
-		up, rc := m.startProfile(ctx, 80, outer)
+		up, rc, reason := m.startProfile(ctx, 80, outer)
 		if !up {
+			// Cancellation is not evidence of a bad identity. Permit a fresh
+			// attempt after recovery/reconnect rather than poisoning this session.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			m.enrollTried[inner] = true
-			return fmt.Errorf("outer MASQUE tunnel did not carry registration; saved Gool keys kept")
+			return fmt.Errorf("outer MASQUE tunnel unavailable (%s); inner registration not attempted; saved keys kept", reason)
 		}
 		defer rc.stop()
 		routes := []enrollmentRoute{{label: "outer MASQUE tunnel", args: []string{"--upstream", fmt.Sprintf("socks5://127.0.0.1:%d", aetherPort(80))}}}

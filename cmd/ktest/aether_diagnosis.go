@@ -211,8 +211,8 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 				m.attempted[p.id()] = true
 				mu.Unlock()
 				// A slow/blocked family cannot consume the whole comparison.
-				attempt, cancel := context.WithTimeout(ctx, 45*time.Second)
-				up, rc := m.try(attempt, i, p)
+				attempt, cancel := context.WithTimeout(ctx, profileAttemptBudget(p))
+				up, rc, failure := m.try(attempt, i, p)
 				// The core must outlive this probe deadline when selected. try
 				// uses m's session context for the process, attempt for readiness.
 				r := measurementFor(p)
@@ -220,7 +220,11 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 					r = benchmarkAetherRoute(attempt, fmt.Sprintf("127.0.0.1:%d", aetherPort(i)), speed && speedSlots.Add(-1) >= 0)
 					r.ID, r.Label, r.Method = p.id(), p.Label, p.method()
 				} else {
-					r.Failure = "tunnel unavailable within the attempt budget"
+					r.Failure = failure
+					if attempt.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+						r.State = "timeout"
+						r.Failure = "attempt deadline exceeded: " + failure
+					}
 				}
 				cancel()
 				if ctx.Err() != nil {

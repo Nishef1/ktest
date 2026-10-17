@@ -153,3 +153,45 @@ unknown | --masque --upstream socks5://127.0.0.1:9999
 		}
 	}
 }
+
+// The test is offline: a valid primary identity must not be mistaken for a
+// successfully prepared nested identity, or cause every core to time out at 45s.
+func TestNestedBootstrapBudgetAndRecoverySearch(t *testing.T) {
+	t.Setenv("KTEST_WARP_DIR", t.TempDir())
+	p := aetherProfile{Args: []string{"--gool", "--h2"}}
+	if got := profileAttemptBudget(p); got != 150*time.Second {
+		t.Fatalf("pending Gool enrollment got %v", got)
+	}
+	m := &warpManager{profs: []aetherProfile{p}}
+	if got := m.searchBudget(); got != 175*time.Second {
+		t.Fatalf("first nested search got %v", got)
+	}
+	if err := os.WriteFile(filepath.Join(warpDir(), "masque-gool.toml"), enrollmentFixture(t, time.Now().Add(time.Hour)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := profileAttemptBudget(p); got != 45*time.Second {
+		t.Fatalf("existing nested identity should use fast budget, got %v", got)
+	}
+	if got := m.searchBudget(); got != 40*time.Second {
+		t.Fatalf("ordinary automatic search got %v", got)
+	}
+}
+
+func TestStrictSiteChecksAndFrontCATrustBoundaries(t *testing.T) {
+	for _, mode := range []ConnectionMode{ModeAether, ModePsiphon, ModeTor, ModeWindscribeAether} {
+		if canProbeSites(mode, false) || !canProbeSites(mode, true) {
+			t.Fatalf("%s probed without a verified exit", mode)
+		}
+		if frontCARelevant(connectOptions{mode: mode}) {
+			t.Fatalf("%s must not suggest installing a local MITM CA", mode)
+		}
+	}
+	for _, mode := range []ConnectionMode{ModeFast, ModeBalanced} {
+		if !canProbeSites(mode, false) || !frontCARelevant(connectOptions{mode: mode}) {
+			t.Fatalf("%s lost optional mixed routing", mode)
+		}
+	}
+	if frontCARelevant(connectOptions{mode: ModeBalanced, noFront: true}) || frontCARelevant(connectOptions{mode: ModeWindscribe}) {
+		t.Fatal("fronting disabled but CA still recommended")
+	}
+}
