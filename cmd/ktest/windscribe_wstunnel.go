@@ -794,13 +794,13 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 // proof that a DPI device terminated the connection.
 type carrierConn struct {
 	net.Conn
-	cancel      context.CancelFunc
-	stopClose   func() bool
-	logf        func(string, ...any)
-	name        string
-	destination string
-	started     time.Time
-	ended       sync.Once
+	cancel        context.CancelFunc
+	stopClose     func() bool
+	logf          func(string, ...any)
+	name          string
+	destination   string
+	started       time.Time
+	ended         sync.Once
 	closed        atomic.Bool
 	onUpstreamEnd func()
 }
