@@ -37,6 +37,12 @@ func (r *carrierReplay) selectWinner(c net.Conn) {
 	r.notify()
 }
 
+func (r *carrierReplay) isWinner(c net.Conn) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.winner == c
+}
+
 func (r *carrierReplay) append(ctx context.Context, p []byte) error {
 	for {
 		r.mu.Lock()

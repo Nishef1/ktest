@@ -175,6 +175,11 @@ func (b *wsBridge) observeCLIConnected() {
 	}
 	for active := range b.active {
 		active.confirmed = true
+		// A real Windscribe TCP Connected transition is stronger evidence
+		// than an arbitrary 60-second/64-KiB threshold. This session is
+		// uniquely attributable, and already passed OpenVPN authentication.
+		b.good[active.key] = active.name
+		delete(b.bad[active.key], active.name)
 	}
 }
 
@@ -588,7 +593,9 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			// A silent reader must not prevent a writer from forwarding the
 			// client's later junk/handshake bytes. The race deadline bounds both.
 			go func() {
-				_ = replay.send(wctx, conn)
+				if err := replay.send(wctx, conn); err != nil && wctx.Err() == nil && replay.isWinner(conn) {
+					b.logf("Windscribe %s carrier=%s downstream write failed: %v", key, c.name, err)
+				}
 				_ = conn.Close()
 			}()
 			reply, err := readOpenVPNReply(conn)
@@ -660,23 +667,23 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		defer b.mu.Unlock()
 		confirmed := session.confirmed
 		delete(b.active, session)
-		switch {
-		case confirmed && lived >= time.Minute && received >= 64<<10:
-			// This stream was the only active OpenVPN carrier when Windscribe
-			// CLI reported a real TCP Connected transition, and moved data.
-			b.good[key] = r.c.name
-			delete(b.bad[key], r.c.name)
-		case lived < 20*time.Second:
-			// Answered the first packet but died early (DPI reset, auth on a
-			// wrong node): try the others first for ten minutes.
+		// A confirmed VPN is never demoted for an intentional short session.
+		// An unanswered connection which dies during the common 20-30s
+		// handshake failure window should not immediately be retried first.
+		if !confirmed && lived < 50*time.Second && received < 64<<10 {
 			if b.good[key] == r.c.name {
 				delete(b.good, key)
 			}
 			if b.bad[key] == nil {
-				b.bad[key] = map[string]time.Time{}
+				b.bad[key] = make(map[string]time.Time)
 			}
-			b.bad[key][r.c.name] = time.Now().Add(10 * time.Minute)
+			ttl := 90 * time.Second
+			if lived < 15*time.Second {
+				ttl = 2 * time.Minute
+			}
+			b.bad[key][r.c.name] = time.Now().Add(ttl)
 		}
+		b.logf("Windscribe %s carrier=%s session ended after %s, returned=%d bytes, CLI-authenticated=%v", key, r.c.name, shortDur(lived), received, confirmed)
 	}
 	stopClose := context.AfterFunc(live, func() { _ = r.conn.Close() })
 	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose}, done, nil

@@ -731,3 +731,36 @@ func TestWindscribeRaceCapsCandidateCountWhileRotatingRetries(t *testing.T) {
 		t.Fatalf("retries did not explore new SNI/IP candidates: %q", first)
 	}
 }
+
+func TestConfirmedWindscribeTCPPromotesEvenShortRealSession(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "WStunnel verified"})
+	key := "68.67.118.163:443"
+	c, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	b.observeCLIConnected()
+	if got := b.good[key]; got != "WStunnel verified" {
+		t.Fatalf("real CLI Connected transition was not learned: %q", got)
+	}
+	done(4*time.Second, 1024)
+	if b.good[key] != "WStunnel verified" || !b.bad[key]["WStunnel verified"].IsZero() {
+		t.Fatal("confirmed short session was incorrectly treated as a DPI failure")
+	}
+}
+
+func TestUnconfirmedWindscribeHandshakeTimeoutDemotesBriefly(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "Stealth uncertain"})
+	key := "68.67.118.163:443"
+	c, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	done(24*time.Second, 1024)
+	delay := time.Until(b.bad[key]["Stealth uncertain"])
+	if delay < 75*time.Second || delay > 100*time.Second {
+		t.Fatalf("24-second unverified stream was not temporarily deprioritized: %v", delay)
+	}
+}
