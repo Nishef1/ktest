@@ -582,9 +582,37 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 // Profile workers share enrollment. A failed API bootstrap is attempted once
 // per protocol per connection, not once for every H2/H3/obfuscation profile
 // on every two-minute tunnel retry. Setup offers an explicit retry.
+// readyIdentity checks only local credentials; it does not claim a live tunnel.
+// A worker with existing identities must not wait for another worker's slow,
+// unrelated enrollment, or "two profiles at once" degenerates into one.
+func readyIdentity(p aetherProfile) bool {
+	if p.psiphon() || p.has("--tor-only") {
+		return true
+	}
+	protocol, path := "masque", identityFile()
+	if p.method() == "wireguard" || p.method() == "wiw" {
+		protocol, path = "wg", wireguardIdentityFile()
+	}
+	if checkWarpIdentity(path, protocol) != nil {
+		return false
+	}
+	switch p.method() {
+	case "wiw":
+		return checkWarpIdentity(filepath.Join(warpDir(), "wg-secondary.toml"), "wg") == nil
+	case "mim-h2", "mim-h3":
+		return checkWarpIdentity(filepath.Join(warpDir(), "masque-secondary.toml"), "masque") == nil
+	case "gool-h2", "gool-h3":
+		return checkWarpIdentity(filepath.Join(warpDir(), "masque-gool.toml"), "wg") == nil
+	}
+	return true
+}
+
 func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) error {
 	if p.psiphon() || p.has("--tor-only") {
 		return nil // standalone carriers have no WARP enrollment requirement
+	}
+	if readyIdentity(p) {
+		return ctx.Err()
 	}
 	m.enrollMu.Lock()
 	defer m.enrollMu.Unlock()
@@ -652,6 +680,12 @@ func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) erro
 	return nil
 }
 
+// A listening local SOCKS port is not a functioning foreign exit. Strict
+// Aether bootstrap must not try to register through its own empty proxy.
+func canUseEnrollmentProxy(mode ConnectionMode, proxy *smartproxy.Proxy) bool {
+	return !mode.exitOnly() || (proxy != nil && proxy.HasVerifiedExit())
+}
+
 // Called with enrollMu held. Inner files have their own attempt ledger.
 func (m *warpManager) prepareIdentityFile(ctx context.Context, protocol, path string, routes []enrollmentRoute) error {
 	if err := checkWarpIdentity(path, protocol); err == nil {
@@ -671,7 +705,11 @@ func (m *warpManager) prepareIdentityFile(ctx context.Context, protocol, path st
 	}
 	m.enrollTried[key] = true
 	if routes == nil && m.enrollRoutes == nil {
-		m.enrollRoutes = enrollmentRoutes(ctx, m.o.base, m.o.listen, m.ech, m.echIP)
+		proxyAddr := ""
+		if canUseEnrollmentProxy(m.o.mode, m.proxy) {
+			proxyAddr = m.o.listen
+		}
+		m.enrollRoutes = enrollmentRoutes(ctx, m.o.base, proxyAddr, m.ech, m.echIP)
 	}
 	if routes == nil {
 		routes = m.enrollRoutes

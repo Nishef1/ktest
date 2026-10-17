@@ -251,3 +251,39 @@ func TestAetherThoroughBudgetHonorsConfiguredStartup(t *testing.T) {
 		t.Fatalf("automatic wave too long: %v", got)
 	}
 }
+
+func TestSavedIdentitiesSkipGlobalEnrollmentLock(t *testing.T) {
+	t.Setenv("KTEST_WARP_DIR", t.TempDir())
+	fixture := enrollmentFixture(t, time.Now().Add(time.Hour))
+	if err := os.WriteFile(identityFile(), fixture, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p := aetherProfile{Args: []string{"--masque", "--h2"}}
+	if !readyIdentity(p) {
+		t.Fatal("valid identity not recognized")
+	}
+	m := &warpManager{}
+	m.enrollMu.Lock()
+	defer m.enrollMu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- m.prepareIdentity(context.Background(), p) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(300*time.Millisecond):
+		t.Fatal("independent ready carrier starved behind slow enrollment")
+	}
+}
+
+func TestEnrollmentNeverLoopsThroughEmptyStrictProxy(t *testing.T) {
+	for _, mode := range []ConnectionMode{ModeAether, ModePsiphon, ModeWindscribeAether} {
+		if canUseEnrollmentProxy(mode, nil) {
+			t.Fatalf("%s loops into its own bootstrap proxy", mode)
+		}
+	}
+	if !canUseEnrollmentProxy(ModeBalanced, nil) {
+		t.Fatal("mixed mode lost its local anti-DPI registration route")
+	}
+}
