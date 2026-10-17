@@ -67,4 +67,4 @@ The whole-PC Windows TUN currently uses `strict_route=false` to keep its physica
 
 The running ktest executable and its bundled helpers are exempted using their executable **paths**, not just process names. On Windows tracked subprocesses use kill-on-close Job Objects so their descendants cannot normally outlive a completed helper. An already-running unrelated VPN is not automatically controlled by these cleanup rules.
 
-Automated Aether component installation remains **Windows-only**, because the pinned v2.3.0 installer currently specifies the Windows archive and helper paths. Compiling the ktest Go executable on Linux/macOS is not equivalent to installing working Aether/Psiphon system components on those platforms.
+Aether v2.3.0 automatic component installation selects checksum-pinned Windows x64 ZIP, Linux x64/ARM64 tarballs or macOS x64/ARM64 tarballs. Archive extraction allows only the main executable and known pt/ helpers. Other ktest components, especially the Windows TUN and Windscribe CLI integration, remain platform-specific; a passing cross-compile is not equivalent to full feature parity.

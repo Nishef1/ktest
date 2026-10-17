@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -58,7 +60,30 @@ func aetherBinary(base string) string {
 // psiphonCore is the helper Aether runs for its Psiphon profiles; it must
 // sit in a pt folder next to aether.exe.
 func psiphonCore(base string) string {
-	return filepath.Join(base, "cores", "pt", "psiphon-tunnel-core.exe")
+	name := "psiphon-tunnel-core"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(base, "cores", "pt", name)
+}
+
+func aetherArchiveFor(goos, goarch string) (string, string, error) {
+	name, sum := "", ""
+	switch goos + "/" + goarch {
+	case "windows/amd64":
+		name, sum = "aether-windows-x86_64.zip", aetherZipSHA
+	case "linux/amd64":
+		name, sum = "aether-linux-x86_64.tar.gz", "77c6ce41695a616660d834b55be235c17e7588a474dfd737b71ca80b685bdc8a"
+	case "linux/arm64":
+		name, sum = "aether-linux-arm64.tar.gz", "7251cbb90c4a0eccb62412727ebee9f0a7b775d20d26492c082ba5df64f8c21f"
+	case "darwin/amd64":
+		name, sum = "aether-macos-x86_64.tar.gz", "25d930bba78fbd09ba86b09e21afd4e1ed1e91685a34388dd067be130aa269b3"
+	case "darwin/arm64":
+		name, sum = "aether-macos-arm64.tar.gz", "e89cbb5b53848fee1a28510dac14ff358aa38ebecc7fd00eeeee5bd415d12b12"
+	default:
+		return "", "", fmt.Errorf("no checksum-pinned Aether %s archive for %s/%s", aetherVersion, goos, goarch)
+	}
+	return "https://github.com/CluvexStudio/Aether/releases/download/" + aetherVersion + "/" + name, sum, nil
 }
 
 func identityFile() string          { return filepath.Join(warpDir(), "masque.toml") }
@@ -122,30 +147,72 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, sha) {
 		return fmt.Errorf("checksum mismatch: got %s, pinned %s; the file was not used", got, sha)
 	}
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return err
-	}
-	// Only these files are used; anything else in the archive, and any path
-	// that is not exactly one of them, is ignored.
+	// The release workflow packages aether and pt/ at archive root. Reject
+	// every other entry, never extracting arbitrary filenames from the archive.
 	core := filepath.Base(aetherBinary(base))
+	ptBin := filepath.Base(psiphonCore(base))
+	lyre := "lyrebird"
+	if runtime.GOOS == "windows" {
+		lyre += ".exe"
+	}
 	want := map[string]string{
-		core:                         aetherBinary(base),
-		"pt/psiphon-tunnel-core.exe": filepath.Join(base, "cores", "pt", "psiphon-tunnel-core.exe"),
-		"pt/lyrebird.exe":            filepath.Join(base, "cores", "pt", "lyrebird.exe"),
+		core: aetherBinary(base),
+		"pt/" + ptBin: psiphonCore(base),
+		"pt/" + lyre: filepath.Join(base, "cores", "pt", lyre),
 	}
 	found := false
-	for _, f := range zr.File {
-		dest, ok := want[f.Name]
-		if !ok {
-			continue
-		}
-		if err := extractZipFile(f, dest); err != nil {
+	if strings.HasSuffix(url, ".zip") {
+		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
 			return err
 		}
-		if f.Name == core {
-			found = true
+		for _, f := range zr.File {
+			dest, ok := want[f.Name]
+			if !ok {
+				continue
+			}
+			if err := extractZipFile(f, dest); err != nil {
+				return err
+			}
+			if f.Name == core {
+				found = true
+			}
 		}
+	} else if strings.HasSuffix(url, ".tar.gz") {
+		zr, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return err
+		}
+		defer zr.Close()
+		tr := tar.NewReader(zr)
+		for {
+			h, err := tr.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			name := strings.TrimPrefix(h.Name, "./")
+			dest, ok := want[name]
+			if !ok {
+				continue
+			}
+			if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+				return fmt.Errorf("refusing non-regular Aether archive entry %s", name)
+			}
+			if h.Size < 0 || h.Size > 100<<20 {
+				return fmt.Errorf("Aether archive entry %s exceeds size limit", name)
+			}
+			if err := extractVerifiedFile(tr, dest, h.Size); err != nil {
+				return err
+			}
+			if name == core {
+				found = true
+			}
+		}
+	} else {
+		return fmt.Errorf("unsupported Aether archive format")
 	}
 	if !found {
 		return fmt.Errorf("the archive does not contain %s", core)
@@ -153,12 +220,9 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	return nil
 }
 
-func extractZipFile(f *zip.File, dest string) error {
-	rc, err := f.Open()
-	if err != nil {
-		return err
-	}
-	defer rc.Close()
+// Every file is published via an adjacent temporary path only after it is
+// fully written; unsuccessful extraction never publishes half an executable.
+func extractVerifiedFile(src io.Reader, dest string, size int64) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -167,29 +231,47 @@ func extractZipFile(f *zip.File, dest string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, rc); err != nil {
-		out.Close()
-		return err
+	n, err := io.CopyN(out, src, size)
+	if err != nil || n != size {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("incomplete executable %s: %w", filepath.Base(dest), err)
 	}
 	if err := out.Close(); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, dest)
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func extractZipFile(f *zip.File, dest string) error {
+	if f.FileInfo().Mode().IsRegular() && f.UncompressedSize64 <= 100<<20 {
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		return extractVerifiedFile(rc, dest, int64(f.UncompressedSize64))
+	}
+	return fmt.Errorf("refusing non-regular or oversized Aether archive entry %s", f.Name)
 }
 
 // warpEnable makes the WARP exit available: the core, then the identity.
 func warpEnable(ctx context.Context, u *term, base, proxy string) int {
-	if runtime.GOOS != "windows" {
-		// Release selection and bundled transports currently use Windows
-		// binaries. Refuse instead of downloading an .exe on another OS.
-		u.Line(toneFail, "Aether automated installation is Windows-only; this build cannot safely install the correct helper archive")
+	url, hash, err := aetherArchiveFor(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		u.Line(toneFail, "%v", err)
 		return 1
 	}
 	if !fileOK(aetherBinary(base)) || !fileOK(psiphonCore(base)) {
 		step := u.Progress("Downloading Aether "+aetherVersion, 1)
-		if err := fetchAether(ctx, aetherZipURL, aetherZipSHA, base); err != nil {
+		if err := fetchAether(ctx, url, hash, base); err != nil {
 			step.Finish(toneFail, err.Error())
-			u.Note("Download %s yourself, check its SHA-256 (%s) and put aether.exe into %s.", aetherZipURL, aetherZipSHA, filepath.Join(base, "cores"))
+			u.Note("Download %s yourself, check its SHA-256 (%s) and put the core plus pt/ helpers into %s.", url, hash, filepath.Join(base, "cores"))
 			return 1
 		}
 		step.Finish(toneOK, "verified against the pinned SHA-256")
