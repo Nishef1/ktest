@@ -20,6 +20,7 @@ From the repository root:
 
 ```sh
 go install golang.org/x/mobile/cmd/gomobile@latest
+go get -tool golang.org/x/mobile/cmd/gobind
 gomobile init
 mkdir -p android/app/libs
 gomobile bind -target=android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge

@@ -48,6 +48,7 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/28.2.13676358"
           go install golang.org/x/mobile/cmd/gomobile@latest
+          go get -tool golang.org/x/mobile/cmd/gobind
           gomobile init
           mkdir -p android/app/libs
           gomobile bind -target=android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
