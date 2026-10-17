@@ -32,28 +32,85 @@ func (r *transientEOFReader) Read(p []byte) (int, error) {
 }
 
 func TestConsoleInterruptEOFDoesNotCloseMenuInput(t *testing.T) {
-	lines := make(chan string)
+	src := newLineSource()
 	finished := make(chan struct{})
 	interrupts := make(chan struct{}, 1)
 	ended := make(chan struct{})
 	go func() { <-ended; time.Sleep(10 * time.Millisecond); interrupts <- struct{}{} }()
-	go scanMenuInput(&transientEOFReader{reader: strings.NewReader("9\n"), ended: ended}, lines, finished, interrupts, true)
-	line, ok := <-lines
-	if !ok || line != "9" {
-		t.Fatal("transient Ctrl+C EOF closed the input")
-	}
-	close(finished)
-	for range lines {
+	go scanMenuInput(&transientEOFReader{reader: strings.NewReader("9\n"), ended: ended}, src, finished, interrupts, true)
+	src.request() // cancelled by the Ctrl+C that follows the transient EOF
+	// The menu asks again after Ctrl+C; keep asking until the line arrives.
+	deadline := time.After(2 * time.Second)
+	for {
+		src.request()
+		select {
+		case line, ok := <-src.lines:
+			if !ok || line != "9" {
+				t.Fatalf("transient Ctrl+C EOF closed the input: %q %v", line, ok)
+			}
+			close(finished)
+			return
+		case <-time.After(20 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("no line after the interrupt")
+		}
 	}
 }
 
 func TestRedirectedEOFDoesNotRetryOnAnInterrupt(t *testing.T) {
-	lines := make(chan string)
+	src := newLineSource()
 	interrupts := make(chan struct{}, 1)
 	interrupts <- struct{}{}
-	go scanMenuInput(&transientEOFReader{reader: strings.NewReader("must not be read\n")}, lines, make(chan struct{}), interrupts, false)
-	if line, ok := <-lines; ok {
+	go scanMenuInput(&transientEOFReader{reader: strings.NewReader("must not be read\n")}, src, make(chan struct{}), interrupts, false)
+	src.request()
+	if line, ok := <-src.lines; ok {
 		t.Fatalf("redirected EOF unexpectedly retried: %q", line)
+	}
+}
+
+type countingReader struct {
+	mu    sync.Mutex
+	reads int
+	r     io.Reader
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	c.reads++
+	c.mu.Unlock()
+	return c.r.Read(p)
+}
+
+func (c *countingReader) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads
+}
+
+// A console read pending while the menu leaves the alternate screen fails on
+// the next keypress and closes the program, so stdin is only read on request.
+func TestStdinIsOnlyReadWhenALineIsRequested(t *testing.T) {
+	reader := &countingReader{r: strings.NewReader("1\n2\n3\n")}
+	src := newLineSource()
+	finished := make(chan struct{})
+	defer close(finished)
+	go scanMenuInput(reader, src, finished, make(chan struct{}), false)
+	time.Sleep(50 * time.Millisecond)
+	if reader.count() != 0 {
+		t.Fatalf("stdin was read %d times before any request", reader.count())
+	}
+	src.request()
+	src.request() // an outstanding read is not doubled
+	if line := <-src.lines; line != "1" {
+		t.Fatalf("line = %q", line)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := reader.count(); n != 1 {
+		t.Fatalf("stdin was read %d times for one request; a read is pending between prompts", n)
+	}
+	src.request()
+	if line := <-src.lines; line != "2" {
+		t.Fatalf("line = %q", line)
 	}
 }
 

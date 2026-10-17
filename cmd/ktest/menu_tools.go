@@ -204,7 +204,7 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 		t.ui.leaveMenu()
 		t.ui.Note("Press Enter or Ctrl+C to cancel and return here.")
 		best := ""
-		alive, finished := t.run(func(ctx context.Context) { runWindscribeTestContext(ctx, args, t.ui, func(sni string) { best = sni }) }, in.lines)
+		alive, finished := t.run(func(ctx context.Context) { runWindscribeTestContext(ctx, args, t.ui, func(sni string) { best = sni }) }, in.enter())
 		if !alive {
 			return false
 		}

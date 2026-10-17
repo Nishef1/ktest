@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	xterm "golang.org/x/term"
@@ -200,9 +201,19 @@ func findItem(key string) (menuItem, bool) {
 // submenus receive a Back request.
 type input struct {
 	lines       <-chan string
+	request     func() // asks the reader for the next line; nil in tests
 	quit        <-chan struct{}
 	back        <-chan struct{}
 	interrupted bool
+}
+
+// enter asks for a line and returns the channel it arrives on. A job waits on
+// it for the Enter that stops it.
+func (in *input) enter() <-chan string {
+	if in.request != nil {
+		in.request()
+	}
+	return in.lines
 }
 
 // asciiDigits maps Persian (U+06F0..), Arabic-Indic (U+0660..) and full-width
@@ -225,6 +236,9 @@ func asciiDigits(s string) string {
 }
 
 func (in *input) read() (string, bool) {
+	if in.request != nil {
+		in.request()
+	}
 	select {
 	case l, ok := <-in.lines:
 		return strings.TrimSpace(asciiDigits(l)), ok
@@ -294,7 +308,7 @@ func (t *terminal) run(job func(ctx context.Context), lines ...<-chan string) (a
 // itself on a menu screen the menu would redraw over its output, so wait for
 // Enter first. It reports false only when stdin closed.
 func (t *terminal) tool(in *input, job func(ctx context.Context)) bool {
-	alive, finished := t.run(job, in.lines)
+	alive, finished := t.run(job, in.enter())
 	if !alive {
 		return false
 	}
@@ -339,30 +353,69 @@ func (t *terminal) handleInterrupt(back chan<- struct{}, quit chan struct{}) boo
 	return false
 }
 
+// lineSource hands out stdin one line at a time, and only when asked.
+//
+// A console read that is already pending when the menu switches between the
+// alternate and the main screen buffer is bound to the buffer that was active
+// when it started. Leaving the alternate screen destroys that buffer, and the
+// pending read then fails with ERROR_NO_DATA on the next keypress, which looked
+// like end of input and closed the program. Reading on demand means no read is
+// pending while a menu is drawn or left.
+type lineSource struct {
+	lines   chan string
+	want    chan struct{}
+	pending atomic.Bool // a read has been requested and not yet delivered or cancelled
+}
+
+func newLineSource() *lineSource {
+	return &lineSource{lines: make(chan string), want: make(chan struct{}, 1)}
+}
+
+// request starts one read unless one is already outstanding.
+func (s *lineSource) request() {
+	if s.pending.CompareAndSwap(false, true) {
+		s.want <- struct{}{}
+	}
+}
+
 // Windows ReadConsole can return a transient EOF just before delivering
-// Ctrl+C. Wait briefly for that notification before closing the input channel;
-// a genuine EOF still exits, and redirected input never retries.
-func scanMenuInput(reader io.Reader, lines chan<- string, finished <-chan struct{}, readInterrupts <-chan struct{}, retryConsoleEOF bool) {
-	defer close(lines)
+// Ctrl+C, which cancels the pending read. Wait briefly for that notification
+// before closing the input; a genuine EOF still exits, and redirected input
+// never retries. After a cancelled read nothing is outstanding: the next
+// request starts a new one.
+func scanMenuInput(reader io.Reader, src *lineSource, finished <-chan struct{}, readInterrupts <-chan struct{}, retryConsoleEOF bool) {
+	defer close(src.lines)
+	scanner := bufio.NewScanner(reader)
 	for {
-		scanner := bufio.NewScanner(reader)
-		for scanner.Scan() {
-			select {
-			case lines <- scanner.Text():
-			case <-finished:
-				return
-			}
-		}
-		if !retryConsoleEOF {
-			return
-		}
 		select {
-		case <-readInterrupts:
-			// Reopen the scanner over the same still-open console handle.
+		case <-src.want:
 		case <-finished:
 			return
-		case <-time.After(200 * time.Millisecond):
-			return
+		}
+	read:
+		for {
+			if scanner.Scan() {
+				select {
+				case src.lines <- scanner.Text():
+				case <-finished:
+					return
+				}
+				src.pending.Store(false)
+				break read
+			}
+			if !retryConsoleEOF {
+				return
+			}
+			select {
+			case <-readInterrupts:
+				src.pending.Store(false)
+				scanner = bufio.NewScanner(reader)
+				break read
+			case <-finished:
+				return
+			case <-time.After(200 * time.Millisecond):
+				return
+			}
 		}
 	}
 }
@@ -407,13 +460,13 @@ func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-c
 			}
 		}
 	}()
-	lines := make(chan string)
+	src := newLineSource()
 	consoleInput := false
 	if file, ok := in.(*os.File); ok && runtime.GOOS == "windows" {
 		consoleInput = xterm.IsTerminal(int(file.Fd()))
 	}
-	go scanMenuInput(in, lines, finished, readInterrupts, consoleInput)
-	stdin := &input{lines: lines, quit: quit, back: back}
+	go scanMenuInput(in, src, finished, readInterrupts, consoleInput)
+	stdin := &input{lines: src.lines, request: src.request, quit: quit, back: back}
 
 	for {
 		// A Back request left over from a submenu must not be mistaken for the
