@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"github.com/rivo/uniseg"
 	xterm "golang.org/x/term"
 )
