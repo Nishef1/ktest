@@ -274,3 +274,86 @@ func TestWindscribeCatalogAvoidsForceDisconnectNodes(t *testing.T) {
 		t.Fatal("healthy server removed with draining server")
 	}
 }
+
+ 
+// wsnet's official InventoryParser permits an ip3 null: Stealth is unavailable
+// for that node, while the advertised TCP and general-IP routes remain usable.
+func TestWindscribeCatalogAcceptsNullIP3AndSkipsIsolatedInvalidNodes(t *testing.T) {
+	c := newWSNodeCatalog()
+	body := []byte(`{"data":[{"nodes":[
+		{"ip":"198.51.100.12","ip2":"203.0.113.12","ip3":null,"hostname":"first.windscribe.com"},
+		{"ip":"127.0.0.1","ip2":"203.0.113.99","ip3":"192.0.2.99","hostname":"invalid.windscribe.com"},
+		{"ip":"198.51.100.13","ip2":"203.0.113.13","ip3":"192.0.2.13","hostname":"second.windscribe.com"}
+	]}]}`)
+	if err := c.replace("global", body, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.endpoints("203.0.113.12"); !reflect.DeepEqual(got, []wsEndpoint{{"198.51.100.12", "global/ip"}}) {
+		t.Fatalf("null ip3 discarded legitimate OpenVPN mapping or created bogus endpoint: %+v", got)
+	}
+	if got := c.endpointsByField("203.0.113.12", "ip3"); len(got) != 0 {
+		t.Fatalf("null ip3 created fake Stealth route: %+v", got)
+	}
+	if got := c.endpoints("203.0.113.13"); len(got) != 2 {
+		t.Fatalf("valid sibling lost alongside malformed node: %+v", got)
+	}
+	if got := c.endpoints("203.0.113.99"); len(got) != 0 {
+		t.Fatalf("malformed node survived validation: %+v", got)
+	}
+	select {
+	case <-c.ready:
+	default:
+		t.Fatal("valid catalog did not signal readiness")
+	}
+}
+
+// A successful provider source must unblock a waiting CONNECT without waiting
+// for a different source to time out. This is particularly important behind DPI.
+func TestWindscribeCatalogReadyBeforeSlowSourceCompletes(t *testing.T) {
+	old := wsCatalogURLs
+	defer func() { wsCatalogURLs = old }()
+	slowEntered := make(chan struct{}, 1)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			select {
+			case slowEntered <- struct{}{}:
+			default:
+			}
+			<-r.Context().Done()
+			return
+		}
+		_, _ = w.Write([]byte(globalNodeFixture))
+	}))
+	defer srv.Close()
+	wsCatalogURLs = []wsCatalogSource{
+		{name: "slow", url: srv.URL + "/slow"},
+		{name: "global", url: srv.URL + "/fast"},
+	}
+	c := newWSNodeCatalog()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.run(ctx, srv.Client(), filepath.Join(t.TempDir(), "cache.json"), func(string, ...any) {})
+	}()
+	select {
+	case <-slowEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("slow provider was not requested")
+	}
+	select {
+	case <-c.ready:
+		if got := c.endpoints("203.0.113.100"); len(got) != 2 {
+			t.Fatalf("catalog signaled ready without usable endpoints: %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ready blocked behind a slow alternate provider")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("catalog fetch did not cancel cleanly")
+	}
+}
