@@ -63,16 +63,29 @@ private val muted = Color(0xFF9EB1BE)
 private val amber = Color(0xFFFFD08B)
 private val red = Color(0xFFFFAB9E)
 
-private data class ConnectionMode(val id: String, val title: String, val subtitle: String, val available: Boolean)
-private val modes = listOf(
-    ConnectionMode("balanced", "Balanced", "Adaptive routes · protected AI sites fail closed", true),
-    ConnectionMode("fast", "Fast", "Faster adaptive race · protected AI sites fail closed", true),
-    ConnectionMode("aether", "Aether", "External local SOCKS5 core required", true),
-    ConnectionMode("psiphon", "Psiphon", "External local SOCKS5 core required", true),
-    ConnectionMode("tor", "Tor", "Embedded Guardian Tor · exit verified", true),
-    ConnectionMode("windscribe", "Windscribe", "Local anti-DPI bridge", false),
-    ConnectionMode("windscribe-aether", "Windscribe + Aether", "WARP carrier for Windscribe", false),
+private data class ConnectionMode(
+    val id: String, val title: String, val subtitle: String, val available: Boolean,
+    val limitation: String
 )
+
+// The Go catalog is the canonical description of the current CLI modes.
+// Android does not silently rebrand Psiphon or Tor as unrelated transports.
+private val modes: List<ConnectionMode> by lazy {
+    runCatching {
+        val values = JSONObject(Mobilebridge.connectionModes()).getJSONArray("modes")
+        (0 until values.length()).map { i ->
+            val item = values.getJSONObject(i)
+            ConnectionMode(
+                item.getString("id"), item.getString("title"),
+                item.getString("subtitle"), item.getBoolean("available"),
+                item.optString("limitation")
+            )
+        }
+    }.getOrElse {
+        listOf(ConnectionMode("balanced", "Balanced", "Connection catalog unavailable", false,
+            "Cannot read the Go engine's mode definitions."))
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -503,6 +516,10 @@ private fun ConnectionScreen(
                                 Text(mode.title, color = white, fontSize = 14.sp,
                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
                                 Text(mode.subtitle, color = muted, fontSize = 11.sp)
+                                if (selected && mode.limitation.isNotBlank()) {
+                                    Text(mode.limitation, color = amber, fontSize = 10.sp,
+                                        lineHeight = 14.sp)
+                                }
                             }
                             if (!mode.available) {
                                 Text("SOON", color = amber, fontSize = 10.sp,

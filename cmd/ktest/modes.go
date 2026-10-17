@@ -3,8 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
-	"time"
-
+	"github.com/Nishef1/ktest/internal/connectionpolicy"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -49,22 +48,7 @@ func (m ConnectionMode) exitOnly() bool {
 func (m ConnectionMode) isWindscribe() bool { return m == ModeWindscribe || m == ModeWindscribeAether }
 
 func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.DomainRules) {
-	switch m {
-	case ModeBalanced:
-		cfg.ExitOnly = rules.Match
-	case ModeFast:
-		cfg.ExitOnly = rules.Match
-		cfg.Stagger = 125 * time.Millisecond
-	case ModeWindscribe:
-		cfg.ExitOnly = rules.Match
-		cfg.PreferVerifiedExit = false
-		cfg.RejectExits = true
-		cfg.LocalOnly = true
-	case ModeWindscribeAether:
-		cfg.ExitOnly = rules.Match // OpenVPN transport is not an AI identity/session
-	case ModeAether, ModePsiphon, ModeTor:
-		cfg.ExitOnly = func(string) bool { return true }
-	}
+    connectionpolicy.Configure(string(m), cfg, rules.Match)
 }
 
 func (m ConnectionMode) message() string {

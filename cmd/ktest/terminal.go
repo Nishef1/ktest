@@ -1,6 +1,7 @@
 package main
 
 import (
+    "github.com/Nishef1/ktest/internal/connectionpolicy"
 	"bufio"
 	"context"
 	"fmt"
@@ -63,12 +64,12 @@ var menuSections = []struct {
 	items []menuItem
 }{
 	{"Connection methods", []menuItem{
-		connectItem("1", "Balanced", "Adaptive routing", ModeBalanced),
-		connectItem("2", "Fast", "Faster fallback", ModeFast),
-		{key: "3", name: "Aether", desc: "WARP / Psiphon", mode: ModeAether, action: func(t *terminal, base string, in *input) bool { return t.aetherMenu(base, in) }},
-		connectItem("4", "Aether to Tor", "Tor", ModeTor),
-		{key: "5", name: "Windscribe", desc: "Local bridge / through Aether", mode: ModeWindscribe, action: func(t *terminal, base string, in *input) bool { return t.windscribeMenu(base, in) }},
-		connectItem("6", "Aether to Psiphon", "Psiphon", ModePsiphon),
+		connectItem("1", connectionpolicy.Title(string(ModeBalanced)), "Adaptive routing", ModeBalanced),
+		connectItem("2", connectionpolicy.Title(string(ModeFast)), "Faster fallback", ModeFast),
+		{key: "3", name: connectionpolicy.Title(string(ModeAether)), desc: "WARP / Psiphon", mode: ModeAether, action: func(t *terminal, base string, in *input) bool { return t.aetherMenu(base, in) }},
+		connectItem("4", connectionpolicy.Title(string(ModeTor)), "Tor", ModeTor),
+		{key: "5", name: connectionpolicy.Title(string(ModeWindscribe)), desc: "Local bridge / through Aether", mode: ModeWindscribe, action: func(t *terminal, base string, in *input) bool { return t.windscribeMenu(base, in) }},
+		connectItem("6", connectionpolicy.Title(string(ModePsiphon)), "Psiphon", ModePsiphon),
 	}},
 	{"Coverage", []menuItem{
 		{key: "7", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},

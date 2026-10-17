@@ -9,6 +9,7 @@ import (
     "sync"
     "time"
 
+    "github.com/Nishef1/ktest/internal/connectionpolicy"
     "github.com/Nishef1/ktest/internal/httpproxy"
     "github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -93,7 +94,7 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     generation := proxyGeneration
     proxyMu.Unlock()
     switch mode {
-    case "balanced", "fast", "aether", "psiphon", "tor":
+    case "balanced", "fast", "aether", "tor":
     default:
         return "", fmt.Errorf("mode %q is not available in this Android build", mode)
     }
@@ -124,21 +125,13 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
             Rank: 9,
         })
     }
-    config := smartproxy.Config{
-        Upstreams: upstreams,
-        ExitOnly: exitOnlyForMode(mode, rules.Match),
-        // Authentication can require a second TLS-protected Tor confirmation.
-        ConnectTimeout: 18 * time.Second,
-        ExitVerifyTTL: 60 * time.Second,
-    }
+    config := smartproxy.Config{Upstreams: upstreams}
+    connectionpolicy.Configure(mode, &config, rules.Match)
     if upstream != "" {
         config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {
             _, err := verifyLocalUpstream(ctx, upstream, mode == "tor")
             return err
         }
-    }
-    if mode == "fast" {
-        config.Stagger = 125 * time.Millisecond
     }
     proxy, err := smartproxy.New(config)
     if err != nil { return "", err }
@@ -213,18 +206,4 @@ func ProxyReady() bool {
     }
     _ = conn.Close()
     return true
-}
-
-
-// An external-core mode promises to use only its authenticated foreign SOCKS
-// upstream. Revalidating only a small AI-domain list would allow country
-// changes to go unnoticed for ordinary destinations and future fallback paths.
-// Balanced/Fast preserve their existing per-domain policy.
-func exitOnlyForMode(mode string, protected func(string) bool) func(string) bool {
-    switch mode {
-    case "aether", "psiphon", "tor":
-        return func(string) bool { return true }
-    default:
-        return protected
-    }
 }
