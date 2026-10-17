@@ -527,12 +527,9 @@ func readOpenVPNReply(r io.Reader) ([]byte, error) {
 // Windscribe, rather than this bridge, authenticates the server's response.
 func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
 	key := net.JoinHostPort(host, port)
-	if b.catalog != nil && b.opts.serverIP == "" && len(b.catalog.endpoints(host)) == 0 {
-		select {
-		case <-b.catalog.ready:
-		case <-time.After(8 * time.Second):
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
+	if b.catalog != nil && b.opts.serverIP == "" {
+		if err := b.catalog.waitForNode(ctx, host, 8*time.Second); err != nil {
+			return nil, nil, err
 		}
 	}
 	cs := b.ordered(key, b.carriersFor(host))
