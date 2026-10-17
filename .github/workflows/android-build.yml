@@ -40,6 +40,8 @@ jobs:
           gomobile init
           mkdir -p android/app/libs
           gomobile bind -target=android/arm,android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
+      - name: Fetch pinned HEV Android tun2socks adapter
+        run: bash android/scripts/fetch-hev-aar.sh
       - name: Build Android preview APK (debug-signed, internal testing only)
         run: gradle -p android :app:assembleDebug --no-daemon
       - name: Verify APK signature, ABIs, and package

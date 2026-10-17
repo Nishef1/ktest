@@ -31,6 +31,9 @@ android {
 dependencies {
     // Built from the real ktest Go core; not a placeholder/mock.
     implementation(files("libs/mobilebridge.aar"))
+    // Transport adapter only; the KTest Go core owns routing/verification.
+    // SHA-256 pinned and fetched only in a manually approved Android build.
+    implementation(files("libs/hev-socks5-tunnel.aar"))
     val composeBom = platform("androidx.compose:compose-bom:2025.09.01")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")

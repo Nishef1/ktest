@@ -51,6 +51,9 @@ class KTestVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Register only a packet adapter. Go refuses full VPN until the
+        // original Go routing core can handle DNS/UDP and IPv6 safely.
+        Mobilebridge.setAndroidVpnPacketAdapter(HevPacketAdapter(this))
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "KTest VPN", NotificationManager.IMPORTANCE_LOW)
         )
