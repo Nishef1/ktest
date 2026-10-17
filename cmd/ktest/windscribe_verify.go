@@ -79,13 +79,31 @@ func validateWSDataResult(before, after wsCLIStatus, measured string) error {
 // One certificate-verified HTTPS request, through a separate system process.
 // Equality with a stable CLI-reported IP is evidence for this request only;
 // split-tunnel exclusions and other applications are not certified.
-func verifyWindscribeVPN(ctx context.Context, cli string, u *term) int {
+func verifyWindscribeVPN(ctx context.Context, cli string, u *term, expected ...string) int {
 	before := readWSStatus(ctx, cli)
-	if before.err != nil || before.state != windscribeConnected || before.ip == "" {
-		u.Line(toneWarn, "VPN verification needs a confirmed CLI Connected state and a public VPN IP; no reconnect requested")
+	if before.err != nil || before.state != windscribeConnected {
+		u.Line(toneWarn, "VPN verification needs a confirmed Windscribe CLI Connected state; no reconnect requested")
+		if before.err != nil {
+			u.Note("CLI: %v", before.err)
+		}
 		return 1
 	}
-	u.Note("CLI: connected, protocol=%s, VPN IP=%s", before.protocol, before.ip)
+	reference := before.ip
+	referenceSource := "Windscribe CLI"
+	if len(expected) > 0 && expected[0] != "" {
+		ip := net.ParseIP(expected[0])
+		if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+			u.Line(toneFail, "Expected VPN IP must be a public IP copied from the Windscribe app")
+			return 2
+		}
+		if reference != "" && !net.ParseIP(reference).Equal(ip) {
+			u.Line(toneWarn, "Expected VPN IP does not match the CLI-reported VPN IP; check the reference first")
+			return 1
+		}
+		reference = ip.String()
+		referenceSource = "Windscribe app IP supplied by user"
+	}
+	u.Note("CLI: connected, protocol=%s; only one system HTTPS request will be checked", before.protocol)
 	u.Note("This data check does not associate the session with a particular SNI/carrier or inspect the app's proxy settings.")
 	if !strings.HasPrefix(strings.ToLower(before.protocol), "tcp:") {
 		u.Note("This protocol does not verify ktest's OpenVPN TCP bridge or any tested SNI.")
@@ -109,11 +127,27 @@ func verifyWindscribeVPN(ctx context.Context, cli string, u *term) int {
 	}
 	measured := tracePublicIP(string(stdout.data))
 	after := readWSStatus(ctx, cli)
-	if err := validateWSDataResult(before, after, measured); err != nil {
-		u.Line(toneWarn, "%v", err)
+	if before.err != nil || after.err != nil || before.state != windscribeConnected || after.state != windscribeConnected ||
+		before.protocol != after.protocol || (before.ip != "" && after.ip != before.ip) {
+		u.Line(toneWarn, "VPN state, protocol or CLI IP changed during HTTPS check; result inconclusive")
 		return 1
 	}
-	u.Line(toneOK, "HTTPS data verified: measured exit=%s matches stable Windscribe CLI VPN IP", measured)
-	u.Note("This verifies one system HTTPS request. Other destinations/apps and split-tunnel rules were not tested.")
+	ip := net.ParseIP(measured)
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		u.Line(toneWarn, "HTTPS endpoint returned no valid public IP; VPN data not verified")
+		return 1
+	}
+	u.Note("System HTTPS observed public IP: %s", measured)
+	if reference == "" {
+		u.Line(toneWarn, "CLI did not report a VPN IP, so Windscribe's routing cannot be independently verified from this measurement")
+		u.Note("Compare with the VPN IP displayed in the Windscribe app; for an exact comparison use windscribe-test -verify-vpn -expected-vpn-ip <app-IP>")
+		return 1
+	}
+	if !ip.Equal(net.ParseIP(reference)) {
+		u.Line(toneWarn, "System HTTPS IP=%s differs from %s=%s; inspect split-tunnel and routing settings", measured, referenceSource, reference)
+		return 1
+	}
+	u.Line(toneOK, "HTTPS exit IP=%s matches %s; Windscribe remained connected during the check", measured, referenceSource)
+	u.Note("This confirms the sampled request matches the reference IP; other destinations, apps, DNS and the particular SNI/carrier were not tested.")
 	return 0
 }
