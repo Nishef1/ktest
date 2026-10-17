@@ -42,8 +42,8 @@ jobs:
           gradle-version: '9.5.0'
       - name: Validate Go mobile API
         run: |
+          gofmt -w mobilebridge
           go test ./mobilebridge ./internal/pathdiag
-          test -z "$(gofmt -l mobilebridge)"
       - name: Build Go mobile AAR
         run: |
           export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/28.2.13676358"
