@@ -159,14 +159,14 @@ type wsBridge struct {
 	// candidates overrides the carrier list (tests).
 	candidates func(host string) []wsCarrier
 
-	mu      sync.Mutex
-	edges   []string                        // CDN edges found by the scan, best first
-	good    map[string]string               // destination -> carrier that carried a working VPN
-	bad     map[string]map[string]time.Time // destination -> carrier -> demoted until
-	retries map[string]uint64               // attempt index for choosing independent alternatives
-	active  map[*wsActiveCarrier]bool       // streams awaiting real VPN confirmation
+	mu          sync.Mutex
+	edges       []string                        // CDN edges found by the scan, best first
+	good        map[string]string               // destination -> carrier that carried a working VPN
+	bad         map[string]map[string]time.Time // destination -> carrier -> demoted until
+	retries     map[string]uint64               // attempt index for choosing independent alternatives
+	active      map[*wsActiveCarrier]bool       // streams awaiting real VPN confirmation
 	nextSession uint64
-	quickDrops map[string]int               // repeated short upstream-ended sessions
+	quickDrops  map[string]int // repeated short upstream-ended sessions
 }
 
 // CLI authentication is attributed only if a single OpenVPN stream is
