@@ -20,9 +20,9 @@ const wsCatalogMaxAge = 24 * time.Hour
 const wsCatalogLimit = 4 << 20
 
 // Windscribe desktop switched to the mob-v2 server list in 2026.
-// The older openvpn URL is a fallback for censored networks that can reach
-// only a cached/legacy API entry. Timestamp suffixes match the official
-// public mob-v2 endpoint format, and neither requires account credentials.
+// The older openvpn URLs are fallbacks on networks that cannot reach the
+// current API. The two mob-v2 variants may contain different node subsets.
+// Timestamp suffixes match the public API format; no account tokens are sent.
 type wsCatalogSource struct {
 	name, url, fallback string
 }
