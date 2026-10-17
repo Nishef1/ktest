@@ -17,13 +17,13 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 		t.ui.menuOption("1", "Local anti-DPI bridge", "No Aether / WARP / Psiphon")
 		t.ui.menuOption("2", "Windscribe through Aether", "WARP carries OpenVPN TCP; keep Aether running")
 		t.ui.menuOption("3", "Diagnostics and tests", "")
-		t.ui.menuOption("0", "Back", "")
+		t.ui.menuOption("0", "Back", backHint)
 		t.ui.Printf("\n  Windscribe > ")
 		answer, ok := in.read()
 		if !ok {
 			return false
 		}
-		if isBackChoice(answer) {
+		if answer == "" || isBackChoice(answer) {
 			return true
 		}
 		switch answer {
@@ -32,7 +32,6 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 			if answer == "2" {
 				mode = ModeWindscribeAether
 			}
-			t.ui.leaveMenu()
 			if !t.connectFromMenu(base, in, mode) {
 				if in.interrupted {
 					in.interrupted = false
@@ -76,13 +75,13 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 		} {
 			t.ui.menuOption(row.key, row.name, row.detail)
 		}
-		t.ui.menuOption("0", "Back", "")
+		t.ui.menuOption("0", "Back", backHint)
 		t.ui.Printf("\n  Windscribe test > ")
 		answer, ok := in.read()
 		if !ok {
 			return false
 		}
-		if isBackChoice(answer) {
+		if answer == "" || isBackChoice(answer) {
 			return true
 		}
 		alive := true
@@ -97,13 +96,12 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 			if answer == "7" {
 				mode = ModeWindscribeAether
 			}
-			t.ui.leaveMenu()
 			alive = t.connectFromMenu(base, in, mode)
 		case "9":
 			alive = t.cdnScanMenu(in)
 		case "1", "6", "8":
 			t.ui.leaveMenu()
-			alive = t.foreground(func(ctx context.Context) {
+			alive = t.tool(in, func(ctx context.Context) {
 				switch answer {
 				case "1":
 					runDoctorMode(ctx, t.ui, base, false, ModeWindscribe)
@@ -112,7 +110,7 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 				case "8":
 					runWindscribeTestContext(ctx, []string{"-base", base, "-verify-vpn"}, t.ui)
 				}
-			}, in.lines)
+			})
 		default:
 			message = "Select 1-9, or 0"
 		}

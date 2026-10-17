@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -172,6 +173,14 @@ func (t *term) menuOption(key, name, description string) {
 	t.text(prefix, strings.Repeat(" ", visibleLen(prefix)), t.Dim(description))
 }
 
+func menuItemCount() int {
+	n := 0
+	for _, s := range menuSections {
+		n += len(s.items)
+	}
+	return n
+}
+
 func findItem(key string) (menuItem, bool) {
 	for _, s := range menuSections {
 		for _, it := range s.items {
@@ -208,19 +217,42 @@ func (in *input) read() (string, bool) {
 // foreground runs job until it ends, Enter is pressed (when lines is not nil)
 // or Ctrl+C. It reports false when stdin closed while waiting.
 func (t *terminal) foreground(job func(ctx context.Context), lines ...<-chan string) bool {
+	alive, _ := t.run(job, lines...)
+	return alive
+}
+
+// drainLines drops input typed while a job ran, so a stray Enter cannot answer
+// the next menu prompt.
+func drainLines(lines <-chan string) {
+	for {
+		select {
+		case _, ok := <-lines:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+// run is foreground that also reports whether the job ended by itself rather
+// than being cancelled by Enter or Ctrl+C.
+func (t *terminal) run(job func(ctx context.Context), lines ...<-chan string) (alive, finished bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.mu.Lock()
 	t.cancel = cancel
 	t.mu.Unlock()
 	done := make(chan struct{})
 	go func() { job(ctx); close(done) }()
-	alive := true
+	alive = true
 	var enter <-chan string
 	if len(lines) > 0 {
 		enter = lines[0]
 	}
 	select {
 	case <-done:
+		finished = true
 	case _, ok := <-enter:
 		alive = ok
 	case <-ctx.Done(): // Ctrl+C
@@ -230,7 +262,39 @@ func (t *terminal) foreground(job func(ctx context.Context), lines ...<-chan str
 	t.mu.Lock()
 	t.cancel = nil
 	t.mu.Unlock()
-	return alive
+	if alive && enter != nil {
+		drainLines(enter)
+	}
+	return alive, finished
+}
+
+// tool runs a finite job (diagnostics, scan, connection). When it ends by
+// itself on a menu screen the menu would redraw over its output, so wait for
+// Enter first. It reports false only when stdin closed.
+func (t *terminal) tool(in *input, job func(ctx context.Context)) bool {
+	alive, finished := t.run(job, in.lines)
+	if !alive {
+		return false
+	}
+	if finished {
+		return t.holdResult(in)
+	}
+	return true
+}
+
+func (t *terminal) holdResult(in *input) bool {
+	if !t.ui.live {
+		return true
+	}
+	t.print("\n  Press Enter to return to the menu > ")
+	if _, ok := in.read(); !ok {
+		if in.interrupted {
+			in.interrupted = false
+			return true
+		}
+		return false
+	}
+	return true
 }
 
 // An idle submenu goes back one level; only the idle main menu exits.
@@ -342,7 +406,6 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		}
 		switch strings.ToLower(line) {
 		case "":
-			t.ui.leaveMenu()
 			if !t.connectFromMenu(base, stdin, t.options.mode) {
 				if stdin.interrupted {
 					stdin.interrupted = false
@@ -356,11 +419,8 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		}
 		it, found := findItem(line)
 		if !found {
-			t.notice, t.noticeTone = "Unknown option. Use 1-11, Enter, or 0.", toneWarn
+			t.notice, t.noticeTone = fmt.Sprintf("Unknown option. Use 1-%d, Enter, or 0.", menuItemCount()), toneWarn
 			continue
-		}
-		if it.key != "7" && it.key != "9" {
-			t.ui.leaveMenu()
 		}
 		if !it.action(t, base, stdin) {
 			if stdin.interrupted {
@@ -382,6 +442,7 @@ func (t *terminal) menuConnectOptions(base string, mode ConnectionMode) connectO
 // connectFromMenu offers the certificate first when domain fronting would need
 // it, and Administrator for Whole PC. It reports false when stdin closed.
 func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) bool {
+	t.ui.leaveMenu()
 	t.options.mode = mode
 	t.rememberConnect("mode", string(mode))
 	o := t.menuConnectOptions(base, mode)
@@ -441,5 +502,5 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 			t.ui.Note("Carrier: Aether WARP. Exclude this ktest executable and aether.exe from Windscribe VPN routing; keep this process running while connected.")
 		}
 	}
-	return t.foreground(func(ctx context.Context) { connectSession(ctx, o, nil, t.ui) }, in.lines)
+	return t.tool(in, func(ctx context.Context) { connectSession(ctx, o, nil, t.ui) })
 }

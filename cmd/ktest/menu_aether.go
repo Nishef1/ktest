@@ -37,6 +37,7 @@ func (t *terminal) chooseAetherMethod(in *input) bool {
 		t.ui.Heading("Aether method", "Choice is saved. Only compatible methods are used in each connection mode.")
 		if message != "" {
 			t.ui.Line(toneWarn, "%s", message)
+			message = ""
 		}
 		for i, c := range aetherMethodChoices {
 			selected := ""
@@ -45,7 +46,7 @@ func (t *terminal) chooseAetherMethod(in *input) bool {
 			}
 			t.ui.menuOption(strconv.Itoa(i+1), c.name, selected)
 		}
-		t.ui.menuOption("0", "Back", "")
+		t.ui.menuOption("0", "Back", backHint)
 		t.ui.Printf("\n  Method > ")
 		answer, ok := in.read()
 		if !ok {
@@ -82,18 +83,17 @@ func (t *terminal) aetherMenu(base string, in *input) bool {
 		t.ui.menuOption("2", "Choose method", "")
 		t.ui.menuOption("3", "Compare this network", "3 min · low data")
 		t.ui.menuOption("4", "Saved recommendations", "")
-		t.ui.menuOption("0", "Back", "")
+		t.ui.menuOption("0", "Back", backHint)
 		t.ui.Printf("\n  Aether > ")
 		answer, ok := in.read()
 		if !ok {
 			return false
 		}
-		if isBackChoice(answer) {
+		if answer == "" || isBackChoice(answer) {
 			return true
 		}
 		switch answer {
-		case "", "1":
-			t.ui.leaveMenu()
+		case "1":
 			if !t.connectFromMenu(base, in, ModeAether) {
 				if in.interrupted {
 					in.interrupted = false
@@ -111,13 +111,13 @@ func (t *terminal) aetherMenu(base string, in *input) bool {
 			}
 		case "3", "4":
 			t.ui.leaveMenu()
-			if !t.foreground(func(ctx context.Context) {
+			if !t.tool(in, func(ctx context.Context) {
 				if answer == "3" {
 					runAetherDiagnosis(ctx, t.ui, base, false, 3*time.Minute)
 				} else {
 					printSavedAether(ctx, t.ui, base)
 				}
-			}, in.lines) {
+			}) {
 				return false
 			}
 		default:

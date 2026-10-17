@@ -29,7 +29,8 @@ func (t *terminal) chooseCoverage(in *input) bool {
 		t.ui.Note("TUN needs Windows Administrator; LAN and helper processes are exempt.")
 		t.ui.Note("Most UDP is blocked. TUN is not a persistent VPN kill switch.")
 		t.ui.Note("Changes are saved automatically.")
-		t.ui.Printf("   0  Back\n\n  Coverage > ")
+		t.ui.menuOption("0", "Back", backHint)
+		t.ui.Printf("\n  Coverage > ")
 		choice, ok := in.read()
 		if !ok {
 			return false
@@ -60,6 +61,10 @@ func (t *terminal) chooseCoverage(in *input) bool {
 		return true
 	}
 }
+
+// backHint labels the Back row of a list menu: Enter on a list with no stated
+// default always goes back, never starts something.
+const backHint = "Enter or Ctrl+C"
 
 // Back is available at every submenu prompt; Enter keeps its stated default.
 func isBackChoice(choice string) bool {
@@ -108,7 +113,7 @@ func (t *terminal) diagnoseMenu(base string, in *input) bool {
 		t.savePreferences()
 		t.ui.leaveMenu()
 		t.ui.Note("Press Enter or Ctrl+C to cancel diagnostics and return here.")
-		if !t.foreground(func(ctx context.Context) {
+		if !t.tool(in, func(ctx context.Context) {
 			switch choice {
 			case "3", "4":
 				runAetherDiagnosis(ctx, t.ui, base, choice == "4", 3*time.Minute)
@@ -117,7 +122,7 @@ func (t *terminal) diagnoseMenu(base string, in *input) bool {
 			default:
 				runDoctorMode(ctx, t.ui, base, false, mode)
 			}
-		}, in.lines) {
+		}) {
 			return false
 		}
 	}
@@ -190,7 +195,11 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 		t.ui.leaveMenu()
 		t.ui.Note("Press Enter or Ctrl+C to cancel and return here.")
 		best := ""
-		if !t.foreground(func(ctx context.Context) { runWindscribeTestContext(ctx, args, t.ui, func(sni string) { best = sni }) }, in.lines) {
+		alive, finished := t.run(func(ctx context.Context) { runWindscribeTestContext(ctx, args, t.ui, func(sni string) { best = sni }) }, in.lines)
+		if !alive {
+			return false
+		}
+		if best == "" && finished && !t.holdResult(in) {
 			return false
 		}
 		if best != "" {
@@ -285,7 +294,7 @@ func (t *terminal) cdnScanMenu(in *input) bool {
 		t.savePreferences()
 		t.ui.leaveMenu()
 		t.ui.Note("Press Enter or Ctrl+C to cancel and return here.")
-		if !t.foreground(func(ctx context.Context) { runQuickScanContext(ctx, args) }, in.lines) {
+		if !t.tool(in, func(ctx context.Context) { runQuickScanContext(ctx, args) }) {
 			return false
 		}
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"path/filepath"
 	"strconv"
@@ -295,5 +296,71 @@ func TestElevationPreservesEffectivePolicyAcrossUserProfiles(t *testing.T) {
 	}
 	if err := validateConnectOptions(child); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEnterOnListMenusGoesBack(t *testing.T) {
+	t.Setenv("KTEST_CA_DIR", t.TempDir())
+	t.Setenv("KTEST_WARP_DIR", t.TempDir())
+	for _, tc := range []struct{ name, input, screen string }{
+		{"aether", "3\n\n0\n", "Aether >"},
+		{"windscribe", "5\n\n0\n", "Windscribe >"},
+		{"windscribe tests", "11\n\n0\n", "Location or TCP IP"},
+		{"setup", "9\n\n0\n", "Certificate health and optional exit components."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := menuOutput(t, tc.input)
+			if tc.name == "windscribe tests" {
+				return // its first screen is a prompt with its own stated Enter default
+			}
+			if strings.Count(out, tc.screen) != 1 || strings.Count(out, "Free access toolkit") != 2 || strings.Contains(out, "Unknown option") || strings.Contains(out, "Policy:") {
+				t.Fatal("Enter did not simply go back:", out)
+			}
+		})
+	}
+}
+
+func TestAetherMethodWarningDoesNotStick(t *testing.T) {
+	var out bytes.Buffer
+	menu := &terminal{ui: plainTerm(&out)}
+	lines := make(chan string, 3)
+	lines <- "99"
+	lines <- "x"
+	lines <- "0"
+	if !menu.chooseAetherMethod(&input{lines: lines}) {
+		t.Fatal("method menu ended the program")
+	}
+	if got := strings.Count(out.String(), "Select 1-"); got != 2 {
+		t.Fatalf("stale warning repeated %d times, want one per bad answer (2):\n%s", got, out.String())
+	}
+}
+
+func TestInputTypedDuringAJobDoesNotAnswerTheNextPrompt(t *testing.T) {
+	menu := &terminal{ui: plainTerm(io.Discard)}
+	lines := make(chan string, 2)
+	lines <- "" // Enter that stops the job
+	lines <- "" // second Enter pressed while it was stopping
+	alive, finished := menu.run(func(ctx context.Context) { <-ctx.Done() }, lines)
+	if !alive || finished {
+		t.Fatalf("alive=%t finished=%t", alive, finished)
+	}
+	select {
+	case line := <-lines:
+		t.Fatalf("stale input %q survived the job", line)
+	default:
+	}
+}
+
+func TestFinishedJobWaitsForEnterOnlyOnLiveMenus(t *testing.T) {
+	plain := &terminal{ui: plainTerm(io.Discard)}
+	if !plain.holdResult(&input{lines: make(chan string)}) {
+		t.Fatal("plain output must not wait")
+	}
+	var out bytes.Buffer
+	live := &terminal{ui: &term{w: &out, live: true}}
+	lines := make(chan string, 1)
+	lines <- ""
+	if !live.holdResult(&input{lines: lines}) || !strings.Contains(out.String(), "Press Enter to return") {
+		t.Fatal("live menu redrew over finished output without waiting:", out.String())
 	}
 }

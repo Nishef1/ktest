@@ -306,7 +306,7 @@ func (t *terminal) setup(base string, in *input) bool {
 		u.Note("Exit components do not prove a working VPN. Windscribe uses its own app.")
 		u.Note("Ctrl+C goes back. No certificate changes without your choice.")
 		u.Printf("\n")
-		u.menuOption("0", "Back", "")
+		u.menuOption("0", "Back", backHint)
 		u.Printf("\n  Select > ")
 		line, ok := in.read()
 		if !ok {
@@ -328,9 +328,8 @@ func (t *terminal) setup(base string, in *input) bool {
 			if !alive {
 				return false
 			}
-		case "0", "b", "back":
+		case "", "0", "b", "back":
 			return true
-		case "":
 		default:
 			message = "Select 1-2, or 0 to go back."
 		}
