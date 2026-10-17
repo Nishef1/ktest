@@ -822,3 +822,46 @@ func TestWindscribeCarrierOffersUpstreamHelloWithoutReplacingChrome(t *testing.T
 		}
 	}
 }
+
+func TestRepeatedEarlyUpstreamClosuresAfterCLIConnectedHaveLimitedCooldown(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "WStunnel sometimes resets"})
+	key := "68.67.118.163:443"
+	for i := 0; i < 2; i++ {
+		conn, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.observeCLIConnected()
+		for active := range b.active {
+			active.upstreamEnded.Store(true)
+		}
+		done(4*time.Second, 1024)
+		_ = conn.Close()
+		if i == 0 && b.good[key] != "WStunnel sometimes resets" {
+			t.Fatal("one quick close incorrectly demoted confirmed stream")
+		}
+	}
+	if b.good[key] != "" {
+		t.Fatal("repeated quick upstream closures left unstable carrier preferred")
+	}
+	if delay := time.Until(b.bad[key]["WStunnel sometimes resets"]); delay < 65*time.Second || delay > 100*time.Second {
+		t.Fatalf("unstable carrier cooldown missing: %s", delay)
+	}
+}
+
+func TestShortClientClosedConnectionsDoNotBecomeCarrierFailures(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "Stealth stable"})
+	key := "68.67.118.163:443"
+	for i := 0; i < 3; i++ {
+		conn, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.observeCLIConnected()
+		done(2*time.Second, 300)
+		_ = conn.Close()
+	}
+	if b.good[key] != "Stealth stable" {
+		t.Fatal("intentional short client closes demoted working carrier")
+	}
+}

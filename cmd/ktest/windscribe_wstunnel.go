@@ -139,9 +139,11 @@ type wsCarrier struct {
 // local dialer; OpenVPN is raced over every carrier and the first one whose
 // server returns data carries the stream, including later client writes.
 type wsActiveCarrier struct {
-	key       string
-	name      string
-	confirmed bool // an observed CLI Connected transition while this was the only active OpenVPN stream
+	id            uint64
+	key           string
+	name          string
+	confirmed     bool // unique CLI transition correlation, not independent egress proof
+	upstreamEnded atomic.Bool
 }
 
 type wsBridge struct {
@@ -163,6 +165,8 @@ type wsBridge struct {
 	bad     map[string]map[string]time.Time // destination -> carrier -> demoted until
 	retries map[string]uint64               // attempt index for choosing independent alternatives
 	active  map[*wsActiveCarrier]bool       // streams awaiting real VPN confirmation
+	nextSession uint64
+	quickDrops map[string]int               // repeated short upstream-ended sessions
 }
 
 // CLI authentication is attributed only if a single OpenVPN stream is
@@ -170,18 +174,22 @@ type wsBridge struct {
 // Concurrent candidate streams are ambiguous, so none is credited.
 func (b *wsBridge) observeCLIConnected() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if len(b.active) != 1 {
+		b.mu.Unlock()
 		return
 	}
+	var id uint64
+	var key, name string
 	for active := range b.active {
 		active.confirmed = true
-		// A real Windscribe TCP Connected transition is stronger evidence
-		// than an arbitrary 60-second/64-KiB threshold. This session is
-		// uniquely attributable, and already passed OpenVPN authentication.
+		id, key, name = active.id, active.key, active.name
+		// A single active stream at a CLI Connected transition is useful
+		// correlation, not proof of the actual VPN exit or route.
 		b.good[active.key] = active.name
 		delete(b.bad[active.key], active.name)
 	}
+	b.mu.Unlock()
+	b.logf("Windscribe session=%d requested=%s carrier=%s CLI_CONNECTED correlation (exit IP not independently verified)", id, key, name)
 }
 
 // windscribeServerCert rejects certificates without a Windscribe hostname.
@@ -209,7 +217,7 @@ func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.C
 		path = wstunnel.DefaultPath
 	}
 	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 250 * time.Millisecond,
-		good: map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}}
+		good: map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}, quickDrops: map[string]int{}}
 	for _, e := range splitList(o.cdnEdges) {
 		if _, _, err := net.SplitHostPort(e); err != nil {
 			e = net.JoinHostPort(e, "443")
@@ -679,11 +687,14 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	b.logf("Windscribe %s carried by %s source=%s; tunneled data returned in %s (authentication remains with Windscribe)", key, r.c.name, r.c.source, shortDur(r.took))
 	session := &wsActiveCarrier{key: key, name: r.c.name}
 	b.mu.Lock()
+	b.nextSession++
+	session.id = b.nextSession
 	if b.active == nil {
 		b.active = make(map[*wsActiveCarrier]bool)
 	}
 	b.active[session] = true
 	b.mu.Unlock()
+	b.logf("Windscribe session=%d requested=%s entry=%s source=%s carrier=%s OPENVPN_REPLY (framing only)", session.id, key, r.c.addr, r.c.source, r.c.name)
 	if b.report != nil {
 		b.report(smartproxy.Event{Host: host, Site: host, Path: r.c.name, Took: r.took, TCPOnly: true})
 	}
@@ -692,10 +703,25 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		defer b.mu.Unlock()
 		confirmed := session.confirmed
 		delete(b.active, session)
-		// A confirmed VPN is never demoted for an intentional short session.
-		// An unanswered connection which dies during the common 20-30s
-		// handshake failure window should not immediately be retried first.
-		if !confirmed && lived < 50*time.Second && received < 64<<10 {
+		// Short user-initiated disconnects do not prove a carrier failed.
+		// Only repeated very short sessions with an observed upstream ending
+		// cause a bounded, temporary demotion.
+		dropKey := key + "|" + r.c.name
+		if confirmed {
+			if session.upstreamEnded.Load() && lived < 15*time.Second && received < 64<<10 {
+				b.quickDrops[dropKey]++
+				if b.quickDrops[dropKey] >= 2 {
+					delete(b.good, key)
+					if b.bad[key] == nil {
+						b.bad[key] = make(map[string]time.Time)
+					}
+					b.bad[key][r.c.name] = time.Now().Add(90 * time.Second)
+					b.quickDrops[dropKey] = 0
+				}
+			} else {
+				delete(b.quickDrops, dropKey)
+			}
+		} else if lived < 50*time.Second && received < 64<<10 {
 			if b.good[key] == r.c.name {
 				delete(b.good, key)
 			}
@@ -708,10 +734,10 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 			b.bad[key][r.c.name] = time.Now().Add(ttl)
 		}
-		b.logf("Windscribe %s carrier=%s session ended after %s, returned=%d bytes, CLI-authenticated=%v", key, r.c.name, shortDur(lived), received, confirmed)
+		b.logf("Windscribe session=%d requested=%s carrier=%s STREAM_ENDED duration=%s upstream_bytes=%d cli_correlated=%v upstream_ended=%v", session.id, key, r.c.name, shortDur(lived), received, confirmed, session.upstreamEnded.Load())
 	}
 	stopClose := context.AfterFunc(live, func() { _ = r.conn.Close() })
-	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose, logf: b.logf, name: r.c.name, destination: key, started: time.Now()}, done, nil
+	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose, logf: b.logf, name: r.c.name, destination: key, started: time.Now(), session: session}, done, nil
 }
 
 // carrierConn exposes only observed stream failures. EOF may be the
@@ -727,14 +753,20 @@ type carrierConn struct {
 	started     time.Time
 	ended       sync.Once
 	closed      atomic.Bool
+	session     *wsActiveCarrier
 }
 
 func (c *carrierConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
-	if err != nil && !c.closed.Load() && c.logf != nil {
-		c.ended.Do(func() {
-			c.logf("Windscribe %s carrier=%s upstream read ended after %s: %v (source of closure unverified)", c.destination, c.name, shortDur(time.Since(c.started)), err)
-		})
+	if err != nil && !c.closed.Load() {
+		if c.session != nil {
+			c.session.upstreamEnded.Store(true)
+		}
+		if c.logf != nil {
+			c.ended.Do(func() {
+				c.logf("Windscribe %s carrier=%s upstream read ended after %s: %v (source of closure unverified)", c.destination, c.name, shortDur(time.Since(c.started)), err)
+			})
+		}
 	}
 	return n, err
 }
