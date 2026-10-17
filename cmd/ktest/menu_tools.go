@@ -62,6 +62,15 @@ func (t *terminal) chooseCoverage(in *input) bool {
 	}
 }
 
+// isYes is the one confirmation word: y (or yes) in any case.
+func isYes(answer string) bool {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true
+	}
+	return false
+}
+
 // backHint labels the Back row of a list menu: Enter on a list with no stated
 // default always goes back, never starts something.
 const backHint = "Enter or Ctrl+C"
@@ -204,7 +213,7 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 		}
 		if best != "" {
 			for {
-				t.ui.Printf("  Use suggested SNI %s first for the local Windscribe bridge? YES / Enter to keep settings / 0 back > ", best)
+				t.ui.Printf("  Use suggested SNI %s first for the local Windscribe bridge? y = apply / Enter = keep settings / 0 = back > ", best)
 				answer, ok := in.read()
 				if !ok {
 					if in.interrupted {
@@ -213,7 +222,7 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 					}
 					return false
 				}
-				if strings.EqualFold(answer, "YES") {
+				if isYes(answer) {
 					t.options.ws.sni = best + "," + defaultWindscribeSNIs
 					t.rememberConnect("windscribe-wstunnel-sni", t.options.ws.sni)
 					break
@@ -221,7 +230,7 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 				if answer == "" || isBackChoice(answer) {
 					break
 				}
-				t.ui.Line(toneWarn, "Enter YES to apply, or Enter / 0 to keep settings")
+				t.ui.Line(toneWarn, "Enter y to apply, or Enter / 0 to keep settings")
 			}
 		}
 	}

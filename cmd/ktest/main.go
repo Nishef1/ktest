@@ -28,7 +28,9 @@ import (
 
 func main() {
 	killChildrenOnExit()
-	os.Exit(run(os.Args[1:]))
+	code := run(os.Args[1:])
+	reapTracked() // the kill-on-close job is not guaranteed; never leave a core behind
+	os.Exit(code)
 }
 
 const usageText = `ktest: free access toolkit

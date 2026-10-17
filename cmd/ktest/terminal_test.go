@@ -94,7 +94,7 @@ func TestSubmenusKeepInvalidInputAndNestedBackInTheirOwnMenu(t *testing.T) {
 		{"diagnostics", "8\ninvalid\n0\n0\n", "Diagnose (Enter", 2},
 		{"setup", "9\ninvalid\n0\n0\n", "Certificate health and optional exit components.", 2},
 		{"certificate", "9\n1\ninvalid\n0\n0\n0\n", "Certificate health and optional exit components.", 2},
-		{"certificate offer", "1\ninvalid\nback\n0\n", "Type YES to set it up now", 2},
+		{"certificate offer", "1\ninvalid\nback\n0\n", "Type y to set it up now", 2},
 		{"exit paths", "9\n2\ninvalid\n0\n0\n0\n", "Certificate health and optional exit components.", 2},
 		{"CDN provider", "10\ninvalid\n0\n0\n", "Provider: cloudflare", 2},
 		{"CDN hostname back", "10\ncloudflare\n0\n0\n0\n", "Provider: cloudflare", 2},

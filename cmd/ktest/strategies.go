@@ -118,8 +118,9 @@ func byeDPILauncher(bin string, port int, strategy []string, output io.Writer) l
 	args := append([]string{"-i", "127.0.0.1", "-p", fmt.Sprint(port)}, strategy...)
 	return func(ctx context.Context, _ *dnscheck.Result) error {
 		cmd := exec.CommandContext(ctx, bin, args...)
+		configureEnrollmentProcess(cmd)
 		cmd.Stdout, cmd.Stderr = output, output
-		err := cmd.Run()
+		err := runTracked(cmd)
 		if ctx.Err() != nil {
 			return nil
 		}

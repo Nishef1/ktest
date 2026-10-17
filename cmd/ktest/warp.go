@@ -88,7 +88,7 @@ func aetherLauncher(bin string, args []string, output io.Writer) launcher {
 		configureEnrollmentProcess(cmd)
 		hideConsole(cmd)
 		cmd.Stdout, cmd.Stderr = output, output
-		err := cmd.Run()
+		err := runTracked(cmd)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -206,7 +206,7 @@ func warpEnable(ctx context.Context, u *term, base, proxy string) int {
 		}
 	}
 	if failed {
-		u.Line(toneWarn, "Exit components installed; WARP setup is incomplete. Psiphon needs no WARP identity. Retry YES here or `ktest warp -enable` when a registration route is available.")
+		u.Line(toneWarn, "Exit components installed; WARP setup is incomplete. Psiphon needs no WARP identity. Retry (y) here or `ktest warp -enable` when a registration route is available.")
 		return 1
 	}
 	u.Line(toneOK, "MASQUE and WireGuard identities ready. Connect verifies the actual tunnels separately.")
@@ -340,7 +340,7 @@ func (t *terminal) warpSetup(base string, readLine func() (string, bool)) bool {
 	u := t.ui
 	for {
 		warpStatus(u, base)
-		u.Printf("  YES = prepare/retry missing identities; REMOVE = delete WARP identities; Enter / 0 = back > ")
+		u.Printf("  y = prepare/retry missing identities; REMOVE = delete WARP identities; Enter / 0 = back > ")
 		ans, ok := readLine()
 		if !ok {
 			return false
@@ -352,8 +352,8 @@ func (t *terminal) warpSetup(base string, readLine func() (string, bool)) bool {
 			warpDisable(u)
 			continue
 		}
-		if !strings.EqualFold(ans, "YES") {
-			u.Line(toneWarn, "Select YES, REMOVE, or 0 to go back.")
+		if !isYes(ans) {
+			u.Line(toneWarn, "Select y, REMOVE, or 0 to go back.")
 			continue
 		}
 		u.Note("Press Ctrl+C to cancel setup.")

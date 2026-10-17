@@ -252,7 +252,7 @@ func (t *terminal) frontSetup(readLine func() (string, bool)) bool {
 			}
 			u.Line(toneWarn, "Press Enter or 0 to go back.")
 		default:
-			u.Printf("  Type INSTALL or YES to create/install trust (Windows asks for confirmation), or Enter to go back > ")
+			u.Printf("  Type y to create/install trust (Windows asks for confirmation), or Enter to go back > ")
 			ans, ok := readLine()
 			if !ok {
 				return false
@@ -260,10 +260,10 @@ func (t *terminal) frontSetup(readLine func() (string, bool)) bool {
 			if ans == "" || isBackChoice(ans) {
 				return true
 			}
-			if strings.EqualFold(ans, "YES") || strings.EqualFold(ans, "INSTALL") {
+			if isYes(ans) || strings.EqualFold(ans, "INSTALL") {
 				caInstall(u)
 			} else {
-				u.Line(toneWarn, "Select INSTALL, YES, or 0 to go back.")
+				u.Line(toneWarn, "Select y, or 0 to go back.")
 			}
 		}
 	}

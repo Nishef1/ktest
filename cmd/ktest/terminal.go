@@ -5,9 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -375,6 +378,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 
 // runInteractiveWith takes the Ctrl+C source so tests can inject interrupts.
 func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-chan os.Signal) int {
+	defer reapTracked() // whatever a session left behind ends with the menu
 	settings, path, options, err := loadPreferences(base)
 	t := &terminal{ui: newTerm(out), settings: settings, settingsFile: path, options: options}
 	defer t.ui.leaveMenu()
@@ -487,7 +491,7 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 		}[state]
 		t.ui.Line(toneInfo, "%s", why)
 		for {
-			t.print("  Type YES to set it up now (Windows asks you to confirm), Enter to skip future offers, or 0 to go back > ")
+			t.print("  Type y to set it up now (Windows asks you to confirm), Enter to skip future offers, or 0 to go back > ")
 			ans, ok := in.read()
 			if !ok {
 				return false
@@ -496,13 +500,13 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 				return true
 			}
 			switch {
-			case strings.EqualFold(ans, "YES"):
+			case isYes(ans):
 				ensureCert(t.ui)
 			case ans == "":
 				t.settings.SkipCertificateOffer = true
 				t.savePreferences()
 			default:
-				t.ui.Line(toneWarn, "Select YES, Enter, or 0 to go back.")
+				t.ui.Line(toneWarn, "Select y, Enter, or 0 to go back.")
 				continue
 			}
 			break
@@ -510,12 +514,12 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 	}
 	if o.tun && !systemtun.IsAdmin() {
 		t.ui.Line(toneInfo, "Whole PC needs Administrator.")
-		t.print("  Type YES to open an Administrator window (Windows asks you to confirm) > ")
+		t.print("  Type y to open an Administrator window (Windows asks you to confirm) > ")
 		ans, ok := in.read()
 		if !ok {
 			return false
 		}
-		if !strings.EqualFold(ans, "YES") {
+		if !isYes(ans) {
 			t.ui.Line(toneInfo, "Cancelled.")
 			return true
 		}
@@ -532,5 +536,76 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 			t.ui.Note("Carrier: Aether WARP. Exclude this ktest executable and aether.exe from Windscribe VPN routing; keep this process running while connected.")
 		}
 	}
-	return t.tool(in, func(ctx context.Context) { connectSession(ctx, o, nil, t.ui) })
+	ports := sessionPorts(o)
+	wasBusy := busyPorts(ports)
+	return t.tool(in, func(ctx context.Context) {
+		connectSession(ctx, o, nil, t.ui)
+		t.confirmPortsReleased(ports, wasBusy)
+	})
+}
+
+// sessionPorts are the loopback ports a connection may open.
+func sessionPorts(o connectOptions) []int {
+	ports := []int{xrayPort}
+	for _, addr := range []string{o.listen, o.httpListen} {
+		if _, p, err := net.SplitHostPort(addr); err == nil {
+			if n, err := strconv.Atoi(p); err == nil {
+				ports = append(ports, n)
+			}
+		}
+	}
+	for i := 0; i < 20; i++ {
+		ports = append(ports, aetherPort(i))
+	}
+	return ports
+}
+
+func busyPorts(ports []int) map[int]bool {
+	busy := map[int]bool{}
+	for _, p := range ports {
+		if portFree(p) != nil {
+			busy[p] = true
+		}
+	}
+	return busy
+}
+
+// portReleaseWait is how long a stopped session may take to free its ports.
+var portReleaseWait = 3 * time.Second
+
+// confirmPortsReleased checks that every port this session opened is free
+// again. Ports that were already taken before it started belong to someone
+// else and are ignored. Leftover cores are ended rather than reported.
+func (t *terminal) confirmPortsReleased(ports []int, wasBusy map[int]bool) {
+	held := func() []int {
+		var out []int
+		for p := range busyPorts(ports) {
+			if !wasBusy[p] {
+				out = append(out, p)
+			}
+		}
+		sort.Ints(out)
+		return out
+	}
+	wait := func() []int {
+		for deadline := time.Now().Add(portReleaseWait); ; time.Sleep(100 * time.Millisecond) {
+			if left := held(); len(left) == 0 || time.Now().After(deadline) {
+				return left
+			}
+		}
+	}
+	left := wait()
+	reaped := 0
+	if len(left) > 0 || trackedCount() > 0 {
+		reaped = reapTracked()
+		left = wait()
+	}
+	switch {
+	case len(left) > 0:
+		t.ui.Line(toneWarn, "Port(s) %v are still in use after disconnect; another program may hold them.", left)
+	case reaped > 0:
+		t.ui.Line(toneWarn, "Ended %d helper process(es) that were still running; all ports are free.", reaped)
+	default:
+		t.ui.Note("All helper processes stopped; ports are free.")
+	}
 }

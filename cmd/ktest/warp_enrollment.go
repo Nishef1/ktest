@@ -110,7 +110,7 @@ func runEnrollment(ctx context.Context, bin string, args []string) error {
 	// Do not print the core's registration output: it can contain tokens/keys.
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	configureEnrollmentProcess(cmd)
-	return cmd.Run()
+	return runTracked(cmd)
 }
 
 func enrollWarpIdentity(ctx context.Context, u *term, bin, protocol string, routes []enrollmentRoute, run enrollmentRunner) error {
