@@ -202,10 +202,29 @@ type input struct {
 	interrupted bool
 }
 
+// asciiDigits maps Persian (U+06F0..), Arabic-Indic (U+0660..) and full-width
+// digits to ASCII, so menu numbers typed on a Persian or Arabic keyboard
+// layout select the same option.
+func asciiDigits(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 0x06F0 && r <= 0x06F9:
+			return '0' + (r - 0x06F0)
+		case r >= 0x0660 && r <= 0x0669:
+			return '0' + (r - 0x0660)
+		case r >= 0xFF10 && r <= 0xFF19:
+			return '0' + (r - 0xFF10)
+		case r == 0x200C || r == 0x200E || r == 0x200F || r == 0xFEFF:
+			return -1 // zero-width marks that Persian layouts and pasted text add
+		}
+		return r
+	}, s)
+}
+
 func (in *input) read() (string, bool) {
 	select {
 	case l, ok := <-in.lines:
-		return strings.TrimSpace(l), ok
+		return strings.TrimSpace(asciiDigits(l)), ok
 	case <-in.quit:
 		return "", false
 	case <-in.back:
@@ -348,6 +367,14 @@ func scanMenuInput(reader io.Reader, lines chan<- string, finished <-chan struct
 // runInteractive is the menu. It never changes Windows routing or DNS itself;
 // only Whole PC does, after asking for Administrator.
 func runInteractive(in io.Reader, out io.Writer, base string) int {
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
+	return runInteractiveWith(in, out, base, interrupts)
+}
+
+// runInteractiveWith takes the Ctrl+C source so tests can inject interrupts.
+func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-chan os.Signal) int {
 	settings, path, options, err := loadPreferences(base)
 	t := &terminal{ui: newTerm(out), settings: settings, settingsFile: path, options: options}
 	defer t.ui.leaveMenu()
@@ -355,9 +382,6 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		t.ui.Line(toneWarn, "Saved settings unavailable; using defaults: %v", err)
 	}
 	base = options.base
-	interrupts := make(chan os.Signal, 1)
-	signal.Notify(interrupts, os.Interrupt)
-	defer signal.Stop(interrupts)
 	quit := make(chan struct{})
 	back := make(chan struct{}, 1)
 	readInterrupts := make(chan struct{}, 1)
@@ -388,6 +412,12 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 	stdin := &input{lines: lines, quit: quit, back: back}
 
 	for {
+		// A Back request left over from a submenu must not be mistaken for the
+		// Ctrl+C that exits from the idle main menu.
+		select {
+		case <-back:
+		default:
+		}
 		t.mu.Lock()
 		t.mainMenuActive = true
 		t.mu.Unlock()

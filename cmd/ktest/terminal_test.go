@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -362,5 +365,151 @@ func TestFinishedJobWaitsForEnterOnlyOnLiveMenus(t *testing.T) {
 	lines <- ""
 	if !live.holdResult(&input{lines: lines}) || !strings.Contains(out.String(), "Press Enter to return") {
 		t.Fatal("live menu redrew over finished output without waiting:", out.String())
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) count(s string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Count(b.buf.String(), s)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// session drives runInteractiveWith with a live stdin pipe and injected Ctrl+C.
+type session struct {
+	t          *testing.T
+	out        *syncBuffer
+	stdin      *io.PipeWriter
+	interrupts chan os.Signal
+	code       chan int
+}
+
+func startSession(t *testing.T) *session {
+	t.Helper()
+	t.Setenv("KTEST_SETTINGS_FILE", filepath.Join(t.TempDir(), "settings.json"))
+	t.Setenv("KTEST_CA_DIR", t.TempDir())
+	t.Setenv("KTEST_WARP_DIR", t.TempDir())
+	r, w := io.Pipe()
+	s := &session{t: t, out: &syncBuffer{}, stdin: w, interrupts: make(chan os.Signal, 1), code: make(chan int, 1)}
+	go func() { s.code <- runInteractiveWith(r, s.out, t.TempDir(), s.interrupts) }()
+	t.Cleanup(func() { w.Close() })
+	return s
+}
+
+func (s *session) waitFor(text string, count int) {
+	s.t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for s.out.count(text) < count {
+		if time.Now().After(deadline) {
+			s.t.Fatalf("timed out waiting for %d x %q:\n%s", count, text, s.out.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (s *session) send(line string) { fmt.Fprintln(s.stdin, line) }
+
+func (s *session) ctrlC() { s.interrupts <- os.Interrupt }
+
+func (s *session) expectExit() {
+	s.t.Helper()
+	select {
+	case code := <-s.code:
+		if code != 0 {
+			s.t.Fatalf("exit code %d", code)
+		}
+	case <-time.After(3 * time.Second):
+		s.t.Fatalf("program did not exit:\n%s", s.out.String())
+	}
+}
+
+func (s *session) expectRunning() {
+	s.t.Helper()
+	select {
+	case code := <-s.code:
+		s.t.Fatalf("program exited (%d) but should have stayed open:\n%s", code, s.out.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestCtrlCAtTheIdleMainMenuExitsCleanly(t *testing.T) {
+	s := startSession(t)
+	s.waitFor("Select >", 1)
+	s.ctrlC()
+	s.expectExit()
+}
+
+func TestCtrlCWalksBackOneLevelAtATimeThenExits(t *testing.T) {
+	s := startSession(t)
+	s.waitFor("Select >", 1)
+	s.send("5") // Windscribe
+	s.waitFor("Windscribe >", 1)
+	s.send("3") // Windscribe tests
+	s.waitFor("Windscribe test >", 1)
+	s.ctrlC()
+	s.waitFor("Windscribe >", 2) // back in Windscribe, not the main menu
+	s.expectRunning()
+	s.ctrlC()
+	s.waitFor("Select >", 2) // back in the main menu
+	s.expectRunning()
+	s.ctrlC()
+	s.expectExit()
+}
+
+func TestCtrlCInsideANestedPromptReturnsToItsMenu(t *testing.T) {
+	s := startSession(t)
+	s.waitFor("Select >", 1)
+	s.send("10") // CDN scan
+	s.waitFor("Provider: cloudflare", 1)
+	s.ctrlC()
+	s.waitFor("Select >", 2)
+	s.expectRunning()
+	s.send("0")
+	s.expectExit()
+}
+
+func TestCtrlCAtTheMainMenuAfterABackExits(t *testing.T) {
+	s := startSession(t)
+	s.waitFor("Select >", 1)
+	s.send("8") // Diagnose
+	s.waitFor("Diagnose (Enter", 1)
+	s.ctrlC()
+	s.waitFor("Select >", 2)
+	s.ctrlC() // exits; must not be consumed as another Back
+	s.expectExit()
+}
+
+func TestPersianAndArabicDigitsSelectMenuOptions(t *testing.T) {
+	s := startSession(t)
+	s.waitFor("Select >", 1)
+	s.send("۳") // Persian 3: Aether
+	s.waitFor("Aether >", 1)
+	s.send("٠") // Arabic-Indic 0: back
+	s.waitFor("Select >", 2)
+	s.send("۰") // Persian 0: exit
+	s.expectExit()
+}
+
+func TestAsciiDigitsNormalizesLayoutsAndInvisibleMarks(t *testing.T) {
+	for in, want := range map[string]string{"۱۰": "10", "٣": "3", "１１": "11", "1\u200c": "1", "\ufeff7": "7", "cloudflare": "cloudflare"} {
+		if got := asciiDigits(in); got != want {
+			t.Fatalf("asciiDigits(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
