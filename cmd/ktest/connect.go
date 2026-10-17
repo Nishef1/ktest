@@ -863,6 +863,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				bridge.catalog = newWSNodeCatalog()
 				cachePath := filepath.Join(o.base, "cache", "windscribe-nodes.json")
 				bridge.catalog.load(cachePath)
+				// Declare a pending refresh before launching the goroutine so the
+				// first CONNECT cannot mistake an incomplete cache for a full list.
+				bridge.catalog.startInitialRefresh()
 				catalogTransport := &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 					host, port, err := net.SplitHostPort(addr)
 					if err != nil {
