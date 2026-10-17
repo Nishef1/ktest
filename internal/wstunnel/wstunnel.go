@@ -187,6 +187,15 @@ func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error)
 				x.AlpnProtocols = []string{"http/1.1"}
 			case *utls.ApplicationSettingsExtension:
 				continue
+			case *utls.SupportedCurvesExtension:
+				// The randomized generator can advertise X25519MLKEM768
+				// without an initial key share. uTLS 1.8.2 then fails
+				// HelloRetryRequest with "unsupported curve" (upstream
+				// refraction-networking/utls#366). Advertise only key
+				// exchange groups that this pinned runtime can complete.
+				x.Curves = []utls.CurveID{utls.X25519, utls.CurveP256, utls.CurveP384}
+			case *utls.KeyShareExtension:
+				x.KeyShares = []utls.KeyShare{{Group: utls.X25519}}
 			}
 			extensions = append(extensions, ext)
 		}
