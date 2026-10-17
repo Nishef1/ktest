@@ -634,9 +634,12 @@ func sessionPorts(o connectOptions) []int {
 			}
 		}
 	}
-	for i := 0; i < 20; i++ {
+	// Editable Aether profiles support up to 64 entries, and Gool can start
+	// a temporary registration carrier at profile index 80.
+	for i := 0; i < 64; i++ {
 		ports = append(ports, aetherPort(i))
 	}
+	ports = append(ports, aetherPort(80))
 	return ports
 }
 

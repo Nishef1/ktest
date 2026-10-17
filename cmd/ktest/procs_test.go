@@ -129,3 +129,18 @@ func TestIsYesAcceptsOnlyYAndYes(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionPortCleanupCoversAllCustomAetherProfilesAndGool(t *testing.T) {
+	o := connectOptions{listen: "127.0.0.1:10800", httpListen: "127.0.0.1:10801"}
+	ports := sessionPorts(o)
+	want := map[int]bool{
+		10800: true, 10801: true,
+		aetherPort(0): true, aetherPort(63): true, aetherPort(80): true,
+	}
+	for _, port := range ports {
+		delete(want, port)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing allocated Aether/bridge ports from terminal cleanup: %v", want)
+	}
+}
