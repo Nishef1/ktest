@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"github.com/Nishef1/ktest/internal/connectionpolicy"
 	"github.com/Nishef1/ktest/internal/smartproxy"
+	"strings"
 )
 
 // ConnectionMode is an explicit user choice, never inferred from an open port.
@@ -48,7 +48,7 @@ func (m ConnectionMode) exitOnly() bool {
 func (m ConnectionMode) isWindscribe() bool { return m == ModeWindscribe || m == ModeWindscribeAether }
 
 func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.DomainRules) {
-    connectionpolicy.Configure(string(m), cfg, rules.Match)
+	connectionpolicy.Configure(string(m), cfg, rules.Match)
 }
 
 func (m ConnectionMode) message() string {

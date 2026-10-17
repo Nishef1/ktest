@@ -1,10 +1,10 @@
 package main
 
 import (
-    "github.com/Nishef1/ktest/internal/connectionpolicy"
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/Nishef1/ktest/internal/connectionpolicy"
 	"io"
 	"net"
 	"os"
