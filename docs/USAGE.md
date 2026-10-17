@@ -3,10 +3,10 @@
 The everyday path needs no options and no knowledge of the methods behind it.
 
 ```
-.\ktest.exe                 menu: five connection modes, Whole PC, Diagnose, Setup, CDN scan
+.\ktest.exe                 menu: five policies, separate coverage, Diagnose, Setup, CDN/Windscribe tests
 .\ktest.exe connect         connect now
 .\ktest.exe connect -cert   set up or renew the fronting certificate, then connect
-.\ktest.exe connect -tun    the same for every application on the PC (asks for Administrator)
+.\ktest.exe connect -tun    Whole PC TCP coverage for the chosen policy (asks for Administrator)
 .\ktest.exe doctor          diagnose; changes nothing
 ```
 
@@ -31,9 +31,9 @@ Nothing outside ktest is changed: no system proxy, DNS, route, firewall or certi
 
 ## 2. How the methods are chosen
 
-There is no manual choice to make. Censorship differs per site and per network, and a method that works today may not tomorrow, so ktest races:
+Choose policy and coverage first (see CONNECTION_MODES.md). Within routes permitted by that policy, ktest adapts to the destination and network. Balanced/Fast can race:
 
-* **Paths.** `plain` (the untouched connection, always present because some networks punish any cut ClientHello even for unblocked sites), `plain6` (the same over IPv6), the Xray profiles, the ByeDPI strategies (adaptive, fake packets, low TTL, split + disorder, out-of-band, TLS record slicing), and three built-in families that cut the ClientHello inside the SNI over TCP segments and/or TLS records, with random cut points and pauses per connection (plus IPv6 twins).
+* **Paths.** `plain` (the untouched connection, where the selected policy permits a direct route), `plain6` (the same over IPv6), the Xray profiles, the ByeDPI strategies (adaptive, fake packets, low TTL, split + disorder, out-of-band, TLS record slicing), and three built-in families that cut the ClientHello inside the SNI over TCP segments and/or TLS records, with random cut points and pauses per connection (plus IPv6 twins).
 * **Two waves.** For each TLS connection the first wave is one path: the one remembered for that site, otherwise the best ranked. If it has not produced a TLS record after 250 ms (1 s for a remembered path) or fails, **every other path starts at once**. The first path that returns a TLS handshake record wins. Nothing has reached the application before that, so a failed attempt is replayed on another path without the application noticing. TLS stays end to end; the application verifies the certificate.
 * **Ranking.** A path is ranked by its smoothed success rate, then by how intrusive it is (plain, then external cores, then built-in cuts), then by latency. Win counts alone are not used, because they let whichever path won first keep winning.
 * **Memory.** The winner is remembered per site (`r1---sn-x.googlevideo.com` and `i.ytimg.com` share nothing, but every `googlevideo.com` node shares one entry) for 30 minutes, in memory only. Nothing about visited sites is written to disk.
@@ -56,7 +56,9 @@ Name resolution is the first thing a censor poisons, so it is not left to the sy
 * a table of certificate-verified handshakes to a Google front end for an unblocked name (`www.google.com`) and a blocked one (`www.youtube.com`), each with the untouched ClientHello and each built-in cutting shape,
 * a **verdict**. The important one: if the blocked name fails and every cut ClientHello also fails for the unblocked name, the network punishes cutting, so Xray fragment, ByeDPI split/slice and the built-in cuts cannot help; only methods that do not cut (fake packets with a low TTL, IPv6, QUIC) remain.
 
-Run it once with any other VPN off and keep the output with your notes: it is the evidence for choosing methods.
+These are samples, not proof that every SNI/path is blocked or that a VPN authenticated. The Diagnose menu separates general and Windscribe checks; Enter/Ctrl+C cancels a running diagnosis. doctor -no-net skips external network probes.
+
+For Windscribe, doctor -mode windscribe checks local carrier prerequisites, bridge ports, conflicting ktest TUN interfaces, CLI state/protocol and basic API DNS. Imported Xray subscriptions, fronting certificates and foreign exits are not required. It cannot inspect the app Proxy Settings UI or authenticate OpenVPN. Missing optional cores disable their own paths; they do not prove all connection methods failed.
 
 ## 5. Domain fronting (optional)
 
@@ -87,7 +89,7 @@ Limits: only HTTPS on port 443 for the listed families; applications that pin ce
 
 ## 6. Whole PC (system-wide tunnel)
 
-`ktest connect -tun` (menu 6) makes every application on the PC use ktest, with no proxy settings. A Wintun adapter driven by sing-box takes the TCP connections and hands each one, **by host name**, to the Connect proxy, so the same race (fronting, ECH, Xray, ByeDPI, cuts) decides per connection. Names are answered locally with fake addresses and mapped back when the connection arrives, so the poisoned system DNS is never used by applications; ktest then resolves the real address itself with its trusted chain.
+Whole PC is coverage, not a sixth policy. Menu 6 selects Proxy apps or Whole PC TCP; then choose policy 1-4. CLI example: ktest connect -mode vpn -tun. The policy survives Administrator elevation. A sing-box/Wintun adapter forwards public TCP to the selected policy; LAN and helper processes are exempt. It does not create a fixed public IP or a persistent kill switch. Windscribe uses its own coverage and cannot share this TUN.
 
 What it does to be safe:
 
@@ -99,27 +101,32 @@ What it does to be safe:
 * The adapter does not use `strict_route`: that option blocks DNS on every other interface for every process, which would block ktest's own lookups. A DNS answer that still leaks out is at worst poisoned, and the proxy recovers the real name from the TLS SNI.
 * Ctrl+C or Enter stops it and Windows restores its routes. UDP other than DNS is dropped, so applications fall back to TCP (browsers fall back from QUIC).
 
-Telegram and other non-HTTPS protocols are carried like any TCP connection, but nothing here unblocks an address that is blocked by IP: that needs an exit outside the country, which no path in ktest provides yet.
+Telegram and other non-HTTPS protocols can be carried as TCP. IP-blocked destinations may require a working foreign exit; packet cutting alone cannot guarantee access. Available exits and direct fallback depend on the selected policy.
 
 Not verified on a real network: this mode changes Windows routes. It was checked for configuration validity (`sing-box check`) and by unit tests only.
 
 ## 8. The menu
 
 ```
-CONNECT                                   TOOLS
- 1 Balanced    (= ktest connect)           7 Diagnose  (= ktest doctor)
- 2 Fast        (-mode fast)                8 Setup     certificate, WARP/Psiphon exits
- 3 VPN exit    (-mode vpn)                 9 CDN scan  (= ktest scan)
- 4 Tor         (-mode tor)                 0 Exit
+CONNECTION POLICY                         TOOLS
+ 1 Balanced    (= ktest connect)           7 Diagnose  general or Windscribe
+ 2 Fast        (-mode fast)                8 Setup     configured capabilities
+ 3 VPN exit    (-mode vpn)                 9 CDN scan  provider HTTPS or own CDN route
+ 4 Tor         (-mode tor)                10 Windscribe test  SNIs or connected VPN
  5 Windscribe  (-mode windscribe)
- 6 Whole PC    (-tun, Administrator)
+TRAFFIC COVERAGE (for 1-4)                 0 Exit
+ 6 Coverage    Proxy apps / Whole PC TCP
 ```
 
-Every item runs in the foreground; Enter or Ctrl+C ends it and returns to the menu. Ctrl+C on the idle menu exits. The Setup line shows the certificate and exit-path state. The former Advanced screen is gone: its single Xray/ByeDPI methods are part of every Connect race, and its system-wide TUN is Whole PC. To run one Xray profile on its own use `ktest revive`; the research commands (`probe`, `compare`, `edges`, `path`, `echo`, `access`) are unchanged; see `ktest help`.
+Network jobs run in the foreground; Enter/Ctrl+C cancels them and returns to the menu. Ctrl+C on the idle menu exits. Setup reports prepared capabilities, not a successful tunnel: its CA applies to supported website HTTPS fronting in Balanced/Fast; Windscribe prohibits foreign exits.
+
+The CDN tool tests provider HTTPS by default. With your configured Windscribe CDN hostname, use ktest scan -windscribe-cdn your.hostname; that branch requires certificate-verified TLS and a valid WebSocket 101 for the hostname. Neither scan authenticates OpenVPN. The menu exposes Cloudflare/Akamai/Google/Fastly providers; own Windscribe CDN routing uses the Cloudflare branch.
+
+Use ktest windscribe-test -target "Ashburn - Bles Park" for a fixed-node SNI comparison, or a requested OpenVPN TCP IP from the feed. Use ktest windscribe-test -verify-vpn once Windscribe is connected to compare one system HTTPS request against the CLI-reported exit. See WINDSCRIBE_BOOTSTRAP.md for stage meanings and limits.
 
 ## 9. What is, and is not, possible
 
-* Every path connects straight to the destination site. ktest needs no server of yours, and it does not change your public IP.
+* Local anti-DPI paths connect through your network. Foreign exits, Tor and fronted HTTP routes have different IP semantics; choose a policy explicitly. A pinned upstream is not a guarantee of a fixed public IP.
 * Changing a byte of the ClientHello (rewriting the SNI, changing its case) is not possible for a transparent relay: the TLS handshake transcript would no longer match and the handshake fails. ktest cuts the ClientHello, it does not edit it.
 * Fake packets with a low TTL need packet injection; they are available only through ByeDPI's own Windows implementation (the `fake` strategies).
 * UDP and QUIC are not carried. Browsers fall back to TCP.

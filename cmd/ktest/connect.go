@@ -197,7 +197,7 @@ func runConnect(args []string) int {
 		return 1
 	}
 	if o.tun && !systemtun.IsAdmin() {
-		return relaunchElevated(u, o)
+		return relaunchElevated(u, o, args...)
 	}
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -223,7 +223,7 @@ func (s *siteEvents) print(e smartproxy.Event) {
 			if strings.HasPrefix(path, "raw OpenVPN") {
 				path += " entry=" + e.Host
 			}
-			t.Line(toneInfo, "Windscribe requested=%s | %s (%s); carrier returned data; VPN not yet verified", e.Host, path, shortDur(e.Took))
+			t.Line(toneInfo, "Windscribe requested=%s | %s (%s); OpenVPN control reply (framing only); VPN auth/data not yet verified", e.Host, path, shortDur(e.Took))
 			return
 		}
 		t.Line(toneInfo, "TCP proxy requested=%s entry=%s via %s (%s); VPN handshake not verified", e.Host, e.Host, e.Path, shortDur(e.Took))
@@ -265,6 +265,7 @@ func (s *siteEvents) print(e smartproxy.Event) {
 // the caller already measured.
 func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.Result, t *term) int {
 	t.Heading("connect", "Routing mode: "+string(o.mode))
+	t.Note("Coverage: %s", connectionCoverage(o))
 	t.Note("%s", o.mode.message())
 	if o.mode == ModeWindscribe {
 		if o.exitSocks != "" {
@@ -280,12 +281,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		return 2
 	}
 	if o.mode == ModeWindscribe && runtime.GOOS == "windows" {
-		ifaces, _ := net.Interfaces()
-		for _, iface := range ifaces {
-			if strings.Contains(strings.ToLower(iface.Name), "sing-tun") && iface.Flags&net.FlagUp != 0 {
-				t.Line(toneFail, "The previous ktest sing-tun is still active (%s). Stop whole-PC mode and restore Windows routes before connecting Windscribe.", iface.Name)
-				return 2
-			}
+		if names := activeKtestTUNs(); len(names) > 0 {
+			t.Line(toneFail, "A ktest TUN is still active (%s). Stop whole-PC mode before connecting Windscribe.", strings.Join(names, ", "))
+			return 2
 		}
 	}
 	monitor := startWindscribeMonitor(ctx, o, t)

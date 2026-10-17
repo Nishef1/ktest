@@ -2,13 +2,17 @@
 
 `ktest connect` defaults to **balanced**: fastest practical ordinary-site route, but the built-in AI-domain list requires a separately verified non-Iran, non-Russia exit and fails closed if none is available.
 
-The menu also allows selecting each mode. CLI:
+The menu separates **policy** (1-5) from **coverage** (6). Policies 1-4 use the selected proxy-app or Whole PC TCP coverage. Option 5 is the Windscribe bridge and always leaves coverage to Windscribe. Select coverage first, then the policy; choosing Whole PC does not launch a second routing policy or silently reset the selected policy to Balanced.
+
+Use Balanced for ordinary proxy-app access with known AI domains protected, Fast when a working route matters more than exit-IP identity, VPN exit when all managed traffic must use a verified foreign exit, and Tor for a verified Tor-only route. To carry the installed Windscribe app, choose Windscribe. Setup only prepares optional capabilities: configured WARP/Psiphon paths remain prohibited in Windscribe mode.
+
+CLI policy options:
 
 | Option | Scope | IP policy | Failure policy |
 | --- | --- | --- | --- |
 | `-mode balanced` | normal mixed access, **AI sites protected** | Ordinary sites may use own IP; AI via verified foreign exit | AI domains stop if foreign exit absent |
 | `-mode fast` | fastest usable destination path | Direct, fragment, fronting, or Psiphon may win; public IP may differ by destination | Can fall back to local ISP IP |
-| `-mode windscribe` | **strict local-only anti-DPI** HTTP/SOCKS bootstrap for installed Windscribe | OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI; optional own Cloudflare hostname whose origin is a Windscribe server) + local Xray TCP fragmentation + ByeDPI; no Psiphon/Aether/WARP/Tor, foreign/unknown Xray exit or Plain; only Windscribe changes public VPN IP | Local TCP methods attempted, fails 502 when unavailable; Windscribe Firewall protects other apps |
+| `-mode windscribe` | **strict local-only anti-DPI** HTTP/SOCKS bootstrap for installed Windscribe | OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI; optional own Cloudflare hostname whose origin is a Windscribe server) + local Xray TCP fragmentation + ByeDPI; no Psiphon/Aether/WARP/Tor, foreign/unknown Xray exit or Plain; only Windscribe changes public VPN IP | No foreign fallback. HTTP CONNECT may be acknowledged before the carrier race; a later failure closes that stream. Windscribe Firewall controls other apps |
 | `-mode vpn` | all traffic **sent through ktest's SOCKS/HTTP listeners** | One verified foreign SOCKS path is pinned after its first success in this session | Fail closed; never switch to direct/fragment/fronting |
 | `-mode tor` | all traffic **sent through ktest's SOCKS/HTTP listeners** | Tor-only, may use different exit IPs by circuit/site | Fail closed while Tor is unavailable |
 
@@ -30,6 +34,9 @@ go run ./cmd/ktest connect -mode vpn
 
 # Tor-only with Aether v2's tor feature / automatic bridge discovery
 go run ./cmd/ktest connect -mode tor
+
+# Same selected policy, broader TCP coverage; requires Windows Administrator
+go run ./cmd/ktest connect -mode vpn -tun
 ```
 
 For modes other than Windscribe, an **already running** external SOCKS5 exit can be supplied via `-exit-socks 127.0.0.1:PORT`. **Windscribe mode explicitly rejects this option.** The Tor-only mode additionally checks that `https://check.torproject.org/api/ip` returns `IsTor: true`, not merely that a proxy is open. Both Tor and other strict exits are checked for non-Iran, non-Russia country before being used for protected routing.

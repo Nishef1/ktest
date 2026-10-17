@@ -43,7 +43,7 @@ func TestBlankInputNeverShownAsInvalidChoice(t *testing.T) {
 }
 
 func TestUnknownOptionNamesTheRange(t *testing.T) {
-	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, `Unknown option "42". Select 1-9`) {
+	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, `Unknown option "42". Select 1-10`) {
 		t.Fatal(out)
 	}
 }
@@ -51,5 +51,31 @@ func TestUnknownOptionNamesTheRange(t *testing.T) {
 func TestSetupLineShowsState(t *testing.T) {
 	if out := menuOutput(t, "0\n"); !strings.Contains(out, "certificate: ") || !strings.Contains(out, "exit paths (WARP/Psiphon): off") {
 		t.Fatal(out)
+	}
+}
+
+func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
+	for _, mode := range []ConnectionMode{ModeBalanced, ModeFast, ModeVPN, ModeTor, ModeWindscribe} {
+		for _, wholePC := range []bool{false, true} {
+			menu := &terminal{wholePC: wholePC}
+			o := menu.menuConnectOptions("example-base", mode)
+			if o.mode != mode || o.tun != (wholePC && mode != ModeWindscribe) {
+				t.Fatalf("mode=%s wholePC=%t produced mode=%s tun=%t", mode, wholePC, o.mode, o.tun)
+			}
+		}
+	}
+}
+
+func TestElevationPreservesChosenPolicyAndOriginalCLIFlags(t *testing.T) {
+	o := defaultConnectOptions("example-base")
+	o.mode, o.tun = ModeTor, true
+	args := elevatedConnectArgs(o, nil)
+	if !strings.Contains(strings.Join(args, " "), "-mode tor") {
+		t.Fatalf("elevation changed Tor policy: %v", args)
+	}
+	original := []string{"-mode", "vpn", "-tun", "-exit-socks", "127.0.0.1:9000", "-no-front"}
+	args = elevatedConnectArgs(o, original)
+	if strings.Join(args[1:], "|") != strings.Join(original, "|") {
+		t.Fatalf("elevation lost explicit CLI options: %v", args)
 	}
 }

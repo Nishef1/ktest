@@ -27,6 +27,7 @@ type terminal struct {
 	cancel context.CancelFunc // the running connection or scan
 
 	certDeclined bool // the user skipped the certificate offer this session
+	wholePC      bool // coverage for policies 1-4; Windscribe owns its own tunnel
 }
 
 func (t *terminal) print(format string, args ...any) { t.ui.Printf(format, args...) }
@@ -34,14 +35,13 @@ func (t *terminal) print(format string, args ...any) { t.ui.Printf(format, args.
 // menuItem is one line of the main menu.
 type menuItem struct {
 	key, name, desc string
-	mode            ConnectionMode // for connect items
-	tun             bool
+	mode            ConnectionMode                                 // for connect items
 	action          func(t *terminal, base string, in *input) bool // false: stdin closed
 }
 
-func connectItem(key, name, desc string, mode ConnectionMode, tun bool) menuItem {
-	return menuItem{key: key, name: name, desc: desc, mode: mode, tun: tun, action: func(t *terminal, base string, in *input) bool {
-		return t.connectFromMenu(base, in, tun, mode)
+func connectItem(key, name, desc string, mode ConnectionMode) menuItem {
+	return menuItem{key: key, name: name, desc: desc, mode: mode, action: func(t *terminal, base string, in *input) bool {
+		return t.connectFromMenu(base, in, mode)
 	}}
 }
 
@@ -50,34 +50,35 @@ var menuSections = []struct {
 	title string
 	items []menuItem
 }{
-	{"Connect", []menuItem{
-		connectItem("1", "Balanced", "every method races; AI sites only via a foreign exit (recommended)", ModeBalanced, false),
-		connectItem("2", "Fast", "fastest working route per site; public IP may change", ModeFast, false),
-		connectItem("3", "VPN exit", "one verified foreign exit, pinned for the session", ModeVPN, false),
-		connectItem("4", "Tor", "Tor circuit only, never a direct fallback", ModeTor, false),
-		connectItem("5", "Windscribe", "carry the Windscribe app over WStunnel + local anti-DPI", ModeWindscribe, false),
-		connectItem("6", "Whole PC", "Balanced for every application (Windows, Administrator)", ModeBalanced, true),
+	{"Connection policy", []menuItem{
+		connectItem("1", "Balanced", "everyday access; known AI domains need a verified foreign exit", ModeBalanced),
+		connectItem("2", "Fast", "first working route; direct ISP IP or another exit may be used", ModeFast),
+		connectItem("3", "VPN exit", "verified foreign exit only; block if unavailable; IP may rotate", ModeVPN),
+		connectItem("4", "Tor", "verified Tor exit only; block if unavailable", ModeTor),
+		connectItem("5", "Windscribe", "bridge for the Windscribe app; its VPN owns coverage and exit IP", ModeWindscribe),
+	}},
+	{"Traffic coverage (policies 1-4)", []menuItem{
+		{key: "6", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},
 	}},
 	{"Tools", []menuItem{
-		{key: "7", name: "Diagnose", desc: "what this network blocks: DNS, SNI, packet cutting", action: func(t *terminal, base string, _ *input) bool {
-			runDoctorView(t.ui, base, false)
-			return true
+		{key: "7", name: "Diagnose", desc: "choose general network or Windscribe checks; reports test limits", action: func(t *terminal, base string, in *input) bool {
+			return t.diagnoseMenu(base, in)
 		}},
 		{key: "8", name: "Setup", action: func(t *terminal, base string, in *input) bool {
 			t.setup(base, in.read)
 			return true
 		}},
-		{key: "9", name: "CDN scan", desc: "find Cloudflare IPs this network reaches (for -windscribe-cdn-edge)", action: func(t *terminal, _ string, _ *input) bool {
-			t.foreground(func(ctx context.Context) { runQuickScanContext(ctx, []string{"-provider", "cloudflare"}) })
-			return true
+		{key: "9", name: "CDN scan", desc: "provider HTTPS reachability or your own Windscribe CDN route", action: func(t *terminal, _ string, in *input) bool {
+			return t.cdnScanMenu(in)
 		}},
+		{key: "10", name: "Windscribe test", desc: "compare SNIs by TCP/TLS/WebSocket; verify a connected VPN separately", action: func(t *terminal, base string, in *input) bool { return t.windscribeTestMenu(base, in) }},
 	}},
 }
 
 // setupSummary is the Setup line's live description.
 func setupSummary(base string) string {
 	cert := map[string]string{"ok": "set up", "missing": "off", "outdated": "outdated", "untrusted": "not trusted"}[certState()]
-	warp := map[string]string{"ready": "on", "no core": "off", "no identity": "not registered"}[warpState(base)]
+	warp := map[string]string{"ready": "configured (connection unverified)", "no core": "off", "no identity": "not registered"}[warpState(base)]
 	return "certificate: " + cert + " · exit paths (WARP/Psiphon): " + warp
 }
 
@@ -90,6 +91,12 @@ func (t *terminal) mainMenu(base string) {
 			desc := it.desc
 			if it.key == "8" {
 				desc = setupSummary(base)
+			}
+			if it.key == "6" {
+				desc = "Proxy apps: configure apps on 10800/10801; change here to Whole PC (TCP)"
+				if t.wholePC {
+					desc = "Whole PC (TCP): TUN + chosen policy; Administrator; most UDP blocked (change here)"
+				}
 			}
 			u.Printf("   %s  %-11s %s\n", u.Bold(u.Cyan(it.key)), u.Bold(it.name), u.Dim(desc))
 		}
@@ -207,7 +214,7 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 		}
 		it, found := findItem(line)
 		if !found {
-			t.ui.Line(toneWarn, "Unknown option %q. Select 1-9, or 0 to exit.", line)
+			t.ui.Line(toneWarn, "Unknown option %q. Select 1-10, or 0 to exit.", line)
 			continue
 		}
 		if !it.action(t, base, stdin) {
@@ -216,9 +223,18 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 	}
 }
 
+func (t *terminal) menuConnectOptions(base string, mode ConnectionMode) connectOptions {
+	o := defaultConnectOptions(base)
+	o.mode, o.tun = mode, t.wholePC && mode != ModeWindscribe
+	o.stopHint = "Press Enter or Ctrl+C to disconnect and return to the menu"
+	return o
+}
+
 // connectFromMenu offers the certificate first when domain fronting would need
 // it, and Administrator for Whole PC. It reports false when stdin closed.
-func (t *terminal) connectFromMenu(base string, in *input, tun bool, mode ConnectionMode) bool {
+func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) bool {
+	o := t.menuConnectOptions(base, mode)
+	t.ui.Note("Policy: %s. Coverage: %s", mode, connectionCoverage(o))
 	usesFronting := mode == ModeBalanced || mode == ModeFast
 	if state := certState(); state != "ok" && !t.certDeclined && usesFronting {
 		why := map[string]string{
@@ -238,7 +254,7 @@ func (t *terminal) connectFromMenu(base string, in *input, tun bool, mode Connec
 			t.certDeclined = true
 		}
 	}
-	if tun && !systemtun.IsAdmin() {
+	if o.tun && !systemtun.IsAdmin() {
 		t.ui.Line(toneInfo, "Whole PC needs Administrator.")
 		t.print("  Type YES to open an Administrator window (Windows asks you to confirm) > ")
 		ans, ok := in.read()
@@ -249,7 +265,7 @@ func (t *terminal) connectFromMenu(base string, in *input, tun bool, mode Connec
 			t.ui.Line(toneInfo, "Cancelled.")
 			return true
 		}
-		relaunchElevated(t.ui, defaultConnectOptions(base))
+		relaunchElevated(t.ui, o)
 		return true
 	}
 	if mode == ModeWindscribe {
@@ -259,8 +275,5 @@ func (t *terminal) connectFromMenu(base string, in *input, tun bool, mode Connec
 			t.ui.Dim("Not Proxy Gateway. WireGuard, IKEv2 and Stealth ignore this proxy."),
 		})
 	}
-	o := defaultConnectOptions(base)
-	o.mode, o.tun = mode, tun
-	o.stopHint = "Press Enter or Ctrl+C to disconnect and return to the menu"
 	return t.foreground(func(ctx context.Context) { connectSession(ctx, o, nil, t.ui) }, in.lines)
 }

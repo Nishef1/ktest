@@ -44,7 +44,7 @@ API classification tolerates TLS/HTTP signatures split across TCP reads, includi
 
 Every TLS carrier runs twice: straight, and with its TCP leg through local Xray/ByeDPI (`+anti-DPI`). Direct WStunnel carriers reject certificates without a Windscribe hostname; this name check alone does not authenticate ownership. Stealth endpoints can present a generic certificate without that name, so only provider-advertised Stealth addresses are eligible and the outer TLS name is not checked, matching [Windscribe's own wrapper](https://github.com/Windscribe/wstunnel/blob/main/cli/httpClient.go). The inner OpenVPN client authenticates its server in either case. CDN carriers retain normal TLS chain and hostname verification. Default SNIs: `www.speedtest.net,www.digikala.com,www.aparat.com`. A carrier whose stream stayed up ≥1 min with ≥64 KiB received is launched first next time; one whose stream died within 20 s is launched last for ten minutes. `-windscribe-wstunnel=false` disables WStunnel and Stealth.
 
-The live feed labels the client's original destination as `requested=…` and the carrier's remote address as `entry=…`, followed by `carrier returned data; VPN not yet verified`. Neither address is a public VPN exit measurement. After a confirmed Connected status, the watcher separately prints `Windscribe VPN IP (CLI): …` using the CLI's public `VPN IP` field; it reports changes while connected without repeating every poll. If the field is absent or invalid, it prints unavailable and never substitutes a requested/entry address. This is Windscribe's reported exit, not an independent external IP check, and it can legitimately differ from both entry addresses.
+The live feed labels the client's original destination as `requested=…` and the carrier's remote address as `entry=…`, followed by `OpenVPN control reply (framing only); VPN auth/data not yet verified`. Neither address is a public VPN exit measurement. After a confirmed Connected status, the watcher separately prints `Windscribe VPN IP (CLI): …` using the CLI's public `VPN IP` field; it reports changes while connected without repeating every poll. If the field is absent or invalid, it prints unavailable and never substitutes a requested/entry address. This is Windscribe's reported exit, not an independent external IP check, and it can legitimately differ from both entry addresses.
 
 ktest downloads Windscribe's public `openvpn` node lists over verified HTTPS through the permitted API selector: the global list (`country_override=ZZ`) and the regional list. It matches the client's CONNECT IP to the exact node's `ip2` and tests that node's advertised `ip` and `ip3`, deduplicated across both lists. Regional anti-censorship addresses can be completely unrelated numerically to `ip2`; ktest never computes adjacent IPs or switches to another location. The official desktop client uses an account-provided [PortMap](https://github.com/Windscribe/Desktop-App/blob/master/src/client/client-common/api_responses/portmap.cpp) to choose an address field per protocol. This bridge does not fetch account credentials or that authenticated map, so it tries both alternate fields on port 443 rather than assuming either is universally WStunnel or Stealth. An address accepting TLS alone does not prove that protocol works there.
 
@@ -124,6 +124,27 @@ The live feed labels these events **TCP proxy accepted; VPN handshake not verifi
 - No real-ISP or installed Windscribe end-to-end test has been performed in CI. Successful Go builds/tests alone do not mean Windscribe's VPN completed authentication and data transfer.
 
 ## Troubleshooting
+
+### Stage-specific tests (menu 10)
+
+Use these commands without changing the app's connection or credentials:
+
+```powershell
+go run ./cmd/ktest windscribe-test -target "Ashburn - Bles Park"
+go run ./cmd/ktest windscribe-test -target 152.233.50.178 -sni "python.org,pypi.org,none"
+go run ./cmd/ktest windscribe-test -target "Paris - Jardin" -transport both -rounds 2
+go run ./cmd/ktest windscribe-test -verify-vpn
+go run ./cmd/ktest doctor -mode windscribe
+go run ./cmd/ktest scan -windscribe-cdn your.hostname
+```
+
+The comparison selects one reproducible node from the fresh public catalog and keeps its advertised alternate entries fixed for all names. Use the exact requested TCP IP to select a particular node. An ambiguous partial location is rejected with matching group names. Missing lists are fetched over verified HTTPS and cached; no neighbours are guessed. An explicit public carrier address can be supplied with `-entry` instead. Defaults include Python/PyPI, the existing three SNIs and a no-SNI control. Lists are deduplicated and limited to 12 names, 1-3 rounds, six concurrent probes and a 60-second overall budget. Each attempt has a 1-8-second bound.
+
+The output reports TCP, TLS and WS101 counts and average successful outer-transport latency. WStunnel uses the same peer-name check as the bridge and requires a valid WebSocket upgrade; Stealth deliberately reports TLS only. The probe sends no OpenVPN/authentication payload. Passing TLS/WS101 must not be described as a working VPN. It compares the current system's direct TCP path and skips known Connected/Connecting Windscribe sessions; a state change during the scan makes results inconclusive. If the CLI is unavailable, network/VPN state is explicitly unknown.
+
+For later stages, use the app through the normal bridge: its feed distinguishes an OpenVPN control reply (framing only) from the CLI's authenticated Connected state. Once connected, `-verify-vpn` makes one certificate-verified HTTPS request from a separate curl process, with explicit HTTP proxying disabled, and requires its measured public IP to match a stable CLI VPN IP before/after the request. A different IP is not proof that the VPN is broken: curl may be excluded by split tunneling. Other apps/destinations are not certified. WireGuard/Stealth/native WStunnel data checks do not validate this HTTP OpenVPN TCP bridge. No test reconnects, changes locations or disables the firewall.
+
+For an owned Cloudflare hostname whose origin is configured for Windscribe WStunnel, `scan -windscribe-cdn` checks certificate-verified TLS plus WebSocket routing, then prints candidate edges. Ordinary provider HTTPS scan results are not reusable VPN evidence. MITM website fronting is limited to supported HTTPS sites and is not an OpenVPN carrier.
 
 ### Windows loopback proxy: `CONNECTED,ROUTE_ERROR`
 

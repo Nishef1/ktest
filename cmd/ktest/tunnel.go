@@ -32,7 +32,7 @@ type tunnel struct {
 func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, t *term) *tunnel {
 	if !systemtun.IsAdmin() {
 		t.Line(toneWarn, "The system-wide tunnel needs Administrator; it was not started.")
-		t.Note("Use menu 6, or run `ktest connect -tun` (Windows then asks for permission), or open the terminal as Administrator.")
+		t.Note("Choose Whole PC coverage in menu 6, then a policy (1-4), or run `ktest connect -mode <policy> -tun` as Administrator.")
 		return nil
 	}
 	step := t.Progress("Starting the system-wide tunnel", 3)

@@ -265,13 +265,21 @@ func ensureCert(u *term) bool {
 	return caInstall(u) == 0
 }
 
-// relaunchElevated reopens this command in an Administrator window; Windows
-// shows its own permission prompt, so nothing is elevated without a decision.
-func relaunchElevated(u *term, o connectOptions) int {
-	args := []string{"connect", "-tun", "-base", o.base, "-listen", o.listen}
+// elevatedConnectArgs preserves explicit CLI flags and the menu's selected policy.
+func elevatedConnectArgs(o connectOptions, original []string) []string {
+	if len(original) > 0 {
+		return append([]string{"connect"}, original...)
+	}
+	args := []string{"connect", "-mode", string(o.mode), "-tun", "-base", o.base, "-listen", o.listen, "-http-listen", o.httpListen}
 	if o.verbose {
 		args = append(args, "-v")
 	}
+	return args
+}
+
+// relaunchElevated asks Windows to reopen the chosen policy with Administrator rights.
+func relaunchElevated(u *term, o connectOptions, original ...string) int {
+	args := elevatedConnectArgs(o, original)
 	u.Line(toneInfo, "The system-wide tunnel needs Administrator. Windows will ask for permission and open a new window.")
 	if err := systemtun.Elevate(args); err != nil {
 		u.Line(toneFail, "%v", err)

@@ -39,9 +39,12 @@ const usageText = `ktest: free access toolkit
     -mode vpn              one verified foreign exit, pinned for the session
     -mode tor              Tor circuit only
     -mode windscribe       carry the Windscribe app (OpenVPN TCP over WStunnel)
-    -tun                   whole PC (Windows, Administrator)
+    -tun                   coverage for the selected policy: Whole PC TCP (Windows, Administrator)
     -v                     log every decision (ktest connect -h lists every flag)
   ktest doctor             diagnose this network and the package; changes nothing
+    -mode windscribe       Windscribe-specific prerequisites/status; no reconnects
+  ktest windscribe-test    fixed-entry SNI comparison (-target location-or-TCP-IP)
+    -verify-vpn            CLI + one system HTTPS exit-IP check; no reconnects
 
 Setup
   ktest ca                 domain-fronting certificate (-install, -renew, -uninstall, -delete)
@@ -49,7 +52,8 @@ Setup
   ktest strategies         list or write the editable ByeDPI strategy file
 
 Tools and experiments (see docs/)
-  ktest scan               find Cloudflare IPs this network reaches
+  ktest scan               provider HTTPS reachability (-provider cloudflare|akamai|google|fastly)
+    -windscribe-cdn HOST   test WebSocket routing to your own CDN hostname/origin
   ktest path               DNS / TCP / TLS stage diagnosis of one URL
   ktest revive             run one Xray profile on its own
   ktest access             domain-scoped proxy backed by SNI-Spoofing-Go
@@ -100,6 +104,8 @@ func run(args []string) int {
 		return runConnect(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
+	case "windscribe-test":
+		return runWindscribeTest(args[1:])
 	case "ca":
 		return runCA(args[1:])
 	case "warp":
@@ -391,19 +397,44 @@ func interactiveMenu() int {
 // runQuickScan verifies selected CDN candidates through a real TLS connection.
 // A reachable IP is not a verified working fronting route.
 func runQuickScan(args []string) int {
-	return runQuickScanContext(context.Background(), args)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	return runQuickScanContext(ctx, args)
 }
 
 func runQuickScanContext(parent context.Context, args []string) int {
 	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
-	provider := flags.String("provider", "cloudflare", "cloudflare (100+ IPs), akamai, google or fastly")
-	limit := flags.Int("limit", 300, "maximum unique CDN IPs; 100..300 for Cloudflare")
-	if flags.Parse(args) != nil || flags.NArg() != 0 || *limit < 1 || *limit > 300 {
-		fmt.Fprintln(os.Stderr, "usage: ktest scan [-provider cloudflare|akamai|google|fastly] [-limit 100..300]")
+	provider := flags.String("provider", "cloudflare", "cloudflare, akamai, google or fastly")
+	limit := flags.Int("limit", 300, "maximum unique CDN IPs, 1..300; whole scan bounded to 90s")
+	cdnHost := flags.String("windscribe-cdn", "", "your proxied Cloudflare hostname whose origin is a Windscribe WStunnel server")
+	cdnSNI := flags.String("sni", "", "TLS SNI for your CDN route (default: its hostname; certificate verified)")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
-	ctx, cancel := context.WithCancel(parent)
+	*provider = strings.ToLower(strings.TrimSpace(*provider))
+	if *provider != "cloudflare" && *provider != "akamai" && *provider != "google" && *provider != "fastly" {
+		fmt.Fprintln(os.Stderr, "provider must be cloudflare, akamai, google, or fastly")
+		return 2
+	}
+	if flags.NArg() != 0 || *limit < 1 || *limit > 300 {
+		fmt.Fprintln(os.Stderr, "usage: ktest scan [-provider cloudflare|akamai|google|fastly] [-limit 1..300] [-windscribe-cdn your.hostname]")
+		return 2
+	}
+	opts := wsOptions{cdnHost: *cdnHost, cdnSNI: *cdnSNI}
+	if err := opts.validate(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if *cdnHost != "" && *provider != "cloudflare" {
+		fmt.Fprintln(os.Stderr, "-windscribe-cdn requires -provider cloudflare")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(parent, 90*time.Second)
 	defer cancel()
+	fmt.Println("Network: current system route; an active VPN can affect these results.")
 	dns := dnscheck.CheckGoogleDNS(ctx)
 	fmt.Println("DNS preflight:", dns.Format())
 	fmt.Println("An open DNS route does not prove a CDN or filtered website is reachable.")
@@ -430,6 +461,28 @@ func runQuickScanContext(parent context.Context, args []string) int {
 		}
 	}
 	fmt.Printf("CDN %s | %d source-backed candidate IPs | source: %s\n", *provider, len(ips), source)
+	if *cdnHost != "" {
+		u := newTerm(os.Stdout)
+		u.Note("Own CDN route: TLS certificate + WebSocket 101 for %s; no OpenVPN credentials/authentication test", *cdnHost)
+		b := newWSBridge(opts, nil, nil, u.Note)
+		b.scanCDNEdges(ctx, ips)
+		b.mu.Lock()
+		found := append([]string(nil), b.edges...)
+		b.mu.Unlock()
+		if ctx.Err() != nil {
+			u.Note("CDN route scan cancelled/timed out; results incomplete")
+			return 1
+		}
+		if len(found) == 0 {
+			return 1
+		}
+		if len(found) > 3 {
+			found = found[:3]
+		}
+		u.Note("Candidate edges for -windscribe-cdn-edge: %s", strings.Join(found, ","))
+		u.Note("WebSocket routing only. OpenVPN reply/auth/data are untested; use the Windscribe bridge and -verify-vpn.")
+		return 0
+	}
 	fmt.Println("Target: 10 certificate-verified HTTPS responses. This does NOT prove arbitrary domain fronting.")
 	scan, err := edges.ScanCDN(ctx, ips, target, 10, nil, func(ip string, r probe.Result, tried, passed int) {
 		switch {
@@ -454,6 +507,7 @@ func runQuickScanContext(parent context.Context, args []string) int {
 	if !scan.ReachedGoal {
 		fmt.Println("No 10 verified candidates were found within the bounded scan. Do not label failed IPs as working.")
 	}
-	fmt.Println("For a FRONTED origin, route and nonce verification still require a compatible CDN/origin setup.")
+	fmt.Println("Provider HTTPS success cannot be reused as a Windscribe route without testing your own origin.")
+	fmt.Println("For your configured Windscribe CDN hostname use: ktest scan -windscribe-cdn your.hostname")
 	return 0
 }

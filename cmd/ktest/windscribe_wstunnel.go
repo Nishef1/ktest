@@ -56,6 +56,16 @@ func validHostname(h string) bool {
 	if h == "" || len(h) > 253 || net.ParseIP(h) != nil || strings.ContainsAny(h, "/:@ \t\r\n\\") || !strings.Contains(h, ".") {
 		return false
 	}
+	for _, label := range strings.Split(strings.TrimSuffix(h, "."), ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
 	return true
 }
 
@@ -646,7 +656,7 @@ func (b *wsBridge) scanCDNEdges(ctx context.Context, candidates []string) {
 		b.mu.Lock()
 		b.edges = addrs
 		b.mu.Unlock()
-		b.note("CDN edge %s carries %s to Windscribe (%s); %d found", f.addr, o.cdnHost, shortDur(f.took), len(best))
+		b.note("CDN edge %s completed TLS/WebSocket for %s (%s); %d found; OpenVPN unverified", f.addr, o.cdnHost, shortDur(f.took), len(best))
 		if len(best) >= 6 {
 			cancel()
 		}

@@ -308,11 +308,13 @@ func runWarp(args []string) int {
 func (t *terminal) setup(base string, readLine func() (string, bool)) {
 	u := t.ui
 	for {
-		u.Heading("setup", "Both are optional and can be removed again.")
+		u.Heading("setup", "Prepare optional capabilities. Configured files/identity do not prove a working connection.")
+		u.Note("Certificate: HTTPS website fronting for Balanced/Fast (including their Whole PC coverage); it cannot authenticate or front raw OpenVPN.")
+		u.Note("Exit paths: used by Balanced/Fast/VPN exit. Windscribe prohibits them; Tor uses its separately verified Tor route.")
 		cert := map[string]string{
 			"ok": "set up", "missing": "not set up", "outdated": "outdated: renew it", "untrusted": "not trusted yet",
 		}[certState()]
-		warp := map[string]string{"ready": "enabled", "no core": "off", "no identity": "core present, not registered"}[warpState(base)]
+		warp := map[string]string{"ready": "configured; tunnel unverified", "no core": "off", "no identity": "core present, not registered"}[warpState(base)]
 		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("1")), u.Bold("Certificate"), u.Dim(cert+" (domain fronting: YouTube, X, Instagram, Reddit ...)"))
 		u.Printf("  %s  %s  %s\n", u.Bold(u.Cyan("2")), u.Bold("Exit paths"), u.Dim(warp+" (WARP, Psiphon: Telegram and sites blocked by address)"))
 		u.Printf("  %s  %s\n\n  Select > ", u.Bold(u.Cyan("0")), u.Bold("Back"))

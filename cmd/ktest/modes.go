@@ -12,6 +12,16 @@ import (
 // Modes control ktest's managed SOCKS/HTTP traffic, not arbitrary OS sockets.
 type ConnectionMode string
 
+func connectionCoverage(o connectOptions) string {
+	if o.mode == ModeWindscribe {
+		return "Windscribe app only; configure its HTTP proxy; Windscribe owns system coverage"
+	}
+	if o.tun {
+		return "Whole PC TCP requested via TUN; LAN/helpers exempt, most UDP blocked; activation is verified separately"
+	}
+	return "Proxy apps only; configure SOCKS5/HTTP in each app; other applications keep their own route"
+}
+
 const (
 	ModeBalanced   ConnectionMode = "balanced"   // current convenience: AI needs exit
 	ModeFast       ConnectionMode = "fast"       // fastest usable; identity may change
