@@ -28,6 +28,7 @@ import (
 
 func main() {
 	killChildrenOnExit()
+	exitWithGoRun()
 	code := run(os.Args[1:])
 	reapTracked() // the kill-on-close job is not guaranteed; never leave a core behind
 	os.Exit(code)
