@@ -126,7 +126,7 @@ func frontCARelevant(o connectOptions) bool {
 
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
-		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12, windscribeReconnect: true,
+		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12, windscribeReconnect: false,
 		tun:     runtime.GOOS == "windows",
 		ws:      wsOptions{direct: true, sni: defaultWindscribeSNIs},
 		stagger: 250 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
@@ -140,7 +140,7 @@ func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
 	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, windscribe-aether, aether, psiphon, tor")
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", o.windscribeCLI, "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
-	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "reconnect last selected Windscribe location after verified bootstrap becomes available")
+	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "opt in to reconnecting Windscribe after confirmed disconnect (off by default; Windscribe normally manages its own retries)")
 	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: race WStunnel and Stealth straight to the Windscribe node with chosen SNIs")
 	fs.StringVar(&o.ws.sni, "windscribe-wstunnel-sni", o.ws.sni, "comma-separated TLS SNIs raced on the direct carriers")
 	fs.StringVar(&o.ws.serverIP, "windscribe-wstunnel-ip", o.ws.serverIP, "explicit Windscribe WStunnel server IP (default: addresses advertised for the same node by Windscribe)")
@@ -281,6 +281,9 @@ type siteEvents struct {
 	failedAt    map[string]time.Time
 	ok, fail    atomic.Int64
 	tcpOnly     atomic.Int64
+	latencyOK   atomic.Int64
+	latencyFail atomic.Int64
+	windscribe  bool
 	prepared    atomic.Int64
 	earlyClosed atomic.Int64
 	rejected    atomic.Int64
@@ -315,6 +318,29 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	target := host
 	if e.Port != "" && e.Port != "443" {
 		target = net.JoinHostPort(host, e.Port)
+	}
+	// Windscribe's serverlist ping_host uses HTTP on port 6464/latency.
+	// This is a latency probe, not an OpenVPN handshake or data-plane failure.
+	if s.windscribe && e.Port == "6464" && !e.EarlyClose {
+		if e.TCPOnly {
+			// A SOCKS CONNECT acknowledgement is not a completed HTTP ping.
+			return
+		}
+		if e.OK {
+			s.latencyOK.Add(1)
+			if s.last[key] != "latency|ok" {
+				s.last[key] = "latency|ok"
+				t.Line(toneInfo, "%s · LATENCY RESPONSE · %s", t.Bold(target), t.Dim(shortDur(e.Took)))
+			}
+		} else {
+			s.latencyFail.Add(1)
+			if time.Since(s.failedAt[key+"|latency"]) >= time.Minute {
+				s.failedAt[key+"|latency"] = time.Now()
+				t.Line(toneWarn, "%s · LATENCY PROBE FAILED (not VPN handshake)", t.Bold(target))
+				s.detail(e.Err)
+			}
+		}
+		return
 	}
 	if e.EarlyClose {
 		s.earlyClosed.Add(1)
@@ -1106,7 +1132,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		stopRefresh := startRouteRefresh(ctx, probePort, &activity, t)
 		defer stopRefresh()
 	}
-	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory}
+	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory, windscribe: o.mode.isWindscribe()}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1136,6 +1162,9 @@ func summarize(t *term, feed *siteEvents, fronter *front.Fronter) {
 	ok, fail := feed.ok.Load(), feed.fail.Load()
 	if n := feed.tcpOnly.Load(); n > 0 {
 		t.Note("%d TCP proxy requests accepted; application/VPN negotiation unverified", n)
+	}
+	if ok, failed := feed.latencyOK.Load(), feed.latencyFail.Load(); ok+failed > 0 {
+		t.Note("Windscribe latency probes (not VPN checks): %d answered, %d failed", ok, failed)
 	}
 	if n := feed.prepared.Load(); n > 0 {
 		t.Note("%d fronting routes prepared; application acceptance checked separately", n)
