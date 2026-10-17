@@ -188,6 +188,8 @@ type warpManager struct {
 	measurements  []aetherMeasurement
 	diagnosis     bool
 	selected      *aetherMeasurement
+	attempted     map[string]bool
+	failedSweeps  int
 }
 
 func (m *warpManager) status() string {
@@ -264,10 +266,10 @@ func (m *warpManager) waitWhileConnected(ctx context.Context) bool {
 }
 
 // waitRetry allows immediate recovery when Windscribe changes from connected
-// to disconnected. A failed ordinary search otherwise backs off for two
-// minutes instead of repeatedly hammering blocked gateways.
-func (m *warpManager) waitRetry(ctx context.Context) bool {
-	timer := time.NewTimer(2 * time.Minute)
+// to disconnected. Untried transports get a prompt turn; only a completed failed
+// sweep backs off, so unavailable WARP cannot starve independent carriers.
+func (m *warpManager) waitRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
@@ -307,11 +309,14 @@ func (m *warpManager) run(ctx context.Context) {
 			m.t.Note("Exit status: %s", m.status())
 		}
 		if len(found) == 0 {
-			if !m.waitRetry(ctx) {
+			delay := m.recoveryDelay()
+			m.t.Line(toneWarn, "No permitted exit verified; continuing recovery in %s (%d compatible profiles). Saved identities are kept.", delay, len(m.profs))
+			if !m.waitRetry(ctx, delay) {
 				return
 			}
 			continue
 		}
+		m.failedSweeps = 0
 		done := make(chan *warpFound, len(found))
 		for _, w := range found {
 			go func(w *warpFound) {
@@ -376,14 +381,19 @@ type warpFound struct {
 func (m *warpManager) search(ctx context.Context) []*warpFound {
 	limit := maxExits
 	history, _ := cachedNetwork(m.network, m.core)
-	m.profs = measuredProfilesFirst(m.profs, history, m.o.mode)
+	m.profs = recoveryProfilesFirst(m.profs, history, m.o.mode)
+	indices := m.remainingProfiles()
+	if len(indices) == 0 {
+		m.attempted = nil
+		indices = m.remainingProfiles()
+	}
 	if len(m.profs) > 0 {
 		if r, ok := history.Results[m.profs[0].id()]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
 			limit = 1
 		}
 	}
 	searchCtx, stopSearch := context.WithTimeout(ctx, 40*time.Second)
-	results := m.compare(searchCtx, limit, false)
+	results := m.compare(searchCtx, limit, false, indices)
 	stopSearch()
 	var found []*warpFound
 	for i, r := range results {
@@ -413,9 +423,6 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 		go m.watchHealth(ctx, r.warpFound)
 		m.t.Line(toneOK, "Exit selected: %s · %s", r.p.Label, r.result.detail())
 		m.t.Note("Observed exit belongs to the neutral probe, not a permanent per-website IP guarantee.")
-	}
-	if len(found) == 0 && ctx.Err() == nil {
-		m.t.Line(toneWarn, "No verified exit came up; retrying tunnel discovery in two minutes. Initial enrollment is not repeated for every profile.")
 	}
 	return found
 }

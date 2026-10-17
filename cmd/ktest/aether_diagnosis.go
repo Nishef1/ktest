@@ -90,7 +90,7 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	if len(available) == 0 {
 		return nil, errors.New("no supported profile matches this mode/method; check cores and profiles/aether-profiles.txt")
 	}
-	available = measuredProfilesFirst(available, history, o.mode)
+	available = recoveryProfilesFirst(available, history, o.mode)
 	if len(history.Results) > 0 {
 		u.Note("Reusing this network's measured profile order; checking live tunnels again")
 	}
@@ -165,7 +165,15 @@ type measuredAetherExit struct {
 
 // Compare only before exposing the first exit to application traffic. Once
 // selected, protected streams retain the existing session-pinning policy.
-func (m *warpManager) compare(ctx context.Context, limit int, speed bool) []measuredAetherExit {
+func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indices []int) []measuredAetherExit {
+	if indices == nil {
+		for i := range m.profs {
+			indices = append(indices, i)
+		}
+	}
+	if m.attempted == nil {
+		m.attempted = map[string]bool{}
+	}
 	var mu sync.Mutex
 	next := 0
 	var found []measuredAetherExit
@@ -193,13 +201,14 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool) []meas
 					return
 				}
 				mu.Lock()
-				if next >= len(m.profs) || (limit > 0 && len(found) >= limit && (hasForeign() || m.o.mode == ModeWindscribeAether)) {
+				if next >= len(indices) || (limit > 0 && len(found) >= limit && (hasForeign() || m.o.mode == ModeWindscribeAether)) {
 					mu.Unlock()
 					return
 				}
-				i := next
+				i := indices[next]
 				next++
 				p := m.profs[i]
+				m.attempted[p.id()] = true
 				mu.Unlock()
 				// A slow/blocked family cannot consume the whole comparison.
 				attempt, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -317,7 +326,7 @@ func runAetherDiagnosis(ctx context.Context, u *term, base string, speed bool, b
 	mctx, stop := context.WithCancel(ctx)
 	defer stop()
 	m.processCtx = mctx
-	results := m.compare(ctx, 0, speed)
+	results := m.compare(ctx, 0, speed, nil)
 	for _, r := range results {
 		r.rc.stop()
 	}

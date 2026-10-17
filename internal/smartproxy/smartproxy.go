@@ -204,6 +204,7 @@ type Proxy struct {
 	mem             map[string]*destinationMemory
 	hints           map[string]memo
 	historyUpdates  uint64
+	exitGeneration  uint64          // changes when the DNS-capable exit inventory changes
 	aiPinned        string          // first working AI exit stays selected until this session ends
 	bootstrapPinned string          // legacy verified foreign-exit dialer; never used for local bypass
 	localAttempts   map[string]memo // last local method attempted per exact host:port
@@ -249,6 +250,9 @@ func New(cfg Config) (*Proxy, error) {
 			state.verifiedUntil.Store(time.Now().Add(cfg.ExitVerifyTTL).UnixNano())
 		}
 		p.ups = append(p.ups, state)
+		if u.Exit {
+			p.exitGeneration++
+		}
 	}
 	return p, nil
 }
@@ -313,6 +317,9 @@ func (p *Proxy) Remove(name string) {
 	defer p.mu.Unlock()
 	for i, u := range p.ups {
 		if u.Name == name {
+			if u.Exit {
+				p.exitGeneration++
+			}
 			p.ups = append(p.ups[:i], p.ups[i+1:]...)
 			break
 		}
@@ -338,6 +345,20 @@ func (p *Proxy) Remove(name string) {
 	if p.bootstrapPinned == name {
 		p.bootstrapPinned = ""
 	}
+}
+
+// ExitCarriers is a current snapshot for neutral, certificate-verified DNS
+// requests. It does not grant AI eligibility or change any pinned identity.
+func (p *Proxy) ExitCarriers() ([]string, uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var addrs []string
+	for _, u := range p.ups {
+		if u.Exit && u.Addr != "" {
+			addrs = append(addrs, u.Addr)
+		}
+	}
+	return addrs, p.exitGeneration
 }
 
 // HasLocalBypass reports whether an explicitly trusted local anti-DPI SOCKS
@@ -1111,6 +1132,9 @@ func (p *Proxy) Add(u Upstream) error {
 		state.verifiedUntil.Store(time.Now().Add(p.cfg.ExitVerifyTTL).UnixNano())
 	}
 	p.ups = append(p.ups, state)
+	if u.Exit {
+		p.exitGeneration++
+	}
 	return nil
 }
 

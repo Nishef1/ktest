@@ -64,6 +64,9 @@ type TrustedOptions struct {
 	System func(ctx context.Context, network, host string) ([]net.IP, error)
 	// DoH is an encrypted resolver tried when the system answer is unusable.
 	DoH Resolver
+	// DoHGeneration changes when a new transport can carry encrypted DNS.
+	// It reopens a failed-DNS circuit without disabling its ordinary backoff.
+	DoHGeneration func() uint64
 	// IPv6 asks for AAAA instead of A.
 	IPv6 bool
 	// Logf receives one line per fallback; nil is silent.
@@ -103,18 +106,29 @@ func NewTrusted(o TrustedOptions) Resolver {
 	// Encrypted DNS is itself filtered on many networks: after three failures
 	// in a row it is skipped for five minutes instead of slowing every lookup.
 	var (
-		bmu         sync.Mutex
-		dohFails    int
-		dohOffUntil time.Time
+		bmu           sync.Mutex
+		dohFails      int
+		dohOffUntil   time.Time
+		dohGeneration uint64
 	)
-	dohAllowed := func() bool {
+	dohAllowed := func() (bool, uint64) {
+		generation := uint64(0)
+		if o.DoHGeneration != nil {
+			generation = o.DoHGeneration()
+		}
 		bmu.Lock()
 		defer bmu.Unlock()
-		return time.Now().After(dohOffUntil)
+		if generation != dohGeneration {
+			dohGeneration, dohFails, dohOffUntil = generation, 0, time.Time{}
+		}
+		return time.Now().After(dohOffUntil), generation
 	}
-	dohResult := func(ok bool) {
+	dohResult := func(generation uint64, ok bool) {
 		bmu.Lock()
 		defer bmu.Unlock()
+		if generation != dohGeneration {
+			return // an older blocked transport cannot disable its replacement
+		}
 		if ok {
 			dohFails = 0
 			return
@@ -135,9 +149,10 @@ func NewTrusted(o TrustedOptions) Resolver {
 		if poisoned {
 			logf("%s: %v (%s)", host, ErrPoisoned, ips[0])
 		}
-		if o.DoH != nil && dohAllowed() {
+		allowed, generation := dohAllowed()
+		if o.DoH != nil && allowed {
 			got, derr := o.DoH(ctx, host)
-			dohResult(derr == nil && len(got) > 0)
+			dohResult(generation, derr == nil && len(got) > 0)
 			if derr == nil && len(got) > 0 {
 				return got, 5 * time.Minute, nil
 			}

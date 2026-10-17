@@ -86,3 +86,42 @@ func TestTrustedSkipsFilteredEncryptedDNSAfterRepeatedFailures(t *testing.T) {
 		t.Fatalf("encrypted DNS asked %d times; must stop after 3 consecutive failures", calls.Load())
 	}
 }
+
+func TestTrustedReopensEncryptedDNSWhenANewTransportAppears(t *testing.T) {
+	var calls atomic.Int32
+	var generation atomic.Uint64
+	doh := func(context.Context, string) ([]string, error) { calls.Add(1); return nil, errors.New("filtered") }
+	r := NewTrusted(TrustedOptions{System: systemWith(map[string][]string{}), DoH: doh, DoHGeneration: generation.Load})
+	for _, h := range []string{"a.example", "b.example", "c.example", "d.example", "e.example"} {
+		_, _ = r(context.Background(), h)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("circuit did not open: %d calls", calls.Load())
+	}
+	generation.Store(1) // a tunnel came up
+	_, _ = r(context.Background(), "f.example")
+	if calls.Load() != 4 {
+		t.Fatalf("new transport did not reopen encrypted DNS: %d calls", calls.Load())
+	}
+}
+
+func TestExitCarriersTrackOnlyDNSCapableExits(t *testing.T) {
+	p, err := New(Config{Upstreams: []Upstream{{Name: "plain", Addr: "127.0.0.1:1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addrs, g := p.ExitCarriers(); len(addrs) != 0 || g != 0 {
+		t.Fatalf("plain upstream counted as exit: %v %d", addrs, g)
+	}
+	if err := p.Add(Upstream{Name: "warp", Addr: "127.0.0.1:2", Exit: true}); err != nil {
+		t.Fatal(err)
+	}
+	addrs, g := p.ExitCarriers()
+	if len(addrs) != 1 || addrs[0] != "127.0.0.1:2" || g == 0 {
+		t.Fatalf("exit not reported: %v %d", addrs, g)
+	}
+	p.Remove("warp")
+	if addrs, g2 := p.ExitCarriers(); len(addrs) != 0 || g2 == g {
+		t.Fatalf("removal did not change the inventory: %v %d", addrs, g2)
+	}
+}

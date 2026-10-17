@@ -689,6 +689,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	events := make(chan smartproxy.Event, 256)
 	var dropped atomic.Int64
 	var activity atomic.Uint64
+	var liveProxy atomic.Pointer[smartproxy.Proxy]
 	cfg := smartproxy.Config{
 		Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte,
 		VerifyExit: func(ctx context.Context, u smartproxy.Upstream) error {
@@ -721,6 +722,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 	}
 	var dohA, dohAAAA smartproxy.Resolver
+	dnsGeneration := func() uint64 {
+		if p := liveProxy.Load(); p != nil {
+			_, generation := p.ExitCarriers()
+			return generation
+		}
+		return 0
+	}
 	if !o.noDoH {
 		var carriers []string
 		for _, u := range ups {
@@ -728,15 +736,24 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				carriers = append(carriers, u.Addr)
 			}
 		}
-		dial := func(ctx context.Context, _, addr string) (net.Conn, error) { return raceDial(ctx, carriers, addr) }
+		dial := func(ctx context.Context, _, addr string) (net.Conn, error) {
+			if p := liveProxy.Load(); p != nil {
+				if exits, _ := p.ExitCarriers(); len(exits) > 0 {
+					// A bare TCP acknowledgement on a filtered direct route
+					// must not beat the newly working tunnel and fail at TLS.
+					return raceDialPaths(ctx, exits, addr, false)
+				}
+			}
+			return raceDial(ctx, carriers, addr)
+		}
 		// The public resolvers are filtered by address on many networks; the ECH
 		// route to Cloudflare's resolver is not, and needs neither DNS nor a path.
 		endpoints := append(append([]smartproxy.DoHEndpoint(nil), smartproxy.DefaultDoH...), echDoHEndpoint())
 		dohA = smartproxy.NewDoH(endpoints, dial, nil)
 		dohAAAA = smartproxy.NewDoHType(endpoints, dial, nil, "AAAA")
 	}
-	cfg.Resolve = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohA, Logf: logDNS})
-	cfg.Resolve6 = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohAAAA, IPv6: true, Logf: logDNS})
+	cfg.Resolve = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohA, DoHGeneration: dnsGeneration, Logf: logDNS})
+	cfg.Resolve6 = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohAAAA, DoHGeneration: dnsGeneration, IPv6: true, Logf: logDNS})
 
 	// Domain fronting is a takeover path: it needs the application to trust the
 	// ktest CA, so it is only added when the system says it does.
@@ -759,6 +776,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		t.Line(toneFail, "%v", err)
 		return 2
 	}
+	liveProxy.Store(proxy)
 	l, err := net.Listen("tcp", o.listen)
 	if err != nil {
 		t.Line(toneFail, "cannot listen on %s: %v", o.listen, err)
@@ -1133,6 +1151,10 @@ func summarize(t *term, feed *siteEvents, fronter *front.Fronter) {
 // raceDial connects to host:port (an IP literal, so no DNS) through every
 // SOCKS carrier and directly at the same time, and keeps the first connection.
 func raceDial(ctx context.Context, carriers []string, addr string) (net.Conn, error) {
+	return raceDialPaths(ctx, carriers, addr, true)
+}
+
+func raceDialPaths(ctx context.Context, carriers []string, addr string, direct bool) (net.Conn, error) {
 	h, p, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -1143,7 +1165,13 @@ func raceDial(ctx context.Context, carriers []string, addr string) (net.Conn, er
 		c   net.Conn
 		err error
 	}
-	n := len(carriers) + 1
+	n := len(carriers)
+	if direct {
+		n++
+	}
+	if n == 0 {
+		return nil, errors.New("no DNS carrier available")
+	}
 	ch := make(chan res, n)
 	for _, carrier := range carriers {
 		go func(carrier string) {
@@ -1151,10 +1179,12 @@ func raceDial(ctx context.Context, carriers []string, addr string) (net.Conn, er
 			ch <- res{c, err}
 		}(carrier)
 	}
-	go func() {
-		c, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(rctx, "tcp", addr)
-		ch <- res{c, err}
-	}()
+	if direct {
+		go func() {
+			c, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(rctx, "tcp", addr)
+			ch <- res{c, err}
+		}()
+	}
 	var winner net.Conn
 	var last error
 	for i := 0; i < n; i++ {
