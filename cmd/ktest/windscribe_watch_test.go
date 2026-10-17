@@ -204,3 +204,40 @@ func TestWindscribeConnectedWithoutCityIsRecognized(t *testing.T) {
 		}
 	}
 }
+
+// A Windscribe server ping on :6464 is not a VPN carrier failure. In
+// particular, SOCKS5 reply 5 says the endpoint refused TCP CONNECT.
+func TestWindscribeLatencyProbeNotCountedAsVPNFailure(t *testing.T) {
+	var output bytes.Buffer
+	feed := &siteEvents{t: plainTerm(&output), windscribe: true}
+	probe := smartproxy.Event{
+		Host: "66.90.90.58", Port: "6464",
+		Err: "ByeDPI double split: upstream CONNECT failed (reply 5)",
+	}
+	feed.print(probe)
+	feed.print(probe)
+	if feed.fail.Load() != 0 || feed.latencyFail.Load() != 2 {
+		t.Fatalf("ping failures contaminated VPN response counts: fail=%d latency=%d", feed.fail.Load(), feed.latencyFail.Load())
+	}
+	if !strings.Contains(output.String(), "LATENCY PROBE FAILED") || strings.Contains(output.String(), "NO REPLY") {
+		t.Fatalf("wrong Windscribe ping diagnostic: %q", output.String())
+	}
+	feed.print(smartproxy.Event{Host: probe.Host, Port: probe.Port, TCPOnly: true})
+	if feed.latencyFail.Load() != 2 {
+		t.Fatal("SOCKS CONNECT was treated as failed HTTP ping")
+	}
+	// Other policies must not rewrite arbitrary services on the same port.
+	var other bytes.Buffer
+	normal := &siteEvents{t: plainTerm(&other)}
+	normal.print(probe)
+	if normal.fail.Load() != 1 || normal.latencyFail.Load() != 0 {
+		t.Fatal("non-Windscribe proxy was incorrectly classified as provider ping")
+	}
+}
+
+func TestWindscribeExtraAutoReconnectIsOptIn(t *testing.T) {
+	options := defaultConnectOptions(t.TempDir())
+	if options.windscribeReconnect {
+		t.Fatal("ktest must not auto-reconnect on top of Windscribe's own retry manager by default")
+	}
+}
