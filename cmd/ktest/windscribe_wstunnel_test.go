@@ -693,8 +693,8 @@ func TestWindscribeOnlyLearnsCLIAuthenticatedSingleCarrier(t *testing.T) {
 
 func TestAmbiguousConcurrentWindscribeSessionsAreNotPromoted(t *testing.T) {
 	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
-	first := &wsActiveCarrier{key: "one:443", name: "WStunnel first"}
-	second := &wsActiveCarrier{key: "two:443", name: "Stealth second"}
+	first := &wsActiveCarrier{key: "one:443", name: "WStunnel first", started: time.Now()}
+	second := &wsActiveCarrier{key: "two:443", name: "Stealth second", started: time.Now()}
 	b.active[first] = true
 	b.active[second] = true
 	b.observeCLIConnected()
