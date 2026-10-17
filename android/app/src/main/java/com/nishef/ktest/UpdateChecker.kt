@@ -17,7 +17,7 @@ object UpdateChecker {
         connection.setRequestProperty("User-Agent", "ktest-android")
         try {
             if (connection.responseCode != 200) {
-                return UpdateInfo("بررسی آپدیت ممکن نشد (HTTP ${connection.responseCode}).")
+                return UpdateInfo("Could not check updates (HTTP ${connection.responseCode}).")
             }
             val releases = connection.inputStream.bufferedReader().use { JSONArray(it.readText()) }
             for (i in 0 until releases.length()) {
@@ -33,11 +33,11 @@ object UpdateChecker {
                     if (name.endsWith(".apk") && name.contains("android") &&
                         url.startsWith("https://github.com/Nishef1/ktest/releases/download/")
                     ) {
-                        return UpdateInfo("نسخهٔ جدید اندروید: ${version}", url)
+                        return UpdateInfo("New Android version: ${version}", url)
                     }
                 }
             }
-            return UpdateInfo("نسخهٔ جدید APK اندروید منتشر نشده است.")
+            return UpdateInfo("No newer Android APK release is available.")
         } finally {
             connection.disconnect()
         }

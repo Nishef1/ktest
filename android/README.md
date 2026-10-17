@@ -1,22 +1,27 @@
-# ktest for Android — diagnostic foundation
+# KTest Connection — Android preview v0.2.0
 
-This first Android slice is **not a VPN**. It runs the real Go `internal/pathdiag` DNS/TCP/TLS diagnostic through a small `mobilebridge` AAR, shows stage-level results, and lets the user check for official Android APK updates. It never modifies network routes, trust stores, DNS, or Android VPN settings.
+The app now has a **Connect / Disconnect dashboard**, not a diagnostic-first home page. Its display language is English only.
 
-## Decisions
+## What works
 
-- Keep Go as the network core and Kotlin/Jetpack Compose as the UI.
-- Do not spawn desktop `.exe` files on Android.
-- Preserve optional domain-fronting / MITM and CA code **unchanged** in `internal/front`; do not ask for a CA in v0.1.
-- For a future VPN mode, first validate HEV (MIT licensed, upstream AAR/JNI supported) to turn a `VpnService` TUN FD into an existing SOCKS5 proxy. Android has **no built-in tun2socks engine**.
-- Current `internal/smartproxy` is TCP-oriented. Do not advertise all-app / UDP VPN until SOCKS5 UDP, DNS, IPv6, protect(fd) and reconnection are tested end-to-end.
-- Xray and sing-box remain **optional candidates**, not concurrent bundled engines. Measure before choosing a larger stack.
-- Do not add `VpnService` or risky installation permissions until the feature exists and is tested.
+- The central animated power control starts/stops a **real**, foreground-managed, loopback-only Go SOCKS5 proxy and an HTTP proxy bridge (via existing `internal/smartproxy` and `internal/httpproxy`).
+- The two built-in desktop **Balanced** and **Fast** plain/ClientHello-splitting paths are wired. No Xray, Aether, Windscribe, Psiphon or Tor executables are bundled on Android yet.
+- Known protected AI hostnames have an `ExitOnly` restriction; without a verified foreign exit they fail closed **when identifiable by hostname/SNI**. IP-only requests that cannot be attributed to a domain are an explicit limitation; do not rely on this as an identity-protecting VPN.
+- Live SOCKS5 and HTTP listeners use ephemeral `127.0.0.1` ports and are displayed in the UI for users to configure in compatible apps.
+- Long-running listeners are owned by a foreground service with a persistent notification and Disconnect action. Starting/stopping is driven by a real Kotlin service calling the Go core.
+- Tools tab provides bounded real DNS/TCP/TLS diagnostics. Settings keeps manual release update checks.
+- Mode selector shows all the terminal's main modes: Balanced, Fast, Aether, Psiphon, Tor, Windscribe Local, Windscribe + Aether. **Unavailable** modes are labeled and cannot be connected; no fabricated status.
+- No CA installation or global system network modification. MITM, CA and fronting code remain untouched in the existing Go source tree.
+
+## What does not work yet
+
+This **is not an Android VPN**. The power button means a local proxy is listening, **not** that device-wide traffic is tunneled or that a remote destination has been reached. Only apps explicitly configured to use `SOCKS5` or `HTTP` proxy will use it. Most ordinary Android apps don't expose an individual proxy setting, and the stock Wi-Fi HTTP proxy setting is not a system-wide SOCKS5 solution. This preview does not implement HEV/tun2socks, UDP, IPv6 end-to-end VPN, per-network socket binding, background autostart or verified foreign exit.
+
+HEV remains the planned lean adapter when we integrate `VpnService`, after binding/protecting upstream sockets and validating DNS and UDP end to end. No Rust rewrite.
 
 ## Build
 
-Prerequisites: Android SDK (API 36), NDK r28+, Java 17+, Go version from `go.mod`, `gomobile`, Gradle 9.5+.
-
-From the repository root:
+Use Android SDK 36, NDK r28c, Java 17+, Go from `go.mod`, `gomobile` and Gradle 9.5+.
 
 ```sh
 go install golang.org/x/mobile/cmd/gomobile@latest
@@ -27,27 +32,15 @@ gomobile bind -target=android/arm,android/arm64 -androidapi=26 -o android/app/li
 gradle -p android :app:assembleDebug
 ```
 
-The Android build workflow on the feature branch produces a **debug-signed preview** named `KTest-Connection-Lab-v0.1.1-preview.apk` inside a GitHub Actions ZIP artifact. Extract the APK from the ZIP before installing. The preview is not a signed production release. No generated AAR or APK is committed to source control. The app has no fake/placeholder diagnosis. CI only checks build/signature/archive/ABIs; physical-device installation and runtime still require testing.
+CI uses debug signing for preview only. Find `KTest-Connection-v0.2.0-preview.apk` inside the matching Actions ZIP artifact. Extract it first. Temporary CI signing keys aren't stable across runs; you may have to uninstall an earlier CI-signed preview before installing another (this clears local app data). Stable update-over-install requires a persistent **secure release signing key**; renaming files never fixes signature mismatches.
 
-## UI / updates
+## Safety / remaining checks
 
-The home screen runs bounded Go diagnostics for a user-selected URL, and labels DNS/TCP/TLS separately. Results are for the system default network only (they are **not** independent mobile-data/Wi-Fi measurements). Output stays on device.
+1. Run Android APK CI, verify arm32/arm64 native libraries and signature.
+2. On-device: test that Connect starts listeners, other apps can use the local SOCKS5/HTTP proxy, Disconnect closes all connections, notification stops service, and screen-off lifecycle works.
+3. Verify that a non-Iran foreign exit is required for protected services, including unresolved/IP-only cases, before claiming privacy protection.
+4. Test HEV + proxy against real mobile networks and implement controlled Android VPN permission, socket `protect()`, UDP, DNS and IPv6 routing and fail-closed recovery.
+5. Evaluate Aether, Windscribe, Tor, Psiphon integration only with Android-compatible engines and meaningful transport verification.
 
-The settings screen checks the official `Nishef1/ktest` GitHub releases endpoint on request. It offers an external browser link **only** if a newer Android APK asset exists. It does not silently download or install packages. Published APK updates require the same Android application ID and signing certificate as the installed APK; keep signing secrets outside GitHub.
+The Android foreground service currently declares `specialUse` with an explicit subtype. Google Play publication will require confirming the permitted use case and developer declarations.
 
-For a Play-distributed variant, use Google Play In-App Updates instead of GitHub release checking. Connectivity issues can prevent update checks, so releases should also be independently distributable.
-
-## Next gates
-
-1. Verify ARMv7 + ARM64 AAR/APK CI output and on-device DNS/TCP/TLS status.
-2. Verify TLS trust roots, captive portal behavior, IPv4/IPv6 differences, background transitions, and 16 KB native library alignment.
-3. Extract Go SOCKS mode behind the mobile API only when it is truly usable on Android.
-4. Benchmark HEV+SOCKS against a single integrated sing-box path with identical traffic and phone conditions; activate VPN only after UDP/DNS safety gates pass.
-
-## Installation troubleshooting
-
-- Download the **ZIP** workflow artifact and extract **KTest-Connection-Lab-v0.1.1-preview.apk**. Do not try to install the ZIP.
-- Minimum supported Android version is **8.0** (API 26). This preview packages Go native libraries for `armeabi-v7a` and `arm64-v8a`; Intel/x86 Android devices are **not supported** by this APK.
-- A new ephemeral debug signing key is created on each GitHub Actions runner. Therefore installing a new Actions preview **over an earlier CI preview with the same package ID can fail with a signature conflict**. For a test-only install, uninstall the earlier `com.nishef.ktest` first (this deletes its local app data), then install the new preview. Do not use this mechanism for production updates.
-- Before public or in-app updates, set up an owner-controlled persistent signing key in encrypted GitHub Actions secrets, separate signed release workflow, and publish verified Android APK release assets. A filename change is **not** a signing fix.
-- To collect an exact install failure reason, run `adb install -r KTest-Connection-Lab-v0.1.1-preview.apk` and check the `INSTALL_FAILED_*` code; do not diagnose from the filename alone.

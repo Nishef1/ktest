@@ -1,303 +1,520 @@
 package com.nishef.ktest
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import mobilebridge.Mobilebridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import mobilebridge.Mobilebridge
 import org.json.JSONObject
 
-private val ink = Color(0xFF0B141B)
-private val panel = Color(0xFF15242D)
-private val border = Color(0xFF29404B)
-private val mint = Color(0xFF83E0C5)
-private val secondary = Color(0xFFA0B3BD)
-private val cream = Color(0xFFF3F6F5)
-private val caution = Color(0xFFF3C57C)
-private val trouble = Color(0xFFFFAFA8)
+private val background = Color(0xFF080F15)
+private val surface = Color(0xFF14212A)
+private val edge = Color(0xFF293B48)
+private val accent = Color(0xFF79DFC6)
+private val white = Color(0xFFF1F5F4)
+private val muted = Color(0xFF9EB1BE)
+private val amber = Color(0xFFFFD08B)
+private val red = Color(0xFFFFAB9E)
+
+private data class ConnectionMode(val id: String, val title: String, val subtitle: String, val available: Boolean)
+private val modes = listOf(
+    ConnectionMode("balanced", "Balanced", "Adaptive routes · protected AI sites fail closed", true),
+    ConnectionMode("fast", "Fast", "Faster adaptive race · protected AI sites fail closed", true),
+    ConnectionMode("aether", "Aether", "Verified foreign exit required", false),
+    ConnectionMode("psiphon", "Psiphon", "Aether Psiphon profile", false),
+    ConnectionMode("tor", "Tor", "Tor-only route", false),
+    ConnectionMode("windscribe", "Windscribe", "Local anti-DPI bridge", false),
+    ConnectionMode("windscribe-aether", "Windscribe + Aether", "WARP carrier for Windscribe", false),
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = android.graphics.Color.rgb(8, 15, 21)
+        window.navigationBarColor = android.graphics.Color.rgb(8, 15, 21)
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    background = ink,
-                    surface = panel,
-                    primary = mint,
-                    onPrimary = ink,
-                    onBackground = cream,
-                    onSurface = cream,
-                )
-            ) {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                    ConnectionLab()
-                }
+            MaterialTheme(colorScheme = darkColorScheme(
+                background = background, surface = surface, primary = accent,
+                onPrimary = background, onBackground = white, onSurface = white
+            )) {
+                ConnectionApp()
             }
         }
     }
 }
 
 @Composable
-private fun ConnectionLab() {
-    var section by rememberSaveable { mutableIntStateOf(0) }
-    var url by rememberSaveable { mutableStateOf("https://example.com") }
-    var working by remember { mutableStateOf(false) }
-    var report by remember { mutableStateOf<JSONObject?>(null) }
+private fun ConnectionApp() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("ktest_android", Context.MODE_PRIVATE) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var modeId by rememberSaveable { mutableStateOf(prefs.getString("mode", "balanced") ?: "balanced") }
+    var status by remember { mutableStateOf(JSONObject(Mobilebridge.proxyStatus())) }
     var error by remember { mutableStateOf<String?>(null) }
-    var checkingUpdate by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    var target by rememberSaveable { mutableStateOf("https://example.com") }
+    var report by remember { mutableStateOf<JSONObject?>(null) }
+    var checkingUpdates by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
+    val running = status.optBoolean("running")
+    val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
+
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            status = runCatching { JSONObject(Mobilebridge.proxyStatus()) }
+                .getOrElse { JSONObject() }
+            if (ProxyService.lastError != null) error = ProxyService.lastError
+            delay(900)
+        }
+    }
 
     Column(
-        modifier = Modifier.fillMaxSize().background(ink)
+        Modifier.fillMaxSize().background(background)
             .padding(WindowInsets.safeDrawing.asPaddingValues())
     ) {
         Column(
-            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp, vertical = 26.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            Modifier.weight(1f).verticalScroll(rememberScrollState())
+                .padding(horizontal = 22.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("ktest", color = cream, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                Text("CONNECTION LAB", color = mint, fontSize = 10.sp, letterSpacing = 2.sp)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Column {
+                    Text("KTEST", fontWeight = FontWeight.ExtraBold, color = white,
+                        fontSize = 25.sp, letterSpacing = 2.sp)
+                    Text("CONNECTION", fontSize = 10.sp, color = accent, letterSpacing = 2.5.sp)
+                }
+                Surface(color = surface, shape = RoundedCornerShape(50.dp)) {
+                    Text("v${BuildConfig.VERSION_NAME} PREVIEW",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        color = muted, fontSize = 10.sp)
+                }
             }
-            if (section == 0) {
-                HeaderCard()
-                Text("بررسی دسترسی", color = cream, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
-                Text("یک مقصد مشخص را بدون تغییر DNS یا VPN گوشی آزمایش کن.",
-                    color = secondary, fontSize = 13.sp)
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    OutlinedTextField(
-                        value = url,
-                        onValueChange = { url = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("HTTPS URL") },
-                        singleLine = true,
-                        textStyle = TextStyle(textDirection = TextDirection.Ltr),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = mint, unfocusedBorderColor = border,
-                            focusedTextColor = cream, unfocusedTextColor = cream,
-                            focusedLabelColor = mint, unfocusedLabelColor = secondary
-                        ),
-                        shape = RoundedCornerShape(16.dp)
+            when (tab) {
+                0 -> {
+                    ConnectionScreen(
+                        activeMode = activeMode,
+                        running = running,
+                        status = status,
+                        error = error,
+                        onMode = {
+                            if (!running) {
+                                modeId = it
+                                prefs.edit().putString("mode", it).apply()
+                                error = null
+                            }
+                        },
+                        onPower = {
+                            error = null
+                            ProxyService.lastError = null
+                            try {
+                                val intent = Intent(context, ProxyService::class.java).apply {
+                                    action = if (running) ProxyService.ACTION_STOP else ProxyService.ACTION_CONNECT
+                                    putExtra(ProxyService.EXTRA_MODE, modeId)
+                                }
+                                if (running) context.startService(intent)
+                                else androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                            } catch (e: Exception) {
+                                error = e.message ?: "Unable to control local proxy"
+                            }
+                            scope.launch {
+                                delay(250)
+                                status = JSONObject(Mobilebridge.proxyStatus())
+                            }
+                        },
+                        onCopy = { text ->
+                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                                .setPrimaryClip(ClipData.newPlainText("KTest proxy address", text))
+                        }
                     )
                 }
-                Button(
-                    enabled = !working && url.isNotBlank(),
-                    onClick = {
-                        working = true
+                1 -> ToolsScreen(
+                    target = target, onTarget = { target = it }, busy = testing,
+                    report = report, error = error,
+                    runTest = {
+                        testing = true
                         report = null
                         error = null
                         scope.launch {
                             try {
-                                val json = withContext(Dispatchers.IO) {
-                                    Mobilebridge.diagnose(url.trim())
+                                report = withContext(Dispatchers.IO) {
+                                    JSONObject(Mobilebridge.diagnose(target.trim()))
                                 }
-                                report = JSONObject(json)
                             } catch (e: Exception) {
-                                error = e.message ?: "آزمایش انجام نشد."
+                                error = e.message ?: "Diagnostic failed"
                             } finally {
-                                working = false
+                                testing = false
                             }
+                        }
+                    }
+                )
+                else -> SettingsScreen(
+                    checking = checkingUpdates, update = update,
+                    check = {
+                        checkingUpdates = true
+                        scope.launch {
+                            update = try { withContext(Dispatchers.IO) { UpdateChecker.check() } }
+                            catch (_: Exception) { UpdateInfo("Cannot reach GitHub releases right now.") }
+                            checkingUpdates = false
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().height(54.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = mint, contentColor = ink),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Text(if (working) "در حال بررسی..." else "شروع آزمایش",
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                }
-                Text("نتیجه فقط برای مسیر پیش‌فرض سیستم است؛ در صورت فعال بودن VPN ممکن است از آن عبور کند.",
-                    color = secondary, fontSize = 12.sp)
-                if (error != null) {
-                    Surface(color = panel, shape = RoundedCornerShape(18.dp)) {
-                        Text(error.orEmpty(), color = trouble, modifier = Modifier.padding(16.dp))
+                    openDownload = { url ->
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                     }
+                )
+            }
+        }
+        NavigationBar(containerColor = surface, contentColor = white, tonalElevation = 0.dp) {
+            for ((index, title) in listOf("Connect", "Tools", "Settings").withIndex()) {
+                NavigationBarItem(
+                    selected = tab == index,
+                    onClick = { tab = index; error = null },
+                    icon = {
+                        Text(when (index) { 0 -> "◉"; 1 -> "◇"; else -> "⚙" }, fontSize = 19.sp)
+                    },
+                    label = { Text(title, fontSize = 12.sp) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = accent, selectedTextColor = accent,
+                        unselectedIconColor = muted, unselectedTextColor = muted,
+                        indicatorColor = edge
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionScreen(
+    activeMode: ConnectionMode, running: Boolean, status: JSONObject, error: String?,
+    onMode: (String) -> Unit, onPower: () -> Unit, onCopy: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column {
+            Text("Your connection", fontSize = 25.sp, fontWeight = FontWeight.SemiBold, color = white)
+            Spacer(Modifier.height(5.dp))
+            Text("Choose a route and control your proxy.", color = muted, fontSize = 13.sp)
+        }
+        Surface(color = surface, shape = RoundedCornerShape(29.dp)) {
+            Column(
+                Modifier.fillMaxWidth().padding(vertical = 24.dp, horizontal = 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                val canConnect = activeMode.available
+                val stateLabel = when {
+                    running -> "PROXY ACTIVE"
+                    !canConnect -> "NOT AVAILABLE YET"
+                    else -> "DISCONNECTED"
                 }
-                if (report != null) {
-                    val data = report!!
-                    Text("نتایج واقعی", color = cream, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                    StageRow("DNS", data.optString("dns_status", "not_run"))
-                    StageRow("TCP", data.optString("tcp_status", "not_run"))
-                    StageRow("TLS", data.optString("tls_status", "not_run"))
-                    Surface(color = panel, shape = RoundedCornerShape(18.dp)) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("خلاصه", color = mint, fontSize = 12.sp)
-                            Text(data.optString("outcome", "unknown"), color = cream,
-                                fontWeight = FontWeight.Medium)
-                            Text("زمان کل: ${data.optLong("total_duration_ms")} میلی‌ثانیه",
-                                color = secondary, fontSize = 12.sp)
-                            Text("TCP موفق یا TLS موفق، به‌تنهایی به معنی VPN فعال نیست.",
-                                color = secondary, fontSize = 12.sp)
-                        }
-                    }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).background(
+                        if (running) accent else if (!canConnect) amber else muted,
+                        CircleShape
+                    ))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stateLabel, color = if (running) accent else muted,
+                        fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 1.4.sp)
                 }
-            } else {
-                Text("تنظیمات", color = cream, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Surface(color = panel, shape = RoundedCornerShape(23.dp)) {
-                    Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("به‌روزرسانی برنامه", color = cream, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                        Text("نسخهٔ ${BuildConfig.VERSION_NAME} • بررسی دستی فایل‌های APK رسمی GitHub",
-                            color = secondary, fontSize = 12.sp)
-                        Button(
-                            enabled = !checkingUpdate,
-                            onClick = {
-                                checkingUpdate = true
-                                update = null
-                                scope.launch {
-                                    update = try {
-                                        withContext(Dispatchers.IO) { UpdateChecker.check() }
-                                    } catch (e: Exception) {
-                                        UpdateInfo("به GitHub دسترسی پیدا نشد. اتصال را بررسی کن.")
-                                    }
-                                    checkingUpdate = false
+                PowerOrb(enabled = canConnect || running, active = running, onClick = onPower)
+                Text(
+                    when {
+                        running -> "Disconnect"
+                        !canConnect -> "Unavailable on Android"
+                        else -> "Connect"
+                    },
+                    color = white, fontSize = 23.sp, fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    when {
+                        running -> "Local proxy is running · Not a system VPN"
+                        !canConnect -> "This desktop core has not been ported."
+                        else -> "Start local SOCKS5 + HTTP proxy"
+                    },
+                    color = muted, textAlign = TextAlign.Center, fontSize = 12.sp
+                )
+                if (running) {
+                    Spacer(Modifier.height(8.dp))
+                    for ((label, key) in listOf("SOCKS5" to "socks", "HTTP" to "http")) {
+                        val address = status.optString(key)
+                        if (address.isNotBlank()) {
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp)) {
+                                Text(label, color = muted, modifier = Modifier.width(60.dp),
+                                    fontSize = 10.sp)
+                                Text(address, color = white, modifier = Modifier.weight(1f),
+                                    fontSize = 13.sp)
+                                TextButton(onClick = { onCopy(address) }) {
+                                    Text("Copy", color = accent, fontSize = 12.sp)
                                 }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = mint, contentColor = ink),
-                            shape = RoundedCornerShape(14.dp)
-                        ) { Text(if (checkingUpdate) "در حال بررسی..." else "بررسی نسخهٔ جدید") }
-                        if (update != null) {
-                            Text(update!!.message, color = cream, fontSize = 13.sp)
-                            if (update!!.downloadUrl != null) {
-                                TextButton(onClick = {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(update!!.downloadUrl))
-                                    )
-                                }) { Text("دریافت از صفحهٔ انتشار رسمی", color = mint) }
                             }
                         }
-                        Text("آپدیت خودکار یا نصب بی‌اجازه انجام نمی‌شود.",
-                            color = secondary, fontSize = 12.sp)
-                    }
-                }
-                Surface(color = panel, shape = RoundedCornerShape(23.dp)) {
-                    Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("هستهٔ اتصال", color = cream, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Go: فعال برای آزمایش‌های DNS / TCP / TLS", color = mint, fontSize = 13.sp)
-                        Text("Proxy و VPN: هنوز فعال نشده‌اند؛ اول باید امنیت مسیر کامل تأیید شود.",
-                            color = secondary, fontSize = 13.sp)
-                        Text("قابلیت‌های اختیاری MITM و CA در کد اصلی نگهداری می‌شوند؛ این نسخه درخواست نصب گواهی نمی‌کند.",
-                            color = secondary, fontSize = 12.sp)
                     }
                 }
             }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().background(panel).padding(6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            TextButton(onClick = { section = 0 }) {
-                Text("خانه", color = if (section == 0) mint else secondary,
-                    fontWeight = if (section == 0) FontWeight.Bold else FontWeight.Normal)
+
+        Surface(color = surface, shape = RoundedCornerShape(24.dp)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("CONNECTION MODE", color = muted, fontSize = 11.sp,
+                        letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
+                    if (running) Text("LOCKED WHILE ACTIVE", color = amber, fontSize = 9.sp)
+                }
+                Spacer(Modifier.height(14.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    modes.forEach { mode ->
+                        val selected = activeMode.id == mode.id
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp))
+                                .background(if (selected) edge else Color.Transparent)
+                                .clickable(enabled = !running) { onMode(mode.id) }
+                                .padding(horizontal = 12.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(Modifier.size(17.dp).background(
+                                if (selected) accent else edge, CircleShape
+                            ), contentAlignment = Alignment.Center) {
+                                if (selected) Box(Modifier.size(7.dp).background(background, CircleShape))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(mode.title, color = white, fontSize = 14.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+                                Text(mode.subtitle, color = muted, fontSize = 11.sp)
+                            }
+                            if (!mode.available) {
+                                Text("SOON", color = amber, fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold)
+                            } else if (selected) {
+                                Text("READY", color = accent, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
             }
-            TextButton(onClick = { section = 1 }) {
-                Text("تنظیمات", color = if (section == 1) mint else secondary,
-                    fontWeight = if (section == 1) FontWeight.Bold else FontWeight.Normal)
+        }
+
+        Surface(color = Color(0xFF1A2832), shape = RoundedCornerShape(19.dp)) {
+            Column(Modifier.fillMaxWidth().padding(17.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("COVERAGE", color = accent, fontSize = 11.sp,
+                    letterSpacing = 1.4.sp, fontWeight = FontWeight.Bold)
+                Text("Proxy apps only", color = white, fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp)
+                Text("Set the app to use the local SOCKS5 or HTTP endpoint. Other apps are not tunneled. TUN/VPN mode is under development.",
+                    color = muted, fontSize = 12.sp, lineHeight = 18.sp)
+                Text("Protected AI sites need a verified foreign exit. Local paths fail closed for known protected hostnames.",
+                    color = amber, fontSize = 11.sp, lineHeight = 16.sp)
+            }
+        }
+        if (error != null) {
+            Surface(color = Color(0xFF37262B), shape = RoundedCornerShape(14.dp)) {
+                Text(error, color = red, modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    fontSize = 12.sp)
             }
         }
     }
 }
 
 @Composable
-private fun HeaderCard() {
-    Surface(color = panel, shape = RoundedCornerShape(27.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(23.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(9.dp).background(mint, CircleShape))
-                Spacer(Modifier.size(9.dp))
-                Text("RESEARCH MODE", color = mint, fontSize = 11.sp, letterSpacing = 1.sp)
-            }
-            Text("اول واقعیت شبکه را پیدا می‌کنیم.", color = cream,
-                fontSize = 25.sp, fontWeight = FontWeight.SemiBold, lineHeight = 34.sp)
-            Text("آزمایش دقیق، بدون ادعای اتصال یا تغییر تنظیمات گوشی.",
-                color = secondary, fontSize = 13.sp, lineHeight = 21.sp)
+private fun PowerOrb(enabled: Boolean, active: Boolean, onClick: () -> Unit) {
+    val transition = rememberInfiniteTransition(label = "power")
+    val pulse by transition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "pulse"
+    )
+    val color = when {
+        active -> accent
+        enabled -> white
+        else -> muted
+    }
+    Box(
+        modifier = Modifier.size(205.dp)
+            .semantics { contentDescription = if (active) "Disconnect proxy" else "Connect proxy" }
+            .clip(CircleShape)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val radius = size.minDimension / 2
+            drawCircle(
+                color = if (active) accent.copy(alpha = .07f + pulse * .09f)
+                    else Color(0xFF253740),
+                radius = radius * (if (active) .97f + pulse * .03f else .93f)
+            )
+            drawCircle(color = if (active) accent.copy(alpha = .26f) else edge,
+                radius = radius * .80f, style = Stroke(width = 1.5.dp.toPx()))
+            val ringR = radius * .65f
+            drawArc(
+                color = color, startAngle = -60f, sweepAngle = 300f, useCenter = false,
+                topLeft = Offset(center.x - ringR, center.y - ringR),
+                size = Size(ringR * 2f, ringR * 2f),
+                style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
+            )
+            drawLine(color, Offset(center.x, center.y - radius * .83f),
+                Offset(center.x, center.y + radius * .06f),
+                strokeWidth = 10.dp.toPx(), cap = StrokeCap.Round)
         }
     }
 }
 
 @Composable
-private fun StageRow(name: String, status: String) {
-    val successful = status == "ok"
-    val color = when (status) {
-        "ok" -> mint
-        "failed" -> trouble
-        else -> caution
-    }
-    Surface(color = panel, shape = RoundedCornerShape(17.dp)) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 17.dp, vertical = 15.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(name, color = cream, fontWeight = FontWeight.SemiBold)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).background(color, CircleShape))
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    if (successful) "موفق" else if (status == "failed") "ناموفق" else status,
-                    color = color, fontSize = 12.sp
+private fun ToolsScreen(
+    target: String, onTarget: (String) -> Unit, busy: Boolean,
+    report: JSONObject?, error: String?, runTest: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(17.dp)) {
+        Text("Tools & diagnostics", fontSize = 25.sp, color = white,
+            fontWeight = FontWeight.SemiBold)
+        Text("Technical tools from the desktop client live here.",
+            color = muted, fontSize = 13.sp)
+        Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                Text("NETWORK DIAGNOSIS", color = accent, fontSize = 11.sp, letterSpacing = 1.4.sp)
+                Text("Check DNS, TCP and TLS independently.", color = muted, fontSize = 12.sp)
+                OutlinedTextField(
+                    value = target, onValueChange = onTarget, modifier = Modifier.fillMaxWidth(),
+                    singleLine = true, label = { Text("Destination URL") },
+                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = accent, unfocusedBorderColor = edge,
+                        focusedTextColor = white, unfocusedTextColor = white
+                    )
                 )
+                Button(onClick = runTest, enabled = !busy && target.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = background)) {
+                    Text(if (busy) "Testing…" else "Run diagnosis")
+                }
+                if (report != null) {
+                    listOf("dns_status" to "DNS", "tcp_status" to "TCP", "tls_status" to "TLS").forEach {
+                        val state = report.optString(it.first)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(it.second, color = muted)
+                            Text(state.uppercase(), color = if (state == "ok") accent else amber)
+                        }
+                    }
+                    Text("Outcome: ${report.optString("outcome", "Unknown")}", color = white)
+                    Text("Total: ${report.optLong("total_duration_ms")} ms",
+                        color = muted, fontSize = 12.sp)
+                }
+                if (error != null) Text(error, color = red, fontSize = 12.sp)
+                Text("Diagnostics use Android's default network. Success does not prove a VPN connection.",
+                    color = muted, fontSize = 11.sp)
+            }
+        }
+        Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("MORE DESKTOP TOOLS", color = accent, fontSize = 11.sp, letterSpacing = 1.4.sp)
+                for (entry in listOf(
+                    "Aether comparison" to "Requires Android-compatible Aether core",
+                    "Windscribe tests" to "Requires Windscribe integration",
+                    "CDN / fronting tests" to "Requires Android research adapter",
+                    "Saved recommendations" to "Requires per-network measurements"
+                )) {
+                    Column {
+                        Text(entry.first, color = white, fontWeight = FontWeight.Medium)
+                        Text(entry.second, color = muted, fontSize = 11.sp)
+                    }
+                    HorizontalDivider(color = edge)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    checking: Boolean, update: UpdateInfo?, check: () -> Unit,
+    openDownload: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Text("Settings", fontSize = 25.sp, color = white, fontWeight = FontWeight.SemiBold)
+        Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
+            Column(Modifier.fillMaxWidth().padding(19.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("APP UPDATES", color = accent, fontSize = 11.sp, letterSpacing = 1.5.sp)
+                Text("KTest Connection · ${BuildConfig.VERSION_NAME}", color = white,
+                    fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text("Check signed releases manually. No background downloads or silent installs.",
+                    color = muted, fontSize = 12.sp)
+                Button(onClick = check, enabled = !checking,
+                    colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = background)) {
+                    Text(if (checking) "Checking…" else "Check for updates")
+                }
+                if (update != null) {
+                    Text(update.message, color = white, fontSize = 12.sp)
+                    if (update.downloadUrl != null) {
+                        TextButton(onClick = { openDownload(update.downloadUrl) }) {
+                            Text("Open official download", color = accent)
+                        }
+                    }
+                }
+            }
+        }
+        Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
+            Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("ENGINE & PRIVACY", color = accent, fontSize = 11.sp, letterSpacing = 1.5.sp)
+                Text("Go local proxy core", color = white, fontWeight = FontWeight.SemiBold)
+                Text("Balanced and Fast use the built-in desktop Go TCP paths. No external VPN exit is bundled.",
+                    color = muted, fontSize = 12.sp)
+                HorizontalDivider(color = edge)
+                Text("System VPN / HEV", color = white, fontWeight = FontWeight.SemiBold)
+                Text("Not enabled yet. UDP, DNS handling and routing-loop protection must be validated first.",
+                    color = muted, fontSize = 12.sp)
+                HorizontalDivider(color = edge)
+                Text("MITM and certificates", color = white, fontWeight = FontWeight.SemiBold)
+                Text("The optional domain-fronting CA code is preserved in the Go repository. No certificate is installed by this app.",
+                    color = muted, fontSize = 12.sp)
             }
         }
     }
