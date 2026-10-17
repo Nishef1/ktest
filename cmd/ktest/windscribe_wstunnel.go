@@ -282,9 +282,17 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 				}
 				for _, endpoint := range wsEndpoints {
 					addr := net.JoinHostPort(endpoint.ip, "443")
-					out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " entry=" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
-						return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial})
-					}})
+					// Preserve the known Chrome path and offer Windscribe's
+					// upstream TLS fingerprint as a separately scored retry.
+					// A ClientHello alone is not evidence of working OpenVPN.
+					for _, fp := range []struct {
+						name     string
+						official bool
+					}{{"chrome", false}, {"windscribe", true}} {
+						out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+							return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial, OfficialHello: fp.official})
+						}})
+					}
 				}
 				// Windscribe's published Android port map selects ip3 for
 				// Stealth and ip2 for raw OpenVPN TCP. An ip3 TLS listener
@@ -296,12 +304,16 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 							continue
 						}
 						addr := net.JoinHostPort(endpoint.ip, "443")
-						out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " entry=" + endpoint.ip, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
-							// Provider-advertised Stealth endpoints can present a generic
-							// certificate. Like Windscribe's own wrapper, authentication
-							// belongs to inner OpenVPN, not the outer TLS name.
-							return wstunnel.DialStealth(ctx, wstunnel.Config{Addr: addr, SNI: sni, Dial: leg.dial})
-						}})
+						for _, fp := range []struct {
+							name     string
+							official bool
+						}{{"chrome", false}, {"windscribe", true}} {
+							out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+								// Windscribe's official wrapper leaves outer TLS chain
+								// verification to the authenticated inner OpenVPN client.
+								return wstunnel.DialStealth(ctx, wstunnel.Config{Addr: addr, SNI: sni, Dial: leg.dial, OfficialHello: fp.official})
+							}})
+						}
 					}
 				}
 			}

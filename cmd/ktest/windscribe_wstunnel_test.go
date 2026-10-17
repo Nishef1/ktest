@@ -585,7 +585,7 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}
 	}
-	if len(names) != 2+2*2*(2+1)+1 {
+	if len(names) != 2+2*2*(2+1)*2+1 {
 		t.Fatalf("%d carriers:\n%s", len(names), all)
 	}
 }
@@ -791,5 +791,27 @@ func TestWindscribeCarrierReportsUnexpectedUpstreamEOFOnce(t *testing.T) {
 	_, _ = c.Read(buf)
 	if len(logs) != 1 {
 		t.Fatalf("local shutdown was misreported as upstream failure: %v", logs)
+	}
+}
+
+func TestWindscribeCarrierOffersUpstreamHelloWithoutReplacingChrome(t *testing.T) {
+	b := newWSBridge(wsOptions{direct: true, sni: "example.com"}, nil, nil, func(string, ...any) {})
+	b.catalog = newWSNodeCatalog()
+	if err := b.catalog.replace("global", []byte(`{"data":[{"nodes":[{"ip":"192.0.2.10","ip2":"203.0.113.12","ip3":"192.0.2.11","hostname":"node.example.com"}]}]}`), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	names := make(map[string]bool)
+	for _, c := range b.carriersFor("203.0.113.12") {
+		names[c.name] = true
+	}
+	for _, want := range []string{
+		"WStunnel sni=example.com entry=192.0.2.10 hello=chrome",
+		"WStunnel sni=example.com entry=192.0.2.10 hello=windscribe",
+		"Stealth sni=example.com entry=192.0.2.11 hello=chrome",
+		"Stealth sni=example.com entry=192.0.2.11 hello=windscribe",
+	} {
+		if !names[want] {
+			t.Fatalf("fingerprint fallback profile missing: %q", want)
+		}
 	}
 }

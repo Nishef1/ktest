@@ -124,7 +124,7 @@ func TestCarriersActuallyDialAdvertisedNonNeighbourAddresses(t *testing.T) {
 			_, _ = carrier.open(context.Background(), "203.0.113.100", "443")
 		}
 	}
-	want := []string{"198.51.100.9:443", "192.0.2.210:443", "192.0.2.210:443"}
+	want := []string{"198.51.100.9:443", "198.51.100.9:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443"}
 	if !reflect.DeepEqual(targets, want) {
 		t.Fatalf("wrong carrier destinations: %v, want %v", targets, want)
 	}
@@ -172,8 +172,8 @@ func TestStealthOnlyTargetsOfficialProviderIP3(t *testing.T) {
 			t.Fatalf("Stealth tested a non-ip3 endpoint: %+v", candidate)
 		}
 	}
-	if stealth != 2 {
-		t.Fatalf("expected direct and local anti-DPI ip3 Stealth candidates, got %d", stealth)
+	if stealth != 4 {
+		t.Fatalf("expected both client-hello profiles on direct and local ip3 Stealth, got %d", stealth)
 	}
 	b.opts.serverIP = "198.51.100.55"
 	for _, candidate := range b.carriersFor("203.0.113.100") {
