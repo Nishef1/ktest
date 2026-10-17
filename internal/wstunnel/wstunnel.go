@@ -10,6 +10,7 @@ package wstunnel
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -231,7 +232,7 @@ func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Co
 		return nil, nil, stageError("websocket", err)
 	}
 	br := bufio.NewReaderSize(u, 32<<10)
-	resp, err := http.ReadResponse(br, nil)
+	resp, err := readBoundedUpgrade(br)
 	if err != nil {
 		return nil, nil, stageError("websocket", fmt.Errorf("upgrade: %w", err))
 	}
@@ -244,6 +245,30 @@ func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Co
 		return nil, nil, stageError("websocket", errors.New("upgrade: not a WebSocket server"))
 	}
 	return u, br, nil
+}
+
+// readBoundedUpgrade limits the untrusted server's HTTP response headers
+// without discarding already-buffered binary WebSocket frames that follow.
+func readBoundedUpgrade(br *bufio.Reader) (*http.Response, error) {
+	const maxUpgradeHeaders = 16 << 10
+	var headers bytes.Buffer
+	for headers.Len() < maxUpgradeHeaders {
+		part, err := br.ReadSlice('\n')
+		if headers.Len()+len(part) > maxUpgradeHeaders {
+			return nil, errors.New("wstunnel: upgrade response headers too large")
+		}
+		_, _ = headers.Write(part)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if bytes.HasSuffix(headers.Bytes(), []byte("\r\n\r\n")) {
+			return http.ReadResponse(bufio.NewReader(bytes.NewReader(headers.Bytes())), nil)
+		}
+	}
+	return nil, errors.New("wstunnel: upgrade response headers too large")
 }
 
 // writeUpgradeRequest preserves all HTTP upgrade bytes even when the

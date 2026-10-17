@@ -414,7 +414,7 @@ func TestReceivedWebSocketCloseDoesNotBlockReadingPeer(t *testing.T) {
 // Short successful writes are legal for io.Writer and must not truncate the
 // upgrade request before the first OpenVPN record is tunneled.
 type partialUpgradeWriter struct {
-	out bytes.Buffer
+	out   bytes.Buffer
 	chunk int
 }
 func (w *partialUpgradeWriter) Write(b []byte) (int, error) {
@@ -431,9 +431,9 @@ func TestWebSocketUpgradeHandlesShortWrites(t *testing.T) {
 	}
 }
 func TestWebSocketUpgradeRequiresConnectionHeaderToken(t *testing.T) {
-	for _, tc := range []struct{
+	for _, tc := range []struct {
 		values []string
-		want bool
+		want   bool
 	}{
 		{[]string{"keep-alive, Upgrade"}, true},
 		{[]string{"upgrade"}, true},
@@ -443,5 +443,22 @@ func TestWebSocketUpgradeRequiresConnectionHeaderToken(t *testing.T) {
 		if got := headerContainsToken(tc.values, "Upgrade"); got != tc.want {
 			t.Fatalf("Connection %v accepted=%t, want %t", tc.values, got, tc.want)
 		}
+	}
+}
+
+func TestWebSocketUpgradeResponseHeadersAreBoundedAndBinaryDataPreserved(t *testing.T) {
+	good := "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"
+	reader := bufio.NewReader(strings.NewReader(good + "\x82\x03abc"))
+	resp, err := readBoundedUpgrade(reader)
+	if err != nil || resp.StatusCode != 101 {
+		t.Fatalf("valid upgrade was not accepted: %v", err)
+	}
+	next := make([]byte, 5)
+	if _, err := io.ReadFull(reader, next); err != nil || !bytes.Equal(next, []byte{0x82, 3, 'a', 'b', 'c'}) {
+		t.Fatalf("reading HTTP headers consumed the first tunneled bytes: %v", err)
+	}
+	long := "HTTP/1.1 101 Switching Protocols\r\nX-Padding: " + strings.Repeat("x", 17<<10) + "\r\n\r\n"
+	if _, err := readBoundedUpgrade(bufio.NewReader(strings.NewReader(long))); err == nil {
+		t.Fatal("unbounded HTTP upgrade headers accepted")
 	}
 }
