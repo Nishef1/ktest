@@ -41,8 +41,8 @@ type vpnTunPlan struct {
 
 var defaultTunPlan = vpnTunPlan{
     MTU: 1280,
-    IPv4Address: "198.18.0.1", IPv4Prefix: 30,
-    IPv6Address: "fd00:198:18::1", IPv6Prefix: 126,
+    IPv4Address: "172.19.0.1", IPv4Prefix: 30,
+    IPv6Address: "fdfe:dcba:9876::1", IPv6Prefix: 126,
     IPv4Route: "0.0.0.0", IPv6Route: "::",
     IPv4DNS: "1.1.1.1", IPv6DNS: "2606:4700:4700::1111",
 }

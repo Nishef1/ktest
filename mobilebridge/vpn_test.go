@@ -56,3 +56,16 @@ func TestVpnTunPlanMatchesFullDualStackPolicy(t *testing.T) {
         t.Fatalf("incomplete Go-controlled Android TUN plan: %+v", p)
     }
 }
+
+func TestStopProxyStopsActivePacketAdapterFirst(t *testing.T) {
+    defer func() { StopVpnTun(); SetAndroidVpnPacketAdapter(nil) }()
+    backend := &fakePacketAdapter{starts: 1}
+    vpnMu.Lock()
+    packetAdapter = backend
+    vpnActive = true
+    vpnMu.Unlock()
+    StopProxy()
+    if backend.stops != 1 {
+        t.Fatalf("disconnect did not stop the attached TUN dataplane: %d", backend.stops)
+    }
+}

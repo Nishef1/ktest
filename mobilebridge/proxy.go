@@ -156,14 +156,19 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     run := func(name string, serve func() error) {
         err := serve()
         if ctx.Err() == nil {
-            // If either listener dies unexpectedly, stop the whole service.
+            // A failed Go listener also tears down the platform VPN, rather
+            // than leaving a TUN pointed at a dead local SOCKS endpoint.
             _ = name
             _ = err
             proxyMu.Lock()
-            if activeProxy == session {
+            stopped := activeProxy == session
+            if stopped {
                 stopLocked()
             }
             proxyMu.Unlock()
+            if stopped {
+                StopVpnTun()
+            }
         }
     }
     go run("socks", func() error { return proxy.Serve(ctx, socksListener) })
@@ -184,6 +189,9 @@ func stopLocked() {
 
 // StopProxy terminates listeners and active proxied streams.
 func StopProxy() string {
+    // Stop packet forwarding BEFORE the SOCKS endpoint disappears.
+    // Android still owns the TUN fd and closes it during service teardown.
+    StopVpnTun()
     proxyMu.Lock()
     defer proxyMu.Unlock()
     proxyGeneration++
