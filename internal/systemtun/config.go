@@ -124,10 +124,11 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 		"inbounds": []any{map[string]any{
 			"type": "tun", "tag": "ktest-tun", "interface_name": "ktest-tun",
 			"address": []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
-			// strict_route would add Windows firewall rules that block DNS on every
-			// other interface for every process, which also blocks the proxy's own
-			// name lookups. A DNS answer that still leaks out is poisoned at worst,
-			// and a poisoned answer is recovered from the TLS SNI by the proxy.
+			// strict_route is deliberately disabled for compatibility with the
+			// physical-interface-bound bootstrap resolver. Consequently this
+			// mode does NOT guarantee DNS leak protection on multihomed Windows.
+			// Do not assume a leaked/poisoned response can always be recovered
+			// from TLS SNI (ECH, IP-only and non-TLS traffic have no usable SNI).
 			"auto_route": true, "strict_route": false, "stack": "gvisor",
 		}},
 		"outbounds": []any{

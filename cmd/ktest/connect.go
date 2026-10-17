@@ -964,7 +964,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				return 0
 			}
 			if tn != nil {
-				coverage = "TUN active · system TCP verified; LAN/helpers exempt, most UDP rejected"
+				coverage = "TUN active · TCP path verified; helper/LAN traffic exempt, most UDP rejected; Windows DNS may leak"
 			} else {
 				verdict = toneWarn
 			}

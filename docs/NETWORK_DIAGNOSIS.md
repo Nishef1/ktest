@@ -60,3 +60,11 @@ See [connection policies](CONNECTION_MODES.md), [Windscribe tests](WINDSCRIBE_BO
 ## Verified upstream limitations (2026-10-17)
 
 The published Aether 2.3.0 may re-enable WARP via a filtered API on each MASQUE startup even with a saved identity. CluvexStudio/Aether #147 fixes this in newer source, not in the latest published v2.3.0 artifact. Increasing ktest timeouts cannot solve a blocked API. Do not silently replace the pinned binary with an unaudited snapshot. The upstream TLS verification default is off; --tls-verify is supported but should be validated against the intended Cloudflare TLS endpoint before enabling for all methods. Preserve a fail-closed verified-foreign-exit policy regardless of the upstream core's exit-location claim.
+
+## Windows TUN privacy boundary and process isolation
+
+The whole-PC Windows TUN currently uses `strict_route=false` to keep its physical bootstrap DNS resolver usable. This **does not provide a DNS kill switch**, and Windows may send DNS queries on another physical network interface. A successful TCP system-route probe cannot prove DNS privacy, IPv6 privacy, or UDP tunneling. sing-box documents `strict_route` as a Windows DNS-leak safeguard but also warns of application compatibility problems; do not blindly enable it without replacing the helper bootstrap resolver and verifying behavior across connect/disconnect, sleep, VPN changes and dual-stack networks.
+
+The running ktest executable and its bundled helpers are exempted using their executable **paths**, not just process names. On Windows tracked subprocesses use kill-on-close Job Objects so their descendants cannot normally outlive a completed helper. An already-running unrelated VPN is not automatically controlled by these cleanup rules.
+
+Automated Aether component installation remains **Windows-only**, because the pinned v2.3.0 installer currently specifies the Windows archive and helper paths. Compiling the ktest Go executable on Linux/macOS is not equivalent to installing working Aether/Psiphon system components on those platforms.
