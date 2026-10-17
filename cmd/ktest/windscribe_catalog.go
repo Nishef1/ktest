@@ -58,7 +58,10 @@ func publicWSIP(s string) bool {
 func parseWSNodes(body []byte) (map[string]wsNode, error) {
 	var response struct {
 		Data []struct {
-			Nodes []wsNode `json:"nodes"`
+			Nodes  []wsNode `json:"nodes"`
+			Groups []struct {
+				Nodes []wsNode `json:"nodes"`
+			} `json:"groups"`
 		} `json:"data"`
 	}
 	if len(body) > wsCatalogLimit {
@@ -68,15 +71,28 @@ func parseWSNodes(body []byte) (map[string]wsNode, error) {
 		return nil, err
 	}
 	nodes := make(map[string]wsNode)
-	for _, country := range response.Data {
-		for _, node := range country.Nodes {
+	addNodes := func(list []wsNode) error {
+		for _, node := range list {
 			if !publicWSIP(node.TCP) || !publicWSIP(node.IP) || !publicWSIP(node.IP3) || !validHostname(node.Hostname) {
-				return nil, errors.New("Windscribe node list contains an invalid address or hostname")
+				return errors.New("Windscribe node list contains an invalid address or hostname")
 			}
 			if prev, ok := nodes[node.TCP]; ok && prev != node {
-				return nil, fmt.Errorf("ambiguous Windscribe TCP node %s", node.TCP)
+				return fmt.Errorf("ambiguous Windscribe TCP node %s", node.TCP)
 			}
 			nodes[node.TCP] = node
+		}
+		return nil
+	}
+	for _, country := range response.Data {
+		// Older serverlist/openvpn responses place nodes directly in each
+		// country; current mob-v2 responses place them under groups[].nodes.
+		if err := addNodes(country.Nodes); err != nil {
+			return nil, err
+		}
+		for _, group := range country.Groups {
+			if err := addNodes(group.Nodes); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if len(nodes) == 0 {

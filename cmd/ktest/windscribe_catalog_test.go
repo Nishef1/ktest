@@ -207,3 +207,19 @@ func TestStealthKeepsIP3WhenItAliasesGeneralIP(t *testing.T) {
 		t.Fatal("legitimate aliased Stealth endpoint vanished from carriers")
 	}
 }
+
+func TestWindscribeCatalogParsesCurrentMobV2NestedGroups(t *testing.T) {
+	// Windscribe's public mob-v2 schema nests nodes under location groups.
+	// Empty groups are valid and must not invalidate other reachable nodes.
+	body := []byte(`{"data":[{"name":"US East","groups":[{"city":"Chicago","nick":"Cub","nodes":[{"ip":"198.51.100.10","ip2":"203.0.113.100","ip3":"192.0.2.10","hostname":"us-east-101.whiskergalaxy.com"}]},{"city":"Boston","nick":"Tea Party"},{"city":"New York","nodes":[{"ip":"198.51.100.20","ip2":"203.0.113.200","ip3":"192.0.2.20","hostname":"us-east-102.whiskergalaxy.com"}]}]}]}`)
+	c := newWSNodeCatalog()
+	if err := c.replace("global", body, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for tcp, expected := range map[string]string{"203.0.113.100": "192.0.2.10", "203.0.113.200": "192.0.2.20"} {
+		entries := c.endpointsByField(tcp, "ip3")
+		if len(entries) != 1 || entries[0].ip != expected {
+			t.Fatalf("mob-v2 nested node %s omitted: %+v", tcp, entries)
+		}
+	}
+}
