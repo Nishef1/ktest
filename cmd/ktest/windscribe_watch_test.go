@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"bytes"
 	"context"
 	"strings"
@@ -129,5 +130,31 @@ func TestWindscribeStatusIssueDoesNotEchoCredentials(t *testing.T) {
 	message = windscribeStatusIssue("Login state: Logged in\nConnect state: Unknown", windscribeUnknown, true)
 	if !strings.Contains(message, "connection state") {
 		t.Fatalf("unrecognized connection treated as trusted: %q", message)
+	}
+}
+
+func TestWindscribeCLIStatusGraceExpiresWithoutInventingDisconnection(t *testing.T) {
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name     string
+		previous windscribeState
+		last     time.Time
+		parsed   windscribeState
+		login    bool
+		err      error
+		want     windscribeState
+	}{
+		{"recent IPC error", windscribeConnected, now.Add(-5 * time.Second), windscribeUnknown, false, errors.New("IPC"), windscribeConnected},
+		{"expired IPC error", windscribeConnected, now.Add(-20 * time.Second), windscribeUnknown, false, errors.New("IPC"), windscribeUnknown},
+		{"no prior status", windscribeConnected, time.Time{}, windscribeUnknown, false, errors.New("IPC"), windscribeUnknown},
+		{"explicit logout", windscribeConnected, now, windscribeUnknown, false, nil, windscribeUnknown},
+		{"unrecognized CLI status", windscribeConnected, now, windscribeUnknown, true, nil, windscribeUnknown},
+		{"actual disconnect", windscribeConnected, now, windscribeDisconnected, true, nil, windscribeDisconnected},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := windscribeObservedState(test.previous, test.last, now, test.parsed, test.login, test.err); got != test.want {
+				t.Fatalf("got %s, want %s", got, test.want)
+			}
+		})
 	}
 }

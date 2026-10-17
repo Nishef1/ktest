@@ -144,6 +144,7 @@ type windscribeMonitor struct {
 	protocol            string
 	vpnIP               string
 	connectedOnce       bool
+	lastValidCLIStatus  time.Time
 	proxy               *smartproxy.Proxy
 	nextReconnect       time.Time
 	disconnectedSamples int
@@ -209,20 +210,30 @@ func (m *windscribeMonitor) command(ctx context.Context, args ...string) ([]byte
 	return cmd.CombinedOutput()
 }
 
+// A temporary IPC failure is not evidence of disconnection, but the CLI's
+// last Connected report must not be trusted forever. An explicit logout or
+// unrecognized status fails closed immediately.
+func windscribeObservedState(previous windscribeState, lastValid, now time.Time, parsed windscribeState, loggedIn bool, commandErr error) windscribeState {
+	if commandErr == nil {
+		if !loggedIn {
+			return windscribeUnknown
+		}
+		return parsed
+	}
+	if previous == windscribeConnected && !lastValid.IsZero() && now.Sub(lastValid) <= 15*time.Second {
+		return windscribeConnected
+	}
+	return windscribeUnknown
+}
+
 func (m *windscribeMonitor) refresh(ctx context.Context) {
 	out, err := m.command(ctx, "status")
 	state, loggedIn := parseWindscribeStatus(string(out))
-	if err != nil || !loggedIn {
-		// A transient CLI/IPC error is not proof of VPN disconnection.
-		// Keep a previously confirmed connected state rather than activating
-		// traffic recovery while the VPN may still be running.
-		if m.Connected() {
-			state = windscribeConnected
-		} else {
-			state = windscribeUnknown
-		}
-	}
 	m.mu.Lock()
+	state = windscribeObservedState(m.state, m.lastValidCLIStatus, time.Now(), state, loggedIn, err)
+	if err == nil && loggedIn && state != windscribeUnknown {
+		m.lastValidCLIStatus = time.Now()
+	}
 	previous := m.state
 	m.state = state
 	protocolChanged := false
