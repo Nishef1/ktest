@@ -133,6 +133,39 @@ func (c *wsNodeCatalog) endpoints(tcp string) []wsEndpoint {
 	return result
 }
 
+// endpointsByField preserves the provider's protocol-specific endpoint role.
+// A node can advertise the same IP for ip and ip3; deduplicating solely by
+// address would erase the Stealth ip3 route even though it is valid.
+func (c *wsNodeCatalog) endpointsByField(tcp, field string) []wsEndpoint {
+	if c == nil || field != "ip3" {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	seen := make(map[string]bool)
+	var result []wsEndpoint
+	hostname := ""
+	for _, source := range wsCatalogURLs {
+		list, ok := c.lists[source.name]
+		if !ok || time.Since(list.Fetched) > wsCatalogMaxAge || time.Until(list.Fetched) > 5*time.Minute {
+			continue
+		}
+		node, ok := list.nodes[tcp]
+		if !ok {
+			continue
+		}
+		if hostname != "" && hostname != node.Hostname {
+			return nil
+		}
+		hostname = node.Hostname
+		if !seen[node.IP3] {
+			seen[node.IP3] = true
+			result = append(result, wsEndpoint{node.IP3, source.name + "/ip3"})
+		}
+	}
+	return result
+}
+
 func (c *wsNodeCatalog) load(path string) {
 	f, err := os.Open(path)
 	if err != nil {

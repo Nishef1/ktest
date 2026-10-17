@@ -182,3 +182,28 @@ func TestStealthOnlyTargetsOfficialProviderIP3(t *testing.T) {
 		}
 	}
 }
+
+// The provider can reuse an IPv4 for the general and Stealth fields.
+// The mixed-address dedupe must never erase protocol-specific provenance.
+func TestStealthKeepsIP3WhenItAliasesGeneralIP(t *testing.T) {
+	c := newWSNodeCatalog()
+	body := []byte(`{"data":[{"nodes":[{"ip":"198.51.100.9","ip2":"203.0.113.100","ip3":"198.51.100.9","hostname":"node.example.com"}]}]}`)
+	if err := c.replace("global", body, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ep := c.endpointsByField("203.0.113.100", "ip3")
+	if len(ep) != 1 || ep[0].ip != "198.51.100.9" || ep[0].source != "global/ip3" {
+		t.Fatalf("Stealth IP3 was erased by general-address dedupe: %+v", ep)
+	}
+	b := newWSBridge(wsOptions{direct: true, sni: "example.com"}, nil, nil, func(string, ...any) {})
+	b.catalog = c
+	var found bool
+	for _, carrier := range b.carriersFor("203.0.113.100") {
+		if strings.HasPrefix(carrier.name, "Stealth ") && carrier.addr == "198.51.100.9:443" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("legitimate aliased Stealth endpoint vanished from carriers")
+	}
+}

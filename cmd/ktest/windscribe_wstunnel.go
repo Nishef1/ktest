@@ -267,6 +267,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 			snis = []string{""}
 		}
 		endpoints := b.catalog.endpoints(host)
+		stealthEndpoints := b.catalog.endpointsByField(host, "ip3")
 		if len(endpoints) == 0 && o.serverIP == "" {
 			b.logf("Windscribe %s: no fresh provider node mapping; no IP neighbours guessed; raw destination retained", host)
 		}
@@ -299,10 +300,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 				// cannot be inferred from the node's ip field. Explicit
 				// server-IP overrides apply to WStunnel only.
 				if o.serverIP == "" {
-					for _, endpoint := range endpoints {
-						if !strings.HasSuffix(endpoint.source, "/ip3") {
-							continue
-						}
+					for _, endpoint := range stealthEndpoints {
 						addr := net.JoinHostPort(endpoint.ip, "443")
 						for _, fp := range []struct {
 							name     string
