@@ -55,6 +55,24 @@ func TestSetupLineShowsState(t *testing.T) {
 }
 
 func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
+	for _, wholePC := range []bool{false, true} {
+		var output bytes.Buffer
+		menu := &terminal{wholePC: wholePC, ui: plainTerm(&output)}
+		menu.mainMenu(t.TempDir())
+		want := "7 Proxy"
+		if wholePC {
+			want = "7 TUN"
+		}
+		found := false
+		for _, line := range strings.Split(output.String(), "\n") {
+			if strings.Join(strings.Fields(line), " ") == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("wholePC=%t: expected only %q on coverage row:\n%s", wholePC, want, output.String())
+		}
+	}
 	for _, mode := range []ConnectionMode{ModeBalanced, ModeFast, ModeAether, ModePsiphon, ModeTor, ModeWindscribe} {
 		for _, wholePC := range []bool{false, true} {
 			menu := &terminal{wholePC: wholePC}

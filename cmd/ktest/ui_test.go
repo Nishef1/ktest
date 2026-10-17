@@ -83,7 +83,7 @@ func TestMainMenuListsModesAndTools(t *testing.T) {
 		t.Fatal(code)
 	}
 	text := out.String()
-	for _, want := range []string{"CONNECT", "TOOLS", "Whole PC", "Diagnose", "Setup", "CDN scan", "Exit"} {
+	for _, want := range []string{"CONNECT", "TOOLS", "Proxy", "Diagnose", "Setup", "CDN scan", "Exit"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("menu lacks %q:\n%s", want, text)
 		}
@@ -173,7 +173,7 @@ func TestMenuFitsNarrowAndColoredTerminals(t *testing.T) {
 				t.Fatalf("width=%d: overflowing menu line %q", width, line)
 			}
 		}
-		for _, name := range []string{"Balanced", "Aether to Psiphon", "Windscribe", "Coverage", "Diagnose"} {
+		for _, name := range []string{"Balanced", "Aether to Psiphon", "Windscribe", "Proxy", "Diagnose"} {
 			if !strings.Contains(ansiPattern.ReplaceAllString(out.String(), ""), name) {
 				t.Fatalf("width=%d: missing choice %q", width, name)
 			}

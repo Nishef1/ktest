@@ -89,17 +89,18 @@ func (t *terminal) mainMenu(base string) {
 	for _, s := range menuSections {
 		u.Printf("  %s\n", u.Dim(strings.ToUpper(s.title)))
 		for _, it := range s.items {
+			name := it.name
 			desc := it.desc
 			if it.key == "9" {
 				desc = setupSummary(base)
 			}
 			if it.key == "7" {
-				desc = "Proxy apps · select for Whole PC TCP"
+				name = "Proxy"
 				if t.wholePC {
-					desc = "Whole PC TCP · Administrator · most UDP blocked"
+					name = "TUN"
 				}
 			}
-			u.menuOption(it.key, it.name, desc)
+			u.menuOption(it.key, name, desc)
 		}
 		u.Println("")
 	}
