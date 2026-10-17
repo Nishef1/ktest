@@ -154,6 +154,7 @@ type wsBridge struct {
 	edges []string                        // CDN edges found by the scan, best first
 	good  map[string]string               // destination -> carrier that carried a working VPN
 	bad   map[string]map[string]time.Time // destination -> carrier -> demoted until
+	retries map[string]uint64              // attempt index for choosing independent alternatives
 }
 
 // windscribeServerCert rejects certificates without a Windscribe hostname.
@@ -177,7 +178,7 @@ func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.C
 		path = wstunnel.DefaultPath
 	}
 	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 250 * time.Millisecond,
-		good: map[string]string{}, bad: map[string]map[string]time.Time{}}
+		good: map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}}
 	for _, e := range splitList(o.cdnEdges) {
 		if _, _, err := net.SplitHostPort(e); err != nil {
 			e = net.JoinHostPort(e, "443")
@@ -339,24 +340,97 @@ func looksTLSorHTTP(b []byte) bool {
 	return false
 }
 
-// ordered puts the carrier that last carried a working VPN first and
-// carriers whose streams recently died early last.
+// Families rotate on repeated attempts so that one blocked IP/SNI or
+// wrapper does not consume every early time slot. Only provider-advertised
+// endpoints remain eligible; raw anti-DPI traffic is a final alternative.
+func wsCarrierFamily(name string) int {
+	switch {
+	case strings.HasPrefix(name, "CDN "):
+		return 0
+	case strings.HasPrefix(name, "WStunnel "):
+		return 1
+	case strings.HasPrefix(name, "Stealth "):
+		return 2
+	default:
+		return 3
+	}
+}
+
+func wsDiversify(candidates []wsCarrier, attempt uint64) []wsCarrier {
+	var groups [4][]wsCarrier
+	for _, candidate := range candidates {
+		group := wsCarrierFamily(candidate.name)
+		groups[group] = append(groups[group], candidate)
+	}
+	for i := range groups {
+		if len(groups[i]) > 1 {
+			shift := int(attempt % uint64(len(groups[i])))
+			g := groups[i]
+			groups[i] = append(append([]wsCarrier{}, g[shift:]...), g[:shift]...)
+		}
+	}
+	result := make([]wsCarrier, 0, len(candidates))
+	for len(result) < len(candidates) {
+		for i := range 4 {
+			group := 3
+			if i < 3 {
+				group = (i + int(attempt%3)) % 3
+			}
+			if len(groups[group]) == 0 {
+				continue
+			}
+			result = append(result, groups[group][0])
+			groups[group] = groups[group][1:]
+		}
+	}
+	return result
+}
+
 func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.retries == nil {
+		b.retries = make(map[string]uint64)
+	}
+	attempt := b.retries[key]
+	b.retries[key] = attempt + 1
 	good := b.good[key]
-	var first, mid, last []wsCarrier
+	var preferred, fresh, cooling []wsCarrier
+	now := time.Now()
 	for _, c := range cs {
 		switch {
+		case now.Before(b.bad[key][c.name]):
+			cooling = append(cooling, c)
 		case c.name == good:
-			first = append(first, c)
-		case time.Now().Before(b.bad[key][c.name]):
-			last = append(last, c)
+			preferred = append(preferred, c)
 		default:
-			mid = append(mid, c)
+			fresh = append(fresh, c)
 		}
 	}
-	return append(append(first, mid...), last...)
+	ordered := append(preferred, wsDiversify(fresh, attempt)...)
+	return append(ordered, wsDiversify(cooling, attempt)...)
+}
+
+// Only observed transport failures lower a carrier's priority; neither a
+// TCP timeout nor an OpenVPN-shaped response proves a DPI block or VPN login.
+func (b *wsBridge) demoteFailure(key, name, stage string) {
+	cooldown := 20 * time.Second
+	switch stage {
+	case "tls", "websocket", "openvpn":
+		cooldown = 45 * time.Second
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bad[key] == nil {
+		b.bad[key] = make(map[string]time.Time)
+	}
+	if remaining := time.Until(b.bad[key][name]); remaining > 0 {
+		cooldown = max(cooldown, min(remaining*2, 3*time.Minute))
+	}
+	b.bad[key][name] = time.Now().Add(cooldown)
+	if b.good[key] == name {
+		delete(b.good, key)
+	}
 }
 
 type raceResult struct {
@@ -452,6 +526,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		failures[stage]++
 		lastErr = fmt.Errorf("%s: %w", c.name, err)
 		errMu.Unlock()
+		b.demoteFailure(key, c.name, stage)
 		b.logf("Windscribe %s: %s destination=%s source=%s failed stage=%s: %v", key, c.name, c.addr, c.source, stage, err)
 	}
 	for i, c := range cs {
@@ -550,7 +625,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		defer b.mu.Unlock()
 		switch {
 		case lived >= time.Minute && received >= 64<<10:
-			// The VPN came up and moved data: launch this carrier first next time.
+			// Long-lived traffic is useful evidence, not authenticated VPN proof.
 			b.good[key] = r.c.name
 		case lived < 20*time.Second:
 			// Answered the first packet but died early (DPI reset, auth on a
