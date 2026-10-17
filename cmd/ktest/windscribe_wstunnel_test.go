@@ -604,3 +604,57 @@ func TestSniffConnCloseBeforeWriteDoesNotHang(t *testing.T) {
 	}
 	_ = s.Close()
 }
+
+func TestWindscribeCarrierRetriesExploreOtherIPAndWrapper(t *testing.T) {
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	key := "152.233.50.130:443"
+	cs := []wsCarrier{
+		{name: "WStunnel sni=a entry=152.233.50.178"},
+		{name: "WStunnel sni=b entry=152.233.50.146"},
+		{name: "WStunnel sni=c entry=152.233.50.130"},
+		{name: "Stealth sni=a entry=152.233.50.178"},
+		{name: "Stealth sni=b entry=152.233.50.146"},
+		{name: "raw OpenVPN +anti-DPI"},
+	}
+	first := make(map[string]bool)
+	for range 4 {
+		ordered := b.ordered(key, cs)
+		if len(ordered) != len(cs) {
+			t.Fatalf("lost candidates after scheduling: %d", len(ordered))
+		}
+		seen := map[string]bool{}
+		for _, candidate := range ordered {
+			if seen[candidate.name] {
+				t.Fatalf("duplicate candidate %s", candidate.name)
+			}
+			seen[candidate.name] = true
+		}
+		if wsCarrierFamily(ordered[0].name) == wsCarrierFamily(ordered[1].name) {
+			t.Fatalf("one transport monopolizes the first two launch slots: %+v", ordered[:2])
+		}
+		first[ordered[0].name] = true
+	}
+	if len(first) < 2 {
+		t.Fatalf("retries chose the same entry first: %+v", first)
+	}
+}
+
+func TestWindscribeTransportFailureHasTemporaryCooldown(t *testing.T) {
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	key := "152.233.50.130:443"
+	cs := []wsCarrier{{name: "WStunnel failed"}, {name: "Stealth other"}}
+	b.good[key] = "WStunnel failed"
+	b.demoteFailure(key, "WStunnel failed", "tls")
+	ordered := b.ordered(key, cs)
+	if ordered[0].name != "Stealth other" {
+		t.Fatalf("failed TLS candidate still wins priority: %+v", ordered)
+	}
+	if remaining := time.Until(b.bad[key]["WStunnel failed"]); remaining <= 0 || remaining > time.Minute {
+		t.Fatalf("bad cooldown: %v", remaining)
+	}
+	b.bad[key]["WStunnel failed"] = time.Now().Add(-time.Second)
+	b.good[key] = "WStunnel failed"
+	if next := b.ordered(key, cs); next[0].name != "WStunnel failed" {
+		t.Fatalf("cooldown incorrectly became a permanent block: %+v", next)
+	}
+}
