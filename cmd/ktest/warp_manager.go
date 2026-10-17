@@ -316,7 +316,7 @@ func (m *warpManager) run(ctx context.Context) {
 			}
 			continue
 		}
-		m.failedSweeps = 0
+		m.resetRecovery()
 		done := make(chan *warpFound, len(found))
 		for _, w := range found {
 			go func(w *warpFound) {

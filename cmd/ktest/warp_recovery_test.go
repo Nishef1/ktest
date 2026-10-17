@@ -79,3 +79,12 @@ func TestRecoveryRetriesPromptlyUntilEveryProfileHadATurn(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifiedExitStartsAFreshOutage(t *testing.T) {
+	m := &warpManager{profs: []aetherProfile{recoveryProfile("a"), recoveryProfile("b", "--wg")}, attempted: map[string]bool{}, failedSweeps: 2}
+	m.attempted[m.profs[0].id()] = true
+	m.resetRecovery()
+	if len(m.remainingProfiles()) != 2 || m.failedSweeps != 0 {
+		t.Fatal("the profile that worked was excluded from the next recovery")
+	}
+}

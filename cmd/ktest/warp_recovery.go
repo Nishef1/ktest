@@ -71,3 +71,10 @@ func (m *warpManager) recoveryDelay() time.Duration {
 		return 2 * time.Minute
 	}
 }
+
+// A verified exit starts a fresh outage: the profile that just worked must be
+// the first one retried when it dies, not excluded as already attempted.
+func (m *warpManager) resetRecovery() {
+	m.attempted = nil
+	m.failedSweeps = 0
+}
