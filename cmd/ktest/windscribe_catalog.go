@@ -54,6 +54,10 @@ type wsNodeCatalog struct {
 	lists     map[string]wsCatalogList
 	ready     chan struct{}
 	readyOnce sync.Once
+	// The ready channel means some source returned a valid catalog, not
+	// necessarily the node requested by Windscribe's current CONNECT.
+	initialStarted bool
+	initialDone    bool
 }
 
 func newWSNodeCatalog() *wsNodeCatalog {
@@ -64,6 +68,88 @@ func newWSNodeCatalog() *wsNodeCatalog {
 // Do not wait for a second, inaccessible source to time out before using it.
 func (c *wsNodeCatalog) signalReady() {
 	c.readyOnce.Do(func() { close(c.ready) })
+}
+
+// Mark the initial two-source refresh before opening the HTTP listener.
+func (c *wsNodeCatalog) beginInitialRefresh() {
+	c.mu.Lock()
+	c.initialStarted = true
+	c.mu.Unlock()
+}
+
+func (c *wsNodeCatalog) finishInitialRefresh() {
+	c.mu.Lock()
+	c.initialDone = true
+	c.mu.Unlock()
+}
+
+// A cache can be ready without containing the current requested IP. Give a
+// still-running initial refresh a bounded chance to find that exact node.
+// We never invent an address or wait for later periodic refreshes.
+func (c *wsNodeCatalog) waitForTarget(ctx context.Context, tcp string, budget time.Duration) string {
+	if c == nil {
+		return "CatalogMissing"
+	}
+	if len(c.endpoints(tcp)) > 0 || len(c.endpointsByField(tcp, "ip3")) > 0 {
+		return "Mapped"
+	}
+	t := time.NewTimer(budget)
+	defer t.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		c.mu.RLock()
+		started, done := c.initialStarted, c.initialDone
+		c.mu.RUnlock()
+		if !started || done {
+			return c.mappingStatus(tcp)
+		}
+		select {
+		case <-ctx.Done():
+			return "Canceled"
+		case <-t.C:
+			return c.mappingStatus(tcp)
+		case <-tick.C:
+			if len(c.endpoints(tcp)) > 0 || len(c.endpointsByField(tcp, "ip3")) > 0 {
+				return "Mapped"
+			}
+		}
+	}
+}
+
+// This reason reflects independently validated provider snapshots. Missing
+// metadata is not evidence the Windscribe client chose an invalid server.
+func (c *wsNodeCatalog) mappingStatus(tcp string) string {
+	if c == nil {
+		return "CatalogMissing"
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	sources := 0
+	hostname := ""
+	found := false
+	now := time.Now()
+	for _, source := range wsCatalogURLs {
+		list, ok := c.lists[source.name]
+		if !ok || now.Sub(list.Fetched) > wsCatalogMaxAge || list.Fetched.After(now.Add(5*time.Minute)) {
+			continue
+		}
+		sources++
+		if node, exists := list.nodes[tcp]; exists {
+			if hostname != "" && node.Hostname != hostname {
+				return "NodeConflict"
+			}
+			hostname = node.Hostname
+			found = true
+		}
+	}
+	if sources == 0 {
+		return "CatalogMissing"
+	}
+	if !found {
+		return "NodeNotFound"
+	}
+	return "EndpointInvalid"
 }
 
 func publicWSIP(s string) bool {
@@ -163,7 +249,7 @@ func (c *wsNodeCatalog) endpoints(tcp string) []wsEndpoint {
 			continue
 		}
 		if hostname != "" && node.Hostname != hostname {
-			return nil // conflicting snapshots must not mix two nodes
+			break // use one validated snapshot, never mix unrelated node identities
 		}
 		hostname = node.Hostname
 		for _, alt := range []struct{ ip, field string }{{node.IP, "ip"}, {node.IP3, "ip3"}} {
@@ -198,7 +284,7 @@ func (c *wsNodeCatalog) endpointsByField(tcp, field string) []wsEndpoint {
 			continue
 		}
 		if hostname != "" && hostname != node.Hostname {
-			return nil
+			break // prefer the first full provider snapshot over mixed identities
 		}
 		hostname = node.Hostname
 		if node.IP3 != "" && !seen[node.IP3] {
@@ -335,6 +421,7 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 
 func (c *wsNodeCatalog) run(ctx context.Context, client *http.Client, path string, logf func(string, ...any)) {
 	refreshed := c.refresh(ctx, client, path, logf)
+	c.finishInitialRefresh()
 	c.signalReady() // no source succeeded: unblock with explicit missing mapping
 	for {
 		delay := 30 * time.Minute

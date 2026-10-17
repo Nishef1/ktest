@@ -874,6 +874,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				catalogClient := &http.Client{Transport: catalogTransport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 					return errors.New("Windscribe node-list redirects are not accepted")
 				}}
+				bridge.catalog.beginInitialRefresh()
 				go bridge.catalog.run(ctx, catalogClient, cachePath, logf)
 				bridge.note = func(f string, a ...any) { t.Line(toneInfo, f, a...) }
 				if o.ws.cdnHost != "" && o.ws.cdnEdges == "" {

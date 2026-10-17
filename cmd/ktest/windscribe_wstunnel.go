@@ -528,11 +528,12 @@ func readOpenVPNReply(r io.Reader) ([]byte, error) {
 func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, input io.Reader) (net.Conn, func(time.Duration, int64), error) {
 	key := net.JoinHostPort(host, port)
 	if b.catalog != nil && b.opts.serverIP == "" && len(b.catalog.endpoints(host)) == 0 {
-		select {
-		case <-b.catalog.ready:
-		case <-time.After(8 * time.Second):
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
+		status := b.catalog.waitForTarget(ctx, host, 14*time.Second)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if status != "Mapped" {
+			b.logf("Windscribe %s: provider mapping %s; raw OpenVPN remains eligible", key, status)
 		}
 	}
 	cs := b.ordered(key, b.carriersFor(host))
@@ -668,7 +669,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 		}
 		if b.catalog != nil && len(b.catalog.endpoints(host)) == 0 && b.opts.serverIP == "" {
-			summary = "no fresh node mapping; " + summary
+			summary = b.catalog.mappingStatus(host) + "; " + summary
 		}
 		if b.report != nil && ctx.Err() == nil {
 			b.report(smartproxy.Event{Host: host, Site: host, Err: "Windscribe race failed [" + summary + "]"})

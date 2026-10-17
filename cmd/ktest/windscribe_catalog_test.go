@@ -94,8 +94,11 @@ func TestCatalogRejectsUnsafeAmbiguousAndStaleMappings(t *testing.T) {
 	if err := c.replace("regional", []byte(strings.ReplaceAll(regionalNodeFixture, "node.example.com", "other.example.com")), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.endpoints("203.0.113.100"); len(got) != 0 {
-		t.Fatalf("mixed conflicting node identities: %+v", got)
+	if got := c.endpoints("203.0.113.100"); len(got) != 2 || got[0].source != "global/ip" {
+		t.Fatalf("a conflicting regional snapshot invalidated a healthy global node: %+v", got)
+	}
+	if status := c.mappingStatus("203.0.113.100"); status != "NodeConflict" {
+		t.Fatalf("conflicting sources were not diagnosed: %s", status)
 	}
 	for _, fetched := range []time.Time{time.Now().Add(-wsCatalogMaxAge - time.Minute), time.Now().Add(time.Hour)} {
 		c = newWSNodeCatalog()
@@ -354,5 +357,50 @@ func TestWindscribeCatalogReadyBeforeSlowSourceCompletes(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("catalog fetch did not cancel cleanly")
+	}
+}
+
+func TestCatalogWaitsForRequestedNodeNotJustFirstSource(t *testing.T) {
+	c := newWSNodeCatalog()
+	c.beginInitialRefresh()
+	if err := c.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan string, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		done <- c.waitForTarget(ctx, "203.0.113.200", 700*time.Millisecond)
+	}()
+	select {
+	case status := <-done:
+		t.Fatalf("unrelated cached catalog falsely unblocked target: %s", status)
+	case <-time.After(70 * time.Millisecond):
+	}
+	if err := c.replace("regional", []byte(`{"data":[{"nodes":[{"ip":"198.51.100.20","ip2":"203.0.113.200","ip3":"192.0.2.20","hostname":"node.example.com"}]}]}`), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case status := <-done:
+		if status != "Mapped" {
+			t.Fatalf("second source mapping not observed: %s", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("target-specific wait missed valid second provider")
+	}
+}
+
+func TestCatalogMissingNodeReturnsAfterSourcesComplete(t *testing.T) {
+	c := newWSNodeCatalog()
+	c.beginInitialRefresh()
+	if err := c.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.finishInitialRefresh()
+	if status := c.waitForTarget(context.Background(), "203.0.113.201", time.Second); status != "NodeNotFound" {
+		t.Fatalf("missing node misdiagnosed: %s", status)
+	}
+	if status := newWSNodeCatalog().mappingStatus("203.0.113.201"); status != "CatalogMissing" {
+		t.Fatalf("absent catalog misdiagnosed: %s", status)
 	}
 }
