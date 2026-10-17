@@ -50,8 +50,8 @@ type wsCatalogList struct {
 type wsEndpoint struct{ ip, source string }
 
 type wsNodeCatalog struct {
-	mu        sync.RWMutex
-	lists     map[string]wsCatalogList
+	mu          sync.RWMutex
+	lists       map[string]wsCatalogList
 	ready       chan struct{}
 	readyOnce   sync.Once
 	initialDone chan struct{}
