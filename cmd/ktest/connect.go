@@ -863,6 +863,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				bridge.catalog = newWSNodeCatalog()
 				cachePath := filepath.Join(o.base, "cache", "windscribe-nodes.json")
 				bridge.catalog.load(cachePath)
+				// Mark startup discovery pending before the worker is scheduled:
+				// a first CONNECT must not observe zero in-flight sources.
+				bridge.catalog.beginFetch()
 				catalogTransport := &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 					host, port, err := net.SplitHostPort(addr)
 					if err != nil {
