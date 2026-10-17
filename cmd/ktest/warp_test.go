@@ -38,8 +38,14 @@ func zipOf(t *testing.T, files map[string]string) []byte {
 }
 
 func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
+	lyre := "lyrebird"
+	if runtime.GOOS == "windows" {
+		lyre += ".exe"
+	}
 	data := zipOf(t, map[string]string{
-		filepath.Base(aetherBinary("x")): "core", "pt/psiphon-tunnel-core.exe": "psiphon", "pt/lyrebird.exe": "lyre",
+		filepath.Base(aetherBinary("x")): "core",
+		"pt/" + filepath.Base(psiphonCore("x")): "psiphon",
+		"pt/" + lyre: "lyre",
 		"pt/other.exe": "no", "../evil": "no", "run-aether.bat": "no",
 	})
 	sum := sha256.Sum256(data)
@@ -59,7 +65,7 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
 	if b, _ := os.ReadFile(aetherBinary(base)); string(b) != "core" {
 		t.Fatalf("core content %q", b)
 	}
-	if b, _ := os.ReadFile(filepath.Join(base, "cores", "pt", "psiphon-tunnel-core.exe")); string(b) != "psiphon" {
+	if b, _ := os.ReadFile(psiphonCore(base)); string(b) != "psiphon" {
 		t.Fatalf("psiphon core %q", b)
 	}
 	var names []string

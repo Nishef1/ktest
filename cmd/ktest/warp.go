@@ -161,7 +161,7 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 		"pt/" + lyre:  filepath.Join(base, "cores", "pt", lyre),
 	}
 	found := false
-	if strings.HasSuffix(url, ".zip") {
+	if bytes.HasPrefix(data, []byte{'P', 'K', 3, 4}) {
 		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
 			return err
@@ -178,7 +178,7 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 				found = true
 			}
 		}
-	} else if strings.HasSuffix(url, ".tar.gz") {
+	} else if bytes.HasPrefix(data, []byte{0x1f, 0x8b}) {
 		zr, err := gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return err
