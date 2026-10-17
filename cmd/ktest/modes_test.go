@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"strings"
-	"strings"
 	"testing"
 
 	"github.com/Nishef1/ktest/internal/smartproxy"
