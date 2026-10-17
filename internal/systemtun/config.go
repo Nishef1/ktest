@@ -59,6 +59,9 @@ type Options struct {
 	// itself and the cores it runs, otherwise their own connections would be
 	// routed back into the tunnel and loop.
 	DirectProcesses []string
+	// DirectProcessPaths matches the exact executables launched by ktest.
+	// This avoids exempting unrelated programs that share a helper's filename.
+	DirectProcessPaths []string
 	// BlockPageCIDRs are private ranges that a poisoning resolver answers with
 	// (Iran: 10.10.34.0/24). They are not the LAN; they go to the proxy, which
 	// recovers the real name from the TLS SNI.
@@ -81,20 +84,26 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 	if o.PhysicalNIC == "" {
 		return nil, errors.New("physical interface is required to prevent routing loops")
 	}
-	if len(o.DirectProcesses) == 0 {
-		return nil, errors.New("the proxy's own processes must be exempt from the tunnel, or it would loop")
+	if len(o.DirectProcesses) == 0 && len(o.DirectProcessPaths) == 0 {
+		return nil, errors.New("the proxy's own executables must be exempt from the tunnel, or it would loop")
 	}
 	block := o.BlockPageCIDRs
 	if block == nil {
 		block = DefaultBlockPage
 	}
-	rules := []any{
-		// Our own sockets first, before DNS hijacking, so that the proxy's name
-		// lookups and connections reach the real network.
-		map[string]any{"process_name": o.DirectProcesses, "action": "route", "outbound": "physical"},
+	rules := []any{}
+	// Exact paths first. A malicious or unrelated executable named aether.exe
+	// must not inherit the physical-route exemption of our bundled core.
+	if len(o.DirectProcessPaths) > 0 {
+		rules = append(rules, map[string]any{"process_path": o.DirectProcessPaths, "action": "route", "outbound": "physical"})
+	}
+	if len(o.DirectProcesses) > 0 {
+		rules = append(rules, map[string]any{"process_name": o.DirectProcesses, "action": "route", "outbound": "physical"})
+	}
+	rules = append(rules,
 		map[string]any{"ip_cidr": []string{"172.19.0.0/30", "fdfe:dcba:9876::/126"}, "action": "reject", "method": "drop"},
 		map[string]any{"port": 53, "action": "hijack-dns"},
-	}
+	)
 	if len(block) > 0 {
 		rules = append(rules, map[string]any{"ip_cidr": block, "action": "route", "outbound": "ktest"})
 	}

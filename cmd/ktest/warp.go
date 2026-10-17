@@ -179,6 +179,12 @@ func extractZipFile(f *zip.File, dest string) error {
 
 // warpEnable makes the WARP exit available: the core, then the identity.
 func warpEnable(ctx context.Context, u *term, base, proxy string) int {
+	if runtime.GOOS != "windows" {
+		// Release selection and bundled transports currently use Windows
+		// binaries. Refuse instead of downloading an .exe on another OS.
+		u.Line(toneFail, "Aether automated installation is Windows-only; this build cannot safely install the correct helper archive")
+		return 1
+	}
 	if !fileOK(aetherBinary(base)) || !fileOK(psiphonCore(base)) {
 		step := u.Progress("Downloading Aether "+aetherVersion, 1)
 		if err := fetchAether(ctx, aetherZipURL, aetherZipSHA, base); err != nil {

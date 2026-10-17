@@ -130,3 +130,34 @@ func TestUDPRejectionSignalsFailureWithoutWaitingForTimeouts(t *testing.T) {
 		}
 	}
 }
+
+// Whole-PC mode only exempts exact installed helper executables; a random
+// process with the same basename cannot bypass the system TUN.
+func TestSystemConfigExactProcessPathExemptions(t *testing.T) {
+	paths := []string{`C:\Users\Me\ktest.exe`, `C:\ktest\cores\aether.exe`, `C:\ktest\cores\sing-box.exe`}
+	buf, err := BuildSystemConfig(Options{
+		SocksPort: 10800, PhysicalNIC: "Ethernet", DirectProcessPaths: paths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root struct {
+		Route struct {
+			Rules []map[string]any `json:"rules"`
+		} `json:"route"`
+	}
+	if err := json.Unmarshal(buf, &root); err != nil {
+		t.Fatal(err)
+	}
+	if len(root.Route.Rules) < 3 || root.Route.Rules[0]["process_path"] == nil {
+		t.Fatalf("absolute-process rules missing: %s", buf)
+	}
+	for _, rule := range root.Route.Rules {
+		if rule["process_name"] != nil {
+			t.Fatalf("basename grants unrelated processes a bypass: %s", buf)
+		}
+	}
+	if root.Route.Rules[1]["action"] != "reject" || root.Route.Rules[2]["action"] != "hijack-dns" {
+		t.Fatalf("loop/DNS rules must follow process exemptions: %s", buf)
+	}
+}

@@ -976,7 +976,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 5. The result.
 	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
 	if o.mode.isWindscribe() {
-		title = "WINDSCRIBE BRIDGE READY; VPN NOT YET VERIFIED"
+		title = "WINDSCRIBE BRIDGE LISTENING; VPN NOT YET VERIFIED"
+		if o.mode == ModeWindscribeAether {
+			carriers, _ := proxy.ExitCounts()
+			if carriers == 0 {
+				title = "BRIDGE LISTENING; AETHER CARRIER NOT YET VERIFIED"
+			}
+		}
 		if o.mode == ModeWindscribe && !proxy.HasLocalBypass() && !o.ws.enabled() {
 			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}

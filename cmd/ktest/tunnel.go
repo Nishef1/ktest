@@ -43,7 +43,19 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 	}
 	step.Set(1, "interface "+nic)
 	exe, _ := os.Executable()
-	direct := []string{"xray.exe", "ciadpi.exe", "aether.exe", "psiphon-tunnel-core.exe", "lyrebird.exe", strings.ToLower(filepath.Base(exe))}
+	coreDir, err := filepath.Abs(filepath.Join(base, "cores"))
+	if err != nil {
+		step.Finish(toneFail, "cannot identify bundled helper paths: "+err.Error())
+		return nil
+	}
+	direct := []string{
+		exe,
+		filepath.Join(coreDir, "xray.exe"),
+		filepath.Join(coreDir, "ciadpi.exe"),
+		filepath.Join(coreDir, "aether.exe"),
+		filepath.Join(coreDir, "pt", "psiphon-tunnel-core.exe"),
+		filepath.Join(coreDir, "pt", "lyrebird.exe"),
+	}
 	logs := &tailBuffer{max: 4096}
 	if verbose {
 		logs.tee = os.Stderr
@@ -56,7 +68,7 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 	go func() {
 		defer close(tn.done)
 		err := systemtun.StartSystem(tctx, filepath.Join(base, "cores"), systemtun.Options{
-			SocksPort: socksPort, PhysicalNIC: nic, DirectProcesses: direct,
+			SocksPort: socksPort, PhysicalNIC: nic, DirectProcessPaths: direct,
 		}, logs)
 		if err != nil && tctx.Err() == nil {
 			logs.Write([]byte(err.Error() + "\n"))

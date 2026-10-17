@@ -94,7 +94,7 @@ func StartSystem(ctx context.Context, coreDir string, o Options, output io.Write
 	if !IsAdmin() {
 		return errors.New("the system-wide tunnel requires Administrator")
 	}
-	o.DirectProcesses = append(append([]string(nil), o.DirectProcesses...), "sing-box.exe")
+	o.DirectProcessPaths = append(append([]string(nil), o.DirectProcessPaths...), filepath.Join(coreDir, "sing-box.exe"))
 	payload, err := BuildSystemConfig(o)
 	if err != nil {
 		return err
