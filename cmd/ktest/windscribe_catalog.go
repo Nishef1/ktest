@@ -98,8 +98,9 @@ func (c *wsNodeCatalog) replace(source string, body []byte, fetched time.Time) e
 
 // endpoints matches the exact TCP IP. Only addresses advertised for that same
 // node are candidates; no neighbouring IP or different location is invented.
-// Without an authenticated PortMap we test both advertised alternate IPs for
-// each transport rather than asserting a universal IP-to-protocol mapping.
+// WStunnel may test both provider-advertised alternates because its current
+// authenticated PortMap is unavailable here. Stealth is restricted to ip3
+// later in carriersFor, as specified in Windscribe's published port map.
 func (c *wsNodeCatalog) endpoints(tcp string) []wsEndpoint {
 	if c == nil {
 		return nil
