@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,5 +114,20 @@ func TestWindscribeStandbyRespectsCancellation(t *testing.T) {
 func TestWindscribeOverrideRequiresAbsolutePath(t *testing.T) {
 	if _, err := windscribeCLIPath("./windscribe-cli.exe"); err == nil {
 		t.Fatal("accepted relative executable")
+	}
+}
+
+func TestWindscribeStatusIssueDoesNotEchoCredentials(t *testing.T) {
+	message := windscribeStatusIssue("Login state: Not logged in\nToken: NOT_FOR_LOGS\n", windscribeUnknown, false)
+	if !strings.Contains(message, "not logged in") || strings.Contains(message, "NOT_FOR_LOGS") {
+		t.Fatalf("unsafe login diagnosis: %q", message)
+	}
+	message = windscribeStatusIssue("No parsable state", windscribeUnknown, false)
+	if !strings.Contains(message, "login state") {
+		t.Fatalf("missing CLI status diagnosis: %q", message)
+	}
+	message = windscribeStatusIssue("Login state: Logged in\nConnect state: Unknown", windscribeUnknown, true)
+	if !strings.Contains(message, "connection state") {
+		t.Fatalf("unrecognized connection treated as trusted: %q", message)
 	}
 }

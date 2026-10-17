@@ -170,6 +170,12 @@ func runDoctorMode(ctx context.Context, u *term, base string, noNet bool, mode C
 		status := readWSStatus(ctx, cli)
 		if err != nil || status.err != nil {
 			line(toneWarn, "Windscribe CLI", "unavailable; login/protocol/VPN state unverified")
+			if err != nil {
+				u.Note("CLI executable: %v", err)
+			} else {
+				u.Note("CLI status: %v", status.err)
+			}
+			u.Note("Check the Windscribe desktop app, then run windscribe-cli.exe status directly; the CLI needs working local IPC.")
 		} else {
 			line(toneInfo, "Windscribe state", status.state.String())
 			if status.protocol != "" {

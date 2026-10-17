@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"strings"
+	"strings"
 	"testing"
 
 	"github.com/Nishef1/ktest/internal/smartproxy"
@@ -101,6 +102,16 @@ func TestModesVisibleInMainMenu(t *testing.T) {
 	for _, name := range []string{"Balanced", "Fast", "Aether", "Aether to Psiphon", "Aether to Tor", "Windscribe"} {
 		if !strings.Contains(output, name) {
 			t.Errorf("missing menu item %q", name)
+		}
+	}
+}
+
+func TestWindscribeModesRequireHTTPProxy(t *testing.T) {
+	for _, mode := range []ConnectionMode{ModeWindscribe, ModeWindscribeAether} {
+		o := defaultConnectOptions(t.TempDir())
+		o.mode, o.tun, o.noHTTP = mode, false, true
+		if err := validateConnectOptions(o); err == nil || !strings.Contains(err.Error(), "HTTP CONNECT") {
+			t.Fatalf("%s accepted unusable -no-http configuration: %v", mode, err)
 		}
 	}
 }

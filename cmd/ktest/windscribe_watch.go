@@ -312,10 +312,11 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 	m.refresh(ctx) // initial state before external tunnel scanning
 	if m.State() == windscribeUnknown {
 		if o.mode == ModeWindscribeAether {
-			t.Note("Windscribe CLI status is unavailable; the extra Aether carrier cannot start safely")
+			t.Note("Windscribe CLI did not confirm a safe disconnected state; no extra Aether tunnel will start")
 		} else {
-			t.Note("Windscribe CLI status not trusted yet; running bootstrap in manual fallback mode (no automatic reconnect)")
+			t.Note("Windscribe CLI state unverified; the local bridge can listen but automatic reconnect is disabled")
 		}
+		t.Note("Run windscribe-cli.exe status directly; use -windscribe-cli with the absolute executable path for a custom installation.")
 		return nil
 	}
 	go func() {
