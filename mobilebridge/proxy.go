@@ -80,7 +80,7 @@ func StartProxy(mode string) (string, error) {
 }
 
 // StartProxyWithUpstream adds a separately started local SOCKS5 transport.
-// It DOES NOT launch Tor, Psiphon, or Aether: the user supplies a running upstream.
+// This adapts the existing CLI -exit-socks route; it does not create another core.
 func StartProxyWithUpstream(mode, upstream string) (string, error) {
     // Long upstream validation must never hold proxyMu: Android status polling
     // calls ProxyStatus on the UI thread. Serialize only start calls here.
@@ -94,7 +94,7 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     generation := proxyGeneration
     proxyMu.Unlock()
     switch mode {
-    case "balanced", "fast", "aether", "tor":
+    case "balanced", "fast", "aether":
     default:
         return "", fmt.Errorf("mode %q is not available in this Android build", mode)
     }
@@ -113,7 +113,7 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     if upstream != "" {
         startContext, startCancel := context.WithTimeout(context.Background(), 25*time.Second)
         defer startCancel()
-        checked, err := verifyLocalUpstream(startContext, upstream, mode == "tor")
+        checked, err := verifyLocalUpstream(startContext, upstream)
         if err != nil {
             return "", fmt.Errorf("upstream not verified: %w", err)
         }
@@ -129,7 +129,7 @@ func StartProxyWithUpstream(mode, upstream string) (string, error) {
     connectionpolicy.Configure(mode, &config, rules.Match)
     if upstream != "" {
         config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {
-            _, err := verifyLocalUpstream(ctx, upstream, mode == "tor")
+            _, err := verifyLocalUpstream(ctx, upstream)
             return err
         }
     }

@@ -17,21 +17,6 @@
             </intent-filter>
         </activity>
         <service
-            android:name="org.torproject.jni.TorService"
-            android:exported="false" />
-        <service
-            android:name=".KTestVpnService"
-            android:exported="true"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:foregroundServiceType="specialUse">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Explicitly user-initiated full-device VPN with pinned HEV TUN-to-SOCKS bridge" />
-        </service>
-        <service
             android:name=".ProxyService"
             android:exported="false"
             android:foregroundServiceType="specialUse">

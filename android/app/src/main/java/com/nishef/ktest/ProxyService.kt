@@ -7,23 +7,23 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import mobilebridge.Mobilebridge
 
-/** Foreground, user-controlled loopback proxy. Never masquerades as a system VPN. */
+/**
+ * Android lifecycle adapter for the existing Go proxy.
+ * No transport, Tor, VPN or routing policy lives in this Kotlin service.
+ */
 class ProxyService : Service() {
     companion object {
         const val ACTION_CONNECT = "com.nishef.ktest.CONNECT"
@@ -36,8 +36,7 @@ class ProxyService : Service() {
     }
 
     private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val lock = Mutex()
-    private val tor = TorController(this)
+    private val mutex = Mutex()
     private var startup: Job? = null
     @Volatile private var wanted = false
 
@@ -55,54 +54,24 @@ class ProxyService : Service() {
             ACTION_CONNECT -> {
                 if (wanted) return START_NOT_STICKY
                 val mode = intent.getStringExtra(EXTRA_MODE) ?: "balanced"
-                val upstream = intent.getStringExtra(EXTRA_UPSTREAM) ?: ""
+                val upstream = intent.getStringExtra(EXTRA_UPSTREAM).orEmpty()
                 wanted = true
                 lastError = null
                 startForeground(NOTIFICATION_ID, notification(mode))
                 startup = worker.launch {
                     try {
-                        lock.withLock {
-                            val selected = if (mode == "tor") tor.start() else upstream
-                            ensureActive()
-                            if (!wanted) throw CancellationException("Connect was canceled")
-                            Mobilebridge.startProxyWithUpstream(mode, selected)
-                            if (!wanted) {
-                                Mobilebridge.stopProxy()
-                                throw CancellationException("Connect was canceled")
-                            }
+                        mutex.withLock {
+                            if (wanted) Mobilebridge.startProxyWithUpstream(mode, upstream)
                         }
-                        if (mode == "tor") {
-                            // Tor control reports can disappear during bridge/circuit
-                            // recovery. Require consecutive failures before shutdown.
-                            var failures = 0
-                            while (wanted && isActive) {
-                                delay(5000)
-                                failures = if (tor.isAlive()) 0 else failures + 1
-                                if (failures >= 3) {
-                                    lastError = "Tor circuit unavailable; local proxy stopped"
-                                    wanted = false
-                                    Mobilebridge.stopProxy()
-                                }
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        if (wanted) {
-                            lastError = e.message ?: "Connection setup timed out"
-                            wanted = false
-                        }
+                    } catch (_: CancellationException) {
+                        // A user-initiated stop is not a connection failure.
                     } catch (e: Exception) {
-                        if (wanted) {
-                            lastError = e.message ?: "Could not start local proxy"
-                            wanted = false
-                        }
+                        if (wanted) lastError = e.message ?: "Could not start Go proxy"
+                        wanted = false
                     } finally {
                         if (!wanted) {
-                            // This cleanup must run even after coroutine cancellation;
-                            // otherwise the foreground notification can remain alive
-                            // following a timed-out Tor service bind.
                             withContext(NonCancellable + Dispatchers.IO) {
-                                lock.withLock { Mobilebridge.stopProxy() }
-                                tor.stop()
+                                mutex.withLock { Mobilebridge.stopProxy() }
                                 withContext(Dispatchers.Main) {
                                     stopForeground(STOP_FOREGROUND_REMOVE)
                                     stopSelfResult(startId)
@@ -115,14 +84,10 @@ class ProxyService : Service() {
             ACTION_STOP -> {
                 wanted = false
                 startup?.cancel()
-                tor.stop()
-                // Bump Go's start generation immediately, without waiting for
-                // a possibly slow HTTPS foreign-exit probe.
+                // Invalidate a blocked/slow Go startup immediately.
                 Mobilebridge.stopProxy()
                 worker.launch {
-                    lock.withLock {
-                        Mobilebridge.stopProxy()
-                    }
+                    mutex.withLock { Mobilebridge.stopProxy() }
                     withContext(Dispatchers.Main) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
@@ -137,7 +102,6 @@ class ProxyService : Service() {
     override fun onDestroy() {
         wanted = false
         startup?.cancel()
-        tor.stop()
         Mobilebridge.stopProxy()
         worker.cancel()
         super.onDestroy()
@@ -155,7 +119,7 @@ class ProxyService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setContentTitle("KTest · Local proxy")
-            .setContentText("${mode.replaceFirstChar { it.uppercase() }} · App-specific proxy, not VPN")
+            .setContentText("${mode.replaceFirstChar { it.uppercase() }} · Proxy mode")
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Disconnect", stop).build())
