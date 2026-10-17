@@ -59,6 +59,17 @@ func runCA(args []string) int {
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return 2
 	}
+	// Contradictory trust-store actions must not silently choose the first.
+	actions := 0
+	for _, selected := range []bool{*install, *uninstall, *del, *renew} {
+		if selected {
+			actions++
+		}
+	}
+	if actions > 1 {
+		fmt.Fprintln(os.Stderr, "choose exactly one CA operation")
+		return 2
+	}
 	u := newTerm(os.Stdout)
 	switch {
 	case *install:

@@ -132,3 +132,12 @@ func TestCAStatusDescribesTheNextStep(t *testing.T) {
 		t.Fatal("-front must force it on")
 	}
 }
+
+// Reject conflicting commands before any trust-store or CA file mutation.
+func TestCAConflictingOperationsRejected(t *testing.T) {
+	for _, args := range [][]string{{"-install", "-delete"}, {"-renew", "-uninstall"}, {"-install", "-renew"}} {
+		if got := runCA(args); got != 2 {
+			t.Fatalf("%v returned %d", args, got)
+		}
+	}
+}

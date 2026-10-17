@@ -209,10 +209,14 @@ func TestUnavailableEgressProbeIsNotCountryRejection(t *testing.T) {
 
 func TestDefaultAetherH2AndFreshGatewayPolicy(t *testing.T) {
 	profiles, err := loadAetherProfiles(t.TempDir(), "ECH", "162.159.1.1", ModeAether)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	var found bool
 	for _, p := range profiles {
-		if p.Label != "WARP, MASQUE over HTTP/2 with ECH" { continue }
+		if p.Label != "WARP, MASQUE over HTTP/2 with ECH" {
+			continue
+		}
 		found = true
 		if !p.has("--fragment") || p.has("--no-fragment") {
 			t.Fatalf("H2 ECH disables fragmentation: %+v", p)
@@ -222,7 +226,9 @@ func TestDefaultAetherH2AndFreshGatewayPolicy(t *testing.T) {
 			t.Fatalf("stale gateway reused: %s", args)
 		}
 	}
-	if !found { t.Fatal("H2 ECH profile absent") }
+	if !found {
+		t.Fatal("H2 ECH profile absent")
+	}
 	p := aetherProfile{Args: []string{"--masque", "--h2", "--quick-reconnect"}}
 	if strings.Contains(strings.Join(aetherRunArgs(0, p, 10830), " "), "--no-quick-reconnect") {
 		t.Fatal("explicit quick-reconnect overridden")
@@ -235,13 +241,13 @@ func TestAetherThoroughBudgetHonorsConfiguredStartup(t *testing.T) {
 	if got := profileAttemptBudget(p); got < 125*time.Second {
 		t.Fatalf("thorough attempt cancelled prematurely: %v", got)
 	}
-	m := &warpManager{profs: []aetherProfile{p}, o: connectOptions{aetherMethod:"masque-h2"}}
+	m := &warpManager{profs: []aetherProfile{p}, o: connectOptions{aetherMethod: "masque-h2"}}
 	if got := m.searchBudget([]int{0}); got < profileAttemptBudget(p)+10*time.Second {
 		t.Fatalf("forced scan too short: %v", got)
 	}
 	m.o.aetherMethod = "auto"
 	m.profs = append(m.profs, aetherProfile{Args: []string{"--wg"}}, aetherProfile{Args: []string{"--masque", "--h3"}})
-	if got := m.searchBudget([]int{0,1,2}); got != 40*time.Second {
-		t.Fatalf("automatic wave too long: %v",got)
+	if got := m.searchBudget([]int{0, 1, 2}); got != 40*time.Second {
+		t.Fatalf("automatic wave too long: %v", got)
 	}
 }

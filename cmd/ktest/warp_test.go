@@ -125,7 +125,7 @@ func TestAetherRunArgsNeverPromptStayOnLoopbackAndDoNotRepeatFlags(t *testing.T)
 	t.Setenv("KTEST_WARP_DIR", t.TempDir())
 	p := aetherProfile{Label: "x", Args: []string{"--masque", "--h2", "--scan", "thorough", "-6", "--startup-secs", "100"}}
 	args := strings.Join(aetherRunArgs(0, p, 10830), " ")
-	for _, want := range []string{"--quick-reconnect", "--bind 127.0.0.1:10830", "--masque-config", "--wg-config"} {
+	for _, want := range []string{"--no-quick-reconnect", "--bind 127.0.0.1:10830", "--masque-config", "--wg-config"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("lacks %s: %s", want, args)
 		}
