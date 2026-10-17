@@ -356,3 +356,58 @@ func TestWindscribeCatalogReadyBeforeSlowSourceCompletes(t *testing.T) {
 		t.Fatal("catalog fetch did not cancel cleanly")
 	}
 }
+
+// A fast global list may be valid but lack the user's regional node. The
+// first valid source must not prematurely force raw-only OpenVPN for that node.
+func TestWindscribeCatalogWaitsForRequestedNodeInOtherSource(t *testing.T) {
+	c := newWSNodeCatalog()
+	c.startInitialRefresh()
+	if err := c.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	const tcp = "203.0.113.111"
+	result := make(chan error, 1)
+	go func() { result <- c.waitForNode(context.Background(), tcp, time.Second) }()
+	select {
+	case <-result:
+		t.Fatal("missing target returned before the other source finished")
+	case <-time.After(40 * time.Millisecond):
+	}
+	regional := []byte(`{"data":[{"nodes":[{"ip":"198.51.100.111","ip2":"203.0.113.111","ip3":null,"hostname":"regional.windscribe.com"}]}]}`)
+	if err := c.replace("regional", regional, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.finishInitialRefresh()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("node-specific wait did not complete")
+	}
+	if got := c.endpoints(tcp); len(got) != 1 || got[0].ip != "198.51.100.111" {
+		t.Fatalf("missing valid regional target after wait: %+v", got)
+	}
+}
+
+func TestWindscribeCatalogNodeWaitIsBoundedAndCancelable(t *testing.T) {
+	c := newWSNodeCatalog()
+	c.startInitialRefresh()
+	if err := c.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := c.waitForNode(context.Background(), "203.0.113.222", 35*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatal("no-mapping fallback exceeded timeout")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.waitForNode(ctx, "203.0.113.222", time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled catalog lookup returned %v", err)
+	}
+	c.finishInitialRefresh()
+}
