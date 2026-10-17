@@ -52,12 +52,21 @@ func TestFront(rawURL, sni, host, edgeIP string) (string, error) {
 	if net.ParseIP(edgeIP) == nil {
 		return "", errors.New("a single numeric edge IP is required")
 	}
+	return TestFronts(rawURL, sni, host, edgeIP, 1, false)
+}
+
+// TestFronts exposes the original bounded 1..12-candidate, 1..3-round edge
+// comparison and optional controlled-origin proof to Android.
+func TestFronts(rawURL, sni, host, edgeIPs string, rounds int, proof bool) (string, error) {
+	ips := strings.FieldsFunc(edgeIPs, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t' })
 	plan := edges.Plan{
 		URL: rawURL, SNI: sni, Host: host,
-		IPs: []string{edgeIP}, Rounds: 1,
-		Timeout: 7 * time.Second, Proof: false,
+		IPs: ips, Rounds: rounds,
+		Timeout: 7 * time.Second, Proof: proof,
 	}
-	report, err := edges.Run(context.Background(), plan, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	report, err := edges.Run(ctx, plan, nil)
 	if err != nil {
 		return "", err
 	}

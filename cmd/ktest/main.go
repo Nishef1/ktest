@@ -448,28 +448,12 @@ func runQuickScanContext(parent context.Context, args []string) int {
 	dns := dnscheck.CheckGoogleDNS(ctx)
 	fmt.Println("DNS preflight:", dns.Format())
 	fmt.Println("An open DNS route does not prove a CDN or filtered website is reachable.")
-	var ips []string
-	var target, source string
-	if *provider == "cloudflare" {
-		var err error
-		ips, err = edges.CloudflareCandidates(*limit)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 2
-		}
-		target = "https://www.cloudflare.com/cdn-cgi/trace"
-		source = "https://www.cloudflare.com/ips/"
-	} else {
-		preset, err := edges.PresetCandidates(ctx, *provider)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "candidate source:", err)
-			return 1
-		}
-		ips, target, source = preset.IPs, preset.URL, preset.Source
-		if len(ips) > *limit {
-			ips = ips[:*limit]
-		}
+	preset, err := edges.ScanCandidates(ctx, *provider, *limit)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "candidate source:", err)
+		return 1
 	}
+	ips, target, source := preset.IPs, preset.URL, preset.Source
 	fmt.Printf("CDN %s | %d source-backed candidate IPs | source: %s\n", *provider, len(ips), source)
 	if *cdnHost != "" {
 		u := newTerm(os.Stdout)

@@ -147,33 +147,7 @@ func NewDoH(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool) Resolv
 func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qtype string) Resolver {
 	clients := make([]*http.Client, len(endpoints))
 	for i, ep := range endpoints {
-		ep := ep
-		cfg := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: ep.ServerName}
-		if ep.FrontSNI != "" {
-			cfg.ServerName = ep.FrontSNI
-			cfg.InsecureSkipVerify = true // replaced by the check below, which uses the real names
-			names := append([]string{ep.ServerName}, ep.VerifyNames...)
-			cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
-				return verifyAnyName(raw, names, roots)
-			}
-		}
-		transport := &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				if ep.Addr != "" {
-					addr = ep.Addr
-				}
-				return dial(ctx, network, addr)
-			},
-			TLSClientConfig:     cfg,
-			DialTLSContext:      dialTLS(ep),
-			ForceAttemptHTTP2:   true,
-			TLSHandshakeTimeout: 6 * time.Second,
-			MaxIdleConns:        2,
-			MaxIdleConnsPerHost: 2,
-			MaxConnsPerHost:     4,
-			IdleConnTimeout:     30 * time.Second,
-		}
-		clients[i] = &http.Client{Transport: transport, Timeout: 8 * time.Second}
+		clients[i] = newDoHClient(ep, dial, roots)
 	}
 	want := 1
 	if qtype == "AAAA" {
@@ -298,6 +272,35 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 		return nil, 0, last
 	}
 	return cachedResolver(lookup, 12*time.Second)
+}
+
+func newDoHClient(ep DoHEndpoint, dial DialFunc, roots *x509.CertPool) *http.Client {
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: 5 * time.Second}).DialContext
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: ep.ServerName}
+	if ep.FrontSNI != "" {
+		cfg.ServerName = ep.FrontSNI
+		cfg.InsecureSkipVerify = true // replaced by verification of the real names
+		names := append([]string{ep.ServerName}, ep.VerifyNames...)
+		cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
+			return verifyAnyName(raw, names, roots)
+		}
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if ep.Addr != "" {
+				addr = ep.Addr
+			}
+			return dial(ctx, network, addr)
+		},
+		TLSClientConfig: cfg, DialTLSContext: dialTLS(ep), ForceAttemptHTTP2: true,
+		TLSHandshakeTimeout: 6 * time.Second, MaxIdleConns: 2,
+		MaxIdleConnsPerHost: 2, MaxConnsPerHost: 4, IdleConnTimeout: 30 * time.Second,
+	}
+	return &http.Client{Transport: transport, Timeout: 8 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("DoH redirects are not accepted") },
+	}
 }
 
 // verifyAnyName accepts a certificate chain that is valid for at least one of

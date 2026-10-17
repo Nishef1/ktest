@@ -131,6 +131,8 @@ private fun ConnectionApp() {
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
     val scope = rememberCoroutineScope()
     val running = status.optBoolean("running")
+    val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
+    var diagnosticNetwork by rememberSaveable { mutableStateOf(prefs.getString("diagnostic_network", "tcp") ?: "tcp") }
     val startVpn: () -> Unit = {
         try {
             androidx.core.content.ContextCompat.startForegroundService(
@@ -154,7 +156,12 @@ private fun ConnectionApp() {
                 .getOrElse { JSONObject() }
             vpnCapability = runCatching { JSONObject(Mobilebridge.vpnCapability()) }
                 .getOrElse { JSONObject() }
+            if (status.optString("phase") in listOf("preparing", "verifying_upstream")) connecting = true
             if (status.optBoolean("running") || ProxyService.lastError != null) connecting = false
+            if (status.optString("phase") == "failed") {
+                connecting = false
+                error = status.optString("error")
+            }
             if (ProxyService.lastError != null) error = ProxyService.lastError
             delay(900)
         }
@@ -209,7 +216,7 @@ private fun ConnectionApp() {
                         onUpstream = { upstream = it; prefs.edit().putString("upstream_$modeId", it).apply() },
                         error = error,
                         onMode = {
-                            if (!running) {
+                            if (!running && !connecting) {
                                 modeId = it
                                 upstream = prefs.getString("upstream_$it", "") ?: ""
                                 prefs.edit().putString("mode", it).apply()
@@ -232,7 +239,7 @@ private fun ConnectionApp() {
                                         context,
                                         Intent(context, ProxyService::class.java).apply {
                                             action = ProxyService.ACTION_CONNECT
-                                            putExtra(ProxyService.EXTRA_MODE, modeId)
+                                            putExtra(ProxyService.EXTRA_MODE, activeMode.id)
                                             putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
                                         }
                                     )
@@ -249,6 +256,8 @@ private fun ConnectionApp() {
                     )
                 }
                 1 -> ToolsScreen(
+                    network = diagnosticNetwork,
+                    onNetwork = { diagnosticNetwork = it; prefs.edit().putString("diagnostic_network", it).apply() },
                     target = target, onTarget = { target = it }, busy = testing,
                     report = report, error = error,
                     frontUrl = frontUrl, frontSni = frontSni, frontHost = frontHost, frontEdge = frontEdge,
@@ -284,7 +293,7 @@ private fun ConnectionApp() {
                         scope.launch {
                             try {
                                 report = withContext(Dispatchers.IO) {
-                                    JSONObject(Mobilebridge.diagnose(target.trim()))
+                                    JSONObject(Mobilebridge.diagnoseNetwork(target.trim(), diagnosticNetwork))
                                 }
                             } catch (e: Exception) {
                                 error = e.message ?: "Diagnostic failed"
@@ -395,7 +404,10 @@ private fun ConnectionScreen(
                 Text(
                     when {
                         running -> "Local proxy active · Not a system VPN"
-                        connecting -> "Verifying local upstream and foreign exit..."
+                        connecting -> when (status.optString("phase")) {
+                            "verifying_upstream" -> "Verifying local upstream and foreign exit…"
+                            else -> "Preparing Go routes and listeners…"
+                        }
                         !activeMode.available -> "This desktop core has not been ported."
                         !canConnect -> "Connect an existing local SOCKS5 core"
                         else -> "Start local SOCKS5 + HTTP proxy"
@@ -404,6 +416,10 @@ private fun ConnectionScreen(
                 )
                 if (running) {
                     Spacer(Modifier.height(8.dp))
+                    if (status.optString("dns_error").isNotBlank()) {
+                        Text("Last DNS transport failure: ${status.optString("dns_error")}",
+                            color = amber, fontSize = 11.sp)
+                    }
                     Button(onClick = onCheckRoute, enabled = !checkingRoute,
                         colors = ButtonDefaults.buttonColors(containerColor = edge, contentColor = white)) {
                         Text(if (checkingRoute) "Checking HTTPS routes..." else "Verify real HTTPS traffic")
@@ -449,7 +465,7 @@ private fun ConnectionScreen(
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp))
                                 .background(if (selected) edge else Color.Transparent)
-                                .clickable(enabled = !running) { onMode(mode.id) }
+                                .clickable(enabled = !running && !connecting) { onMode(mode.id) }
                                 .padding(horizontal = 12.dp, vertical = 11.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -500,7 +516,7 @@ private fun ConnectionScreen(
                 if (activeMode.available) OutlinedTextField(
                     value = upstream,
                     onValueChange = onUpstream,
-                    enabled = !running,
+                    enabled = !running && !connecting,
                     singleLine = true,
                     label = { Text("Local address (e.g. 127.0.0.1:9050)") },
                     modifier = Modifier.fillMaxWidth(),
@@ -591,6 +607,7 @@ private fun PowerOrb(enabled: Boolean, active: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun ToolsScreen(
+    network: String, onNetwork: (String) -> Unit,
     target: String, onTarget: (String) -> Unit, busy: Boolean,
     report: JSONObject?, error: String?, runTest: () -> Unit,
     frontUrl: String, frontSni: String, frontHost: String, frontEdge: String,
@@ -608,6 +625,12 @@ private fun ToolsScreen(
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
                 Text("NETWORK DIAGNOSIS", color = accent, fontSize = 11.sp, letterSpacing = 1.4.sp)
                 Text("Check DNS, TCP and TLS independently.", color = muted, fontSize = 12.sp)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for ((value, label) in listOf("tcp" to "Automatic", "tcp4" to "IPv4", "tcp6" to "IPv6")) {
+                        FilterChip(selected = network == value, onClick = { onNetwork(value) }, enabled = !busy,
+                            label = { Text(label) })
+                    }
+                }
                 OutlinedTextField(
                     value = target, onValueChange = onTarget, modifier = Modifier.fillMaxWidth(),
                     singleLine = true, label = { Text("Destination URL") },
@@ -637,6 +660,8 @@ private fun ToolsScreen(
                 if (error != null) Text(error, color = red, fontSize = 12.sp)
                 Text("Diagnostics use Android's default network. Success does not prove a VPN connection.",
                     color = muted, fontSize = 11.sp)
+                Text("DoH, DoT, resolver IPs and TLS/SNI can also be blocked. A DNS transport failure does not prove that the Internet or destination is down.",
+                    color = amber, fontSize = 11.sp)
             }
         }
         Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
@@ -680,12 +705,14 @@ private fun ToolsScreen(
                 }
             }
         }
+        CDNScanTool()
+        WindscribeCarrierTool()
         Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("MORE DESKTOP TOOLS", color = accent, fontSize = 11.sp, letterSpacing = 1.4.sp)
                 for (entry in listOf(
                     "Aether comparison" to "Requires Android-compatible Aether core",
-                    "Windscribe tests" to "Requires Windscribe integration",
+                    "Windscribe VPN authentication" to "Requires the official Windscribe app and native integration",
                     "CDN / fronting tests" to "Available above with controlled origin checks",
                     "Saved recommendations" to "Requires per-network measurements"
                 )) {

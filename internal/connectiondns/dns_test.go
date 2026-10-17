@@ -10,6 +10,17 @@ func TestMobileResolversRequireExitForStrictModes(t *testing.T) {
 		if _, _, err := MobileResolvers(m, ""); err == nil {
 			t.Fatalf("%s allowed a system DNS path without verified SOCKS", m)
 		}
+		if _, _, err := MobilePacketDNS(m, ""); err == nil {
+			t.Fatalf("%s allowed packet DNS without a verified exit", m)
+		}
+	}
+}
+
+func TestStrictPacketEndpointsCannotDialDirectECH(t *testing.T) {
+	for _, endpoint := range PacketEndpoints(false) {
+		if endpoint.DialTLS != nil || endpoint.Addr == "" || endpoint.FrontSNI != "" {
+			t.Fatalf("strict wire DNS could escape the supplied exit dialer: %+v", endpoint)
+		}
 	}
 }
 

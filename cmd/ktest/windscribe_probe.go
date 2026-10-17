@@ -31,32 +31,10 @@ type wsProbeResult struct {
 
 // Probe only the outer carrier. It sends no OpenVPN authentication material.
 func probeWSCarrier(ctx context.Context, transport string, cfg wstunnel.Config) wsProbeResult {
-	r := wsProbeResult{wsProbeCase: wsProbeCase{cfg.Addr, cfg.SNI, transport}}
-	began := time.Now()
-	var c net.Conn
-	var err error
-	if transport == "stealth" {
-		c, err = wstunnel.DialStealth(ctx, cfg)
-	} else {
-		c, err = wstunnel.Dial(ctx, cfg)
-	}
-	r.took = time.Since(began)
-	if err == nil {
-		r.tcp, r.tls, r.websocket = true, true, transport == "wstunnel"
-		_ = c.Close()
-		return r
-	}
-	r.stage = "tcp"
-	var staged *wstunnel.StageError
-	if errors.As(err, &staged) {
-		r.stage = staged.Stage
-		r.failure = trimDetail(staged.Err.Error())
-	} else {
-		r.failure = trimDetail(err.Error())
-	}
-	r.tcp = r.stage == "tls" || r.stage == "websocket"
-	r.tls = r.stage == "websocket"
-	return r
+	r := wstunnel.Probe(ctx, transport, cfg)
+	return wsProbeResult{wsProbeCase: wsProbeCase{cfg.Addr, cfg.SNI, transport},
+		tcp: r.TCP, tls: r.TLS, websocket: r.WebSocket,
+		took: time.Duration(r.ElapsedMS) * time.Millisecond, stage: r.Stage, failure: trimDetail(r.Failure)}
 }
 
 func parseProbeSNIs(raw string) ([]string, error) {

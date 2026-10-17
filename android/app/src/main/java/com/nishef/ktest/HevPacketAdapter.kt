@@ -15,7 +15,7 @@ import java.net.InetAddress
  */
 internal class HevPacketAdapter(
     private val context: Context
-) : AndroidVpnPacketAdapter.Stub() {
+) : AndroidVpnPacketAdapter {
     private var sessionConfig: File? = null
     private var started = false
 
@@ -34,7 +34,7 @@ internal class HevPacketAdapter(
         // Ensure Go-provided addresses cannot inject lines into a YAML file.
         fun numericAddress(value: String): String {
             require(!value.contains('\n') && !value.contains('\r'))
-            require(InetAddress.getByName(value).hostAddress.isNotBlank())
+            require(InetAddress.getByName(value).hostAddress?.isNotBlank() == true)
             return value
         }
         val ipv4 = numericAddress(plan.getString("ipv4_address"))

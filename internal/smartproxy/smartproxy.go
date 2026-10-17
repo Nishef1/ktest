@@ -125,6 +125,9 @@ type Config struct {
 	// upstreams; nil leaves them on system DNS.
 	Resolve  Resolver
 	Resolve6 Resolver
+	// ExchangeDNS forwards complete DNS messages over an encrypted transport.
+	// UDP port 53 is intercepted here and never sent to the system resolver.
+	ExchangeDNS func(context.Context, []byte) ([]byte, error)
 	// Logf receives one line per decision; nil is silent.
 	Logf func(format string, args ...any)
 	// OnEvent reports raced outcomes and unverified local TCP establishment;
@@ -526,18 +529,18 @@ func (p *Proxy) dialManagedExit(ctx context.Context, host, port string, foreign 
 			lastErr = errors.New("foreign exit changed while connecting")
 			continue
 		}
-		p.logf("Windscribe CONNECT %s:%s carried through verified exit %s", host, port, u.Name)
+		p.logf("Foreign transport CONNECT %s:%s carried through verified exit %s", host, port, u.Name)
 		p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
 		return conn, nil
 	}
 	if !any {
 		if foreign {
-			return nil, errors.New("Windscribe bootstrap blocked: no verified foreign TCP exit")
+			return nil, errors.New("foreign transport blocked: no verified foreign TCP exit")
 		}
-		return nil, errors.New("Windscribe bootstrap blocked: no eligible verified exit carrier")
+		return nil, errors.New("foreign transport blocked: no eligible verified exit carrier")
 	}
 	if lastErr != nil {
-		return nil, fmt.Errorf("Windscribe verified exit is unreachable: %w", lastErr)
+		return nil, fmt.Errorf("verified exit is unreachable: %w", lastErr)
 	}
 	return nil, errors.New("Windscribe bootstrap exit changed; reconnect ktest explicitly to select another")
 }
@@ -577,13 +580,21 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	rawClient := client
 	stopClient := context.AfterFunc(ctx, func() { _ = rawClient.Close() })
 	defer stopClient()
-	host, port, err := socksRequest(client)
+	command, host, port, err := socksCommand(client)
 	if err != nil {
+		return
+	}
+	if command == 3 {
+		p.serveUDP(ctx, client, host, port)
 		return
 	}
 	// Success is announced before any upstream is known: a TLS client only
 	// sends its ClientHello after this reply.
 	if _, err := client.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+		return
+	}
+	if port == "53" && p.cfg.ExchangeDNS != nil {
+		p.serveDNSStream(ctx, client)
 		return
 	}
 	identityRequired := p.cfg.ExitOnly != nil && !p.cfg.ExitOnly(host)
@@ -1193,6 +1204,14 @@ func isTLSFlight(b []byte) bool {
 
 // socksRequest performs the server side of SOCKS5 (no authentication, CONNECT).
 func socksRequest(c net.Conn) (host, port string, err error) {
+	command, host, port, err := socksCommand(c)
+	if err == nil && command != 1 {
+		return "", "", errors.New("CONNECT required")
+	}
+	return host, port, err
+}
+
+func socksCommand(c net.Conn) (command byte, host, port string, err error) {
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	defer c.SetDeadline(time.Time{})
 	hdr := make([]byte, 2)
@@ -1200,7 +1219,7 @@ func socksRequest(c net.Conn) (host, port string, err error) {
 		return
 	}
 	if hdr[0] != 5 {
-		return "", "", errors.New("not SOCKS5")
+		return 0, "", "", errors.New("not SOCKS5")
 	}
 	methods := make([]byte, hdr[1])
 	if _, err = io.ReadFull(c, methods); err != nil {
@@ -1208,7 +1227,7 @@ func socksRequest(c net.Conn) (host, port string, err error) {
 	}
 	if !bytes.Contains(methods, []byte{0}) {
 		_, _ = c.Write([]byte{5, 0xff})
-		return "", "", errors.New("no acceptable auth method")
+		return 0, "", "", errors.New("no acceptable auth method")
 	}
 	if _, err = c.Write([]byte{5, 0}); err != nil {
 		return
@@ -1217,10 +1236,11 @@ func socksRequest(c net.Conn) (host, port string, err error) {
 	if _, err = io.ReadFull(c, req); err != nil {
 		return
 	}
-	if req[1] != 1 {
+	if req[0] != 5 || req[2] != 0 || (req[1] != 1 && req[1] != 3) {
 		_, _ = c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
-		return "", "", errors.New("only CONNECT is supported")
+		return 0, "", "", errors.New("invalid SOCKS request or unsupported command")
 	}
+	command = req[1]
 	switch req[3] {
 	case 1:
 		b := make([]byte, 4)
@@ -1246,13 +1266,13 @@ func socksRequest(c net.Conn) (host, port string, err error) {
 		host = string(b)
 	default:
 		_, _ = c.Write([]byte{5, 8, 0, 1, 0, 0, 0, 0, 0, 0})
-		return "", "", errors.New("unsupported address type")
+		return 0, "", "", errors.New("unsupported address type")
 	}
 	pb := make([]byte, 2)
 	if _, err = io.ReadFull(c, pb); err != nil {
 		return
 	}
-	return host, strconv.Itoa(int(binary.BigEndian.Uint16(pb))), nil
+	return command, host, strconv.Itoa(int(binary.BigEndian.Uint16(pb))), nil
 }
 
 // socksConnect is the client side: it sends the host as a name so the
@@ -1323,8 +1343,14 @@ func DialVia(ctx context.Context, socksAddr, host, port string, timeout time.Dur
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(dctx, func() { _ = conn.Close() })
+	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if err := socksConnect(conn, host, port); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := dctx.Err(); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}

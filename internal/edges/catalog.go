@@ -20,6 +20,27 @@ type Preset struct {
 	Source     string
 }
 
+// ScanCandidates is the candidate/source policy shared by CLI and Android.
+func ScanCandidates(ctx context.Context, provider string, limit int) (Preset, error) {
+	if limit < 1 || limit > 300 {
+		return Preset{}, errors.New("candidate budget must be 1..300")
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "cloudflare" {
+		ips, err := CloudflareCandidates(limit)
+		return Preset{Provider: provider, URL: "https://www.cloudflare.com/cdn-cgi/trace", IPs: ips,
+			Source: "https://www.cloudflare.com/ips/", Origin: "Provider HTTPS candidates; arbitrary fronting is unverified"}, err
+	}
+	preset, err := PresetCandidates(ctx, provider)
+	if err != nil {
+		return Preset{}, err
+	}
+	if len(preset.IPs) > limit {
+		preset.IPs = preset.IPs[:limit]
+	}
+	return preset, nil
+}
+
 // PresetCandidates only selects a small source-backed seed set. Reachability,
 // TLS trust, CDN routing, and filtering outcomes are established separately.
 func PresetCandidates(ctx context.Context, provider string) (Preset, error) {

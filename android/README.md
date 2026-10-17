@@ -5,8 +5,10 @@ Android is a **thin client of the existing KTest Go core**. Network protocols, r
 ## Single-source architecture
 
 - `cmd/ktest`: original CLI and its platform-dependent orchestrators.
-- `internal/smartproxy`: shared Go adaptive TCP/SOCKS engine.
+- `internal/smartproxy`: shared Go adaptive TCP/SOCKS engine and RFC 1928 UDP ASSOCIATE. Non-DNS datagrams require a verified foreign loopback transport with a working UDP relay, and never fall back to a direct UDP socket.
 - `internal/connectionpolicy`: shared CLI and Android routing policy and mode catalog.
+- `internal/connectionsession`: shared SOCKS/HTTP/probe listener lifetime, failure propagation and stream cancellation. Both `connectSession` and Android use this package; desktop native-core discovery/launch is still outside it.
+- `internal/connectiondns`: shared trusted hostname resolution and Android packet DNS. Complete UDP/TCP DNS messages use certificate-verified wire DoH, preserving record types and negative answers.
 - `internal/egresscheck`: **shared foreign egress verification**. CLI `probeForeignExit` and Android `verifyLocalUpstream` now call the same Go HTTPS trace policy.
 - `mobilebridge`: narrow Go API consumed by `gomobile bind` (status, start/stop, diagnostics, route verification and VPN capability).
 - `android/app`: English-only Compose UI, foreground service and Android OS adapter. No duplicated Tor/HEV/Psiphon transport implementations.
@@ -38,7 +40,7 @@ The Android service:
 4. Calls `Mobilebridge.attachVpnTun(fd)` and only reports a running *packet adapter* if the Go-controlled backend succeeds.
 5. Stops the packet adapter and closes the Android-owned fd on Disconnect, revoke or process destruction.
 
-**Today this adapter is intentionally disabled.** KTest's existing `internal/smartproxy` only supports SOCKS5 TCP CONNECT; it has no UDP ASSOCIATE or DNS packet forwarding for HEV. Go's current `coreSOCKSUDPReady=false` and `coreIPv6VPNReady=false` are hard safety gates. There is **no registered native packet adapter**. Therefore this code is useful platform wiring, but **not a working whole-device VPN**, and neither Android consent nor obtaining a TUN fd is treated as connectivity.
+**Today this adapter is intentionally disabled.** Go now implements UDP ASSOCIATE, encrypted wire DNS for UDP and TCP, and IPv6 SOCKS destination encoding. Loopback integration tests cover these paths, TCP control-socket shutdown and removal of a verified exit. Those tests do **not** validate a public dual-stack UDP exit or an Android HEV/TUN dataplane. `coreSOCKSUDPReady=false` and `coreIPv6VPNReady=false` remain end-to-end readiness gates. `VpnCapability` distinguishes implemented protocols from VPN readiness. The service registers HEV when created, but a library existing or starting is insufficient to pass these gates.
 
 The app UID is excluded from the TUN if a future supported Go packet dataplane is activated, to prevent upstream feedback loops. As Android documents, that app's own networking is then outside its VPN coverage; user's other apps remain in its routing scope. Alternative `protect(fd)` per Go socket may be evaluated when the Go core's Dialer can support it.
 
@@ -48,9 +50,40 @@ The app UID is excluded from the TUN if a future supported Go packet dataplane i
 - Network DNS/TCP/TLS diagnostics, CDN fronting and ECH tests provided by existing Go packages.
 - MITM/CA source remains intact in Go; it is not installed on Android.
 - English UI with animated Connect/Disconnect, Tools, Settings and manual update checks.
+- Diagnose can select automatic TCP, IPv4 or IPv6; connection startup exposes its verification phase and supports cancellation/reconnect.
+- CDN scan uses the CLI's Cloudflare/Akamai/Fastly/Google candidate policy and HTTPS scanner, with a 1..300 budget, 90-second ceiling, progress and cancellation. Some providers have a small seed inventory or depend on DNS bootstrap; this is not an unrestricted scan or proof of arbitrary fronting.
+- Windscribe carrier testing uses the shared Go WStunnel/Stealth probe for one explicit entry and certificate-valid hostname. This does not implement the desktop node catalog/SNI comparison, OpenVPN authentication, official app integration or an operational Windscribe VPN.
+- `TestFronts` exposes the original bounded multi-edge comparison and controlled-origin proof API; the existing GUI retains its one-edge form.
+
+## DNS is an observed path, not an availability guarantee
+
+DoH, DoT, ECH, resolver IPs, TLS names and carrier protocols can be filtered independently. This app does not assume that encrypted DNS works in Iran, and does not implement a DoT fallback. Wire DoH tries bounded independent endpoints with hedging; a silent first endpoint does not consume the whole budget before alternatives begin. Strict modes send these requests through their verified SOCKS exit and never enable direct ECH/system DNS as an escape from that policy. Balanced/Fast's existing hostname resolver can use the system-first trusted-resolver policy; **packet DNS** has no plaintext fallback.
+
+Packet DNS failures appear separately in proxy status and the connection screen. They are transport observations, not proof that the Internet, destination, or all DNS methods are unavailable. In-country availability and censorship causes still need measurements. See [network diagnosis](../docs/NETWORK_DIAGNOSIS.md).
+
+## Source verification without APK/AAR output
+
+`bash android/scripts/check-sources.sh` generates the actual gomobile Java API and compiles it with the pinned HEV 2.19.0 Java declarations, then runs `:app:compileDebugKotlin` in a temporary copy. It requires Linux, Go, JDK 17+, Android platform 36 and Gradle 9.5.0. It leaves `go.mod`/`go.sum` unchanged and builds **no native libraries, AARs or APKs**. Go CI includes this source check and formatting of `mobilebridge`.
+
+Passing it establishes Java/Kotlin source compatibility, including callback signatures. It does not establish native linkage, JNI loading, rendered UI, device traffic, leaks, battery use or reconnect on a phone. The native-release workflow remains manual and separate.
 
 ## Release gate
 
 **Do not run the APK/AAR workflow without approval.** `.github/workflows/android-build.yml` remains **manual-only**. Go CI runs formatting, vet, Linux/Windows tests and race tests without creating Android APKs or feature-branch distributable artifacts.
 
-Before calling this an Android port complete: extract portable components of `cmd/ktest/connectSession` into reusable Go packages, port the actual managed Aether/Tor/Psiphon/Windscribe launcher contracts, provide an audited packet dataplane supporting DNS/UDP/IPv6 if whole-device VPN is needed, and validate Android native Gradle + physical phones and real networks. The new Android code is **not yet compiled or device-tested** under the no-build request.
+Before calling this an Android port complete: finish extracting native-core orchestration from `cmd/ktest/connectSession`, package the actual managed Aether/Tor/Psiphon/Xray/ByeDPI/Windscribe contracts for Android, and validate the complete native HEV/JNI packet path on physical phones and real networks. An Aether release supporting Termux is not automatically an app integration: Android 10+ restricts executing downloaded files from a writable app home. Native packaging must meet [Android's executable-code rules](https://developer.android.com/about/versions/10/behavior-changes-10#execute-permission), rather than adding a download-and-exec workaround.
+
+### Implementation status, 2026-10-17
+
+| Area | Implemented in source | Still required |
+| --- | --- | --- |
+| Shared Go connection | SOCKS/HTTP/probe lifetime, failure shutdown, Android startup phase/cancel | Full managed native-core orchestration parity |
+| Balanced / Fast | Existing Go TCP routes, packet DNS and verified-exit UDP | Xray/ByeDPI/native strategy bundle and device evidence |
+| Aether | Verified external loopback SOCKS path | Managed MASQUE/WireGuard profiles, enrollment and Android packaging |
+| Tor / Psiphon | Existing desktop implementations preserved | Managed Android transport integration |
+| Windscribe / through Aether | Shared carrier probe exposed to Android | Operational native bridge, catalog/profile integration and authenticated data |
+| UDP / DNS | Real SOCKS UDP, wire DoH, DNS over UDP/TCP, no direct UDP fallback | Public-exit data-plane tests and HEV/TUN validation |
+| IPv6 / whole-device VPN | IPv6 packet encoding and platform wiring | Dual-stack public egress, leak tests and device approval gates |
+| CDN / ECH tools | Shared four-provider scanner, one-route front/ECH UI, multi-edge Go API | Full CLI tool parity and rendered/device verification |
+| MITM / CA | Go implementation preserved, no automatic trust changes | Explicit Android consent/trust flow and optional activation |
+| Verification / release | Go checks, Android/arm64 package compilation, source-check tooling | Native linking/device/network/battery/reconnect/signing validation; APK/AAR release remains gated |

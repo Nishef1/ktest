@@ -67,3 +67,43 @@ func MobileResolvers(mode, exitSOCKS string) (smartproxy.Resolver, smartproxy.Re
 	aaaa := smartproxy.NewTrusted(options)
 	return a, aaaa, nil
 }
+
+// MobilePacketDNS adds full wire DNS for SOCKS UDP/TUN without sending any
+// plaintext query to Android's resolver. Strict modes stay inside their exit.
+func MobilePacketDNS(mode, exitSOCKS string) (func(context.Context, []byte) ([]byte, error), func(), error) {
+	strict := mode == "aether" || mode == "psiphon" || mode == "tor"
+	if strict && exitSOCKS == "" {
+		return nil, nil, errors.New("strict packet DNS requires a verified exit")
+	}
+	var dial smartproxy.DialFunc
+	if exitSOCKS != "" {
+		dial = func(ctx context.Context, _, address string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			return smartproxy.DialVia(ctx, exitSOCKS, host, port, 8*time.Second)
+		}
+	}
+	exchange, closeIdle := smartproxy.NewWireDoH(PacketEndpoints(!strict && exitSOCKS == ""), dial, nil)
+	return exchange, closeIdle, nil
+}
+
+// PacketEndpoints is the wire-DNS endpoint policy shared by both clients.
+// A direct ECH dial is opt-in and must never bypass a strict exit-only mode.
+func PacketEndpoints(directECH bool) []smartproxy.DoHEndpoint {
+	var endpoints []smartproxy.DoHEndpoint
+	if directECH {
+		endpoints = append(endpoints, ECHEndpoint())
+	}
+	for _, ep := range smartproxy.DefaultDoH {
+		if ep.FrontSNI != "" || ep.Addr == "" {
+			continue
+		}
+		if ep.URL == "https://dns.google/resolve" {
+			ep.URL = "https://dns.google/dns-query"
+		}
+		endpoints = append(endpoints, ep)
+	}
+	return endpoints
+}

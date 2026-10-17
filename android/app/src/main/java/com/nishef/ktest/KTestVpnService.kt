@@ -27,9 +27,9 @@ import org.json.JSONObject
  * MUST NOT claim the VPN is active just because Builder.establish() returned
  * a TUN fd; a real, healthy Go-selected packet adapter is required first.
  *
- * Until KTest's Go SOCKS core supports UDP/DNS/IPv6 and an Android packet
- * adapter is registered, VpnCapability() rejects startup before establishing
- * or rerouting any device traffic.
+ * Until the full Go/HEV UDP/DNS/IPv6 path is validated and a packet adapter
+ * is registered, VpnCapability() rejects startup before establishing or
+ * rerouting any device traffic. Protocol implementation alone is insufficient.
  */
 class KTestVpnService : VpnService() {
     companion object {
@@ -52,7 +52,7 @@ class KTestVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         // Register only a packet adapter. Go refuses full VPN until the
-        // original Go routing core can handle DNS/UDP and IPv6 safely.
+        // complete Go/HEV routing path has validated DNS/UDP and IPv6.
         Mobilebridge.setAndroidVpnPacketAdapter(HevPacketAdapter(this))
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "KTest VPN", NotificationManager.IMPORTANCE_LOW)
@@ -97,7 +97,7 @@ class KTestVpnService : VpnService() {
                         tun = tunDevice
                         // Go, not this Android service, must drive a real
                         // TUN-to-network dataplane and reject unsupported UDP.
-                        Mobilebridge.attachVpnTun(tunDevice.fd)
+                        Mobilebridge.attachVpnTun(tunDevice.fd.toLong())
                         val report = JSONObject(Mobilebridge.vpnCapability())
                         check(report.optBoolean("active")) {
                             "Go packet engine did not confirm an active TUN adapter"

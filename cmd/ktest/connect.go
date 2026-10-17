@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/connectiondns"
+	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/front"
@@ -788,6 +790,23 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		endpoints := append(append([]smartproxy.DoHEndpoint(nil), smartproxy.DefaultDoH...), echDoHEndpoint())
 		dohA = smartproxy.NewDoH(endpoints, dial, nil)
 		dohAAAA = smartproxy.NewDoHType(endpoints, dial, nil, "AAAA")
+		wireDial := dial
+		if o.mode.exitOnly() {
+			wireDial = func(ctx context.Context, _, address string) (net.Conn, error) {
+				p := liveProxy.Load()
+				if p == nil {
+					return nil, errors.New("packet DNS is waiting for the Go connection core")
+				}
+				host, port, err := net.SplitHostPort(address)
+				if err != nil {
+					return nil, err
+				}
+				return p.DialVerifiedExit(ctx, host, port)
+			}
+		}
+		exchange, closePacketDNS := smartproxy.NewWireDoH(connectiondns.PacketEndpoints(!o.mode.exitOnly()), wireDial, nil)
+		cfg.ExchangeDNS = exchange
+		defer closePacketDNS()
 	}
 	cfg.Resolve = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohA, DoHGeneration: dnsGeneration, Logf: logDNS})
 	cfg.Resolve6 = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohAAAA, DoHGeneration: dnsGeneration, IPv6: true, Logf: logDNS})
@@ -814,34 +833,31 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		return 2
 	}
 	liveProxy.Store(proxy)
-	l, err := net.Listen("tcp", o.listen)
+	connection, err := connectionsession.Start(ctx, proxy, o.listen)
 	if err != nil {
 		t.Line(toneFail, "cannot listen on %s: %v", o.listen, err)
 		return 1
 	}
-	defer l.Close()
+	defer connection.Stop()
+	l := connection.SOCKS
 	monitor.attach(proxy)
 	_, portText, _ := net.SplitHostPort(l.Addr().String())
 	var lport int
 	fmt.Sscanf(portText, "%d", &lport)
-	go func() { _ = proxy.Serve(ctx, l) }()
 	probePort := 0
 	if !o.mode.isWindscribe() {
-		probes, err := net.Listen("tcp", "127.0.0.1:0")
+		probePort, err = connection.StartProbes()
 		if err != nil {
 			t.Line(toneFail, "cannot start internal site checks: %v", err)
 			return 1
 		}
-		defer probes.Close()
-		probePort = probes.Addr().(*net.TCPAddr).Port
-		go func() { _ = proxy.ServeProbes(ctx, probes) }()
 	}
 	// Windscribe accepts an HTTP upstream proxy, while Connect speaks SOCKS5.
 	// The HTTP bridge shares Connect's learned path selection without changing
 	// system DNS, routing, or trust stores.
 	httpAddr := ""
 	if !o.noHTTP {
-		var stopHTTP func()
+		var httpDial func(context.Context, string, string) (net.Conn, error)
 		if o.mode.isWindscribe() {
 			dial := proxy.DialWindscribeLocal
 			if o.mode == ModeWindscribeAether {
@@ -890,10 +906,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				}
 				dial = bridge.Dial
 			}
-			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String(), dial)
-		} else {
-			httpAddr, stopHTTP, err = startHTTPBridge(ctx, o.httpListen, l.Addr().String())
+			httpDial = dial
 		}
+		httpAddr, err = connection.StartHTTP(o.httpListen, httpDial)
 		if err != nil {
 			if o.mode.isWindscribe() {
 				t.Line(toneFail, "Windscribe HTTP bridge could not listen on %s: %v; VPN transport not prepared", o.httpListen, err)
@@ -901,7 +916,6 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 			t.Note("HTTP proxy unavailable: %v (SOCKS5 still works)", err)
 		} else {
-			defer stopHTTP()
 			// Never request Windscribe auto-reconnect until its configured
 			// local HTTP CONNECT proxy has actually bound the port.
 			if o.mode.isWindscribe() {
@@ -1141,11 +1155,15 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory, windscribe: o.mode.isWindscribe()}
 	for {
 		select {
-		case <-ctx.Done():
+		case <-connection.Done():
 			for len(events) > 0 {
 				feed.print(<-events)
 			}
 			summarize(t, feed, fronter)
+			if err := connection.Err(); err != nil {
+				t.Line(toneFail, "Connection stopped: %v", err)
+				return 1
+			}
 			return 0
 		case e := <-events:
 			feed.print(e)

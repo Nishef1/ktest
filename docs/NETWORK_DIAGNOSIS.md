@@ -90,3 +90,30 @@ Direct WStunnel/Stealth candidates now retain the existing Chrome ClientHello an
 - The official Windscribe CLI must not automatically reconnect until the configured local HTTP CONNECT listener is bound. HTTP 200 confirms the *local* proxy accepted CONNECT; it **does not** establish the Windscribe VPN.
 - The bridge still selects the first structurally valid OpenVPN server control response before the Windscribe client can authenticate the handshake. Replacing an established stream with another IP halfway through the TLS handshake is not safe. Ranking improvements therefore apply to the **next** CONNECT, not an in-place failover.
 - A green unit-test matrix validates local logic and TLS/WSS framing, not which foreign country is reachable from a particular network. Proving success requires a controlled before/after run using the same target locations with Windscribe's actual Connected state and independently observed exit IP. Detailed logs may contain local IPs and account metadata; redact them before publication.
+## DNS transport failures on Android
+
+Encrypted DNS is a candidate path, not a guarantee. Resolver IPs, DoH/DoT
+protocols, TLS/SNI, ECH bootstrap, TCP/443 and the carrying tunnel may all be
+filtered or unavailable. A timeout alone does not identify which boundary
+failed, and does not prove that the destination or Internet is down.
+
+The Android packet-DNS path uses the existing Go transports and reports its
+failures separately from connection/listener state. It hedges across wire-DoH
+endpoints rather than waiting for one dead endpoint to consume the budget.
+Foreign-exit modes keep DNS inside the verified exit; they never silently
+switch to ISP DNS or a direct ECH connection. DoT is not currently implemented
+as an alternative. Balanced/Fast retain the existing trusted system-first
+policy for hostname resolution; that is distinct from packet DNS.
+
+| Observation | Possible causes, not a diagnosis | Next bounded check |
+| --- | --- | --- |
+| Resolver TCP connection times out | Resolver IP/port filtering, route loss, dead carrier | Compare another existing endpoint and inspect carrier health |
+| TCP succeeds, TLS fails | SNI filtering, certificate rejection, interference or server behavior | Preserve certificate checks; compare an existing ECH or tunneled path |
+| TLS succeeds, DNS HTTP request fails | DoH endpoint/protocol policy, HTTP rejection, invalid response | Record HTTP/error stage; compare an independent endpoint |
+| DoH fails but a verified exit works | Resolver-specific or transport-specific restriction remains plausible | Test DNS inside that exit; do not change exit-only policy |
+| All tested encrypted DNS paths fail | Shared network failure or several independently blocked methods | Mark DNS unavailable within this budget; try an existing independent transport explicitly |
+
+These checks must distinguish **failed**, **not attempted**, and **not
+validated**. Never turn resolver failure into an automatic second VPN, a
+hidden foreign exit in local Windscribe mode, disabled TLS validation, or a
+claim that an untested method is blocked.

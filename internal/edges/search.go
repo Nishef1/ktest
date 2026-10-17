@@ -99,9 +99,13 @@ func ScanCDN(ctx context.Context, ips []string, target string, goal int, runner 
 		go func() {
 			defer wg.Done()
 			for ip := range queue {
+				network := "tcp4"
+				if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() == nil {
+					network = "tcp6"
+				}
 				cfg := probe.Config{
 					URL: target, ConnectAddr: net.JoinHostPort(ip, "443"),
-					Timeout: 4 * time.Second, MaxBodyBytes: 128, Network: "tcp4",
+					Timeout: 4 * time.Second, MaxBodyBytes: 128, Network: network,
 				}
 				res, err := runner(working, cfg)
 				select {

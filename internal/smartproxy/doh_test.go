@@ -120,6 +120,12 @@ func TestDoHResolvesCachesAndVerifiesCertificates(t *testing.T) {
 	if _, err := untrusted(context.Background(), "youtube.com"); err == nil {
 		t.Fatal("certificate verification was skipped")
 	}
+	// Android Balanced/Fast supply no external exit dialer. This path used
+	// to dereference nil when its first real hostname needed encrypted DNS.
+	withDefaultDialer := NewDoH([]DoHEndpoint{{URL: "https://example.com/resolve", Addr: srv.Listener.Addr().String()}}, nil, pool)
+	if ips, err := withDefaultDialer(context.Background(), "youtube.com"); err != nil || len(ips) != 1 {
+		t.Fatalf("default DoH dialer failed: %v, %v", ips, err)
+	}
 }
 
 func TestDoHAAAAReturnsIPv6Records(t *testing.T) {

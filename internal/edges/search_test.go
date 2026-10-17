@@ -63,3 +63,22 @@ func TestScanStopsAfterBudgetWhenNothingWorks(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", out, err)
 	}
 }
+
+func TestScanUsesEachCandidatesActualIPFamily(t *testing.T) {
+	families := make(chan string, 2)
+	out, err := ScanCDN(context.Background(), []string{"192.0.2.1", "2001:db8::1"}, "https://example.com", 2,
+		func(_ context.Context, cfg probe.Config) (probe.Result, error) {
+			families <- cfg.Network
+			return probe.Result{Success: true, TLSVersion: "TLS 1.3", Status: 200}, nil
+		}, nil)
+	if err != nil || !out.ReachedGoal {
+		t.Fatalf("scan=%+v, %v", out, err)
+	}
+	got := map[string]int{}
+	for range 2 {
+		got[<-families]++
+	}
+	if got["tcp4"] != 1 || got["tcp6"] != 1 {
+		t.Fatalf("wrong address-family selection: %v", got)
+	}
+}

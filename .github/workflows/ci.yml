@@ -37,7 +37,38 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - run: gofmt -d cmd internal && test -z "$(gofmt -l cmd internal)"
+      - run: gofmt -d cmd internal mobilebridge && test -z "$(gofmt -l cmd internal mobilebridge)"
+  android-source:
+    # Compile source/API contracts on every change without generating APK/AAR
+    # or running the manually gated native/release workflow.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '9.5.0'
+      - name: Install source compilation SDK
+        shell: bash
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          "$SDKMANAGER" --install "platforms;android-36"
+      - name: Compile Android source without native or APK artifacts
+        run: bash android/scripts/check-sources.sh
+      - name: Compile Go bridge package for Android arm64
+        env:
+          GOOS: android
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: go build ./mobilebridge
   binaries:
     # Keep downloadable binaries on main only. Feature-branch development
     # should run tests/vet/race, not generate release-like artifacts.
