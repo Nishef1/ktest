@@ -68,9 +68,16 @@ func TestWindscribeServerCert(t *testing.T) {
 	if windscribeServerCert([]*x509.Certificate{ok}) != nil {
 		t.Fatal("Windscribe node refused")
 	}
-	other := &x509.Certificate{Subject: pkix.Name{CommonName: "evil.example"}, DNSNames: []string{"windscribe.com.evil.example"}}
-	if windscribeServerCert([]*x509.Certificate{other}) == nil {
-		t.Fatal("non-Windscribe server accepted")
+	// The currently published provider node list also uses this domain.
+	current := &x509.Certificate{Subject: pkix.Name{CommonName: "us-central-154.whiskergalaxy.com"}}
+	if err := windscribeServerCert([]*x509.Certificate{current}); err != nil {
+		t.Fatalf("current provider hostname refused: %v", err)
+	}
+	for _, domain := range []string{"windscribe.com.evil.example", "whiskergalaxy.com.evil.example", "whiskergalaxy.com"} {
+		other := &x509.Certificate{Subject: pkix.Name{CommonName: domain}}
+		if windscribeServerCert([]*x509.Certificate{other}) == nil {
+			t.Fatalf("unrecognized outer server identity accepted: %s", domain)
+		}
 	}
 }
 

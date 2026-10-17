@@ -192,7 +192,11 @@ func windscribeServerCert(certs []*x509.Certificate) error {
 	}
 	names := append([]string{certs[0].Subject.CommonName}, certs[0].DNSNames...)
 	for _, n := range names {
-		if strings.HasSuffix(strings.ToLower(n), ".windscribe.com") {
+		name := strings.ToLower(n)
+		// Current Windscribe mob-v2 node hostnames use whiskergalaxy.com
+		// in addition to the legacy windscribe.com domain. Checking only
+		// the older suffix excludes legitimate advertised WStunnel nodes.
+		if strings.HasSuffix(name, ".windscribe.com") || strings.HasSuffix(name, ".whiskergalaxy.com") {
 			return nil
 		}
 	}
@@ -526,7 +530,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	if b.catalog != nil && b.opts.serverIP == "" && len(b.catalog.endpoints(host)) == 0 {
 		select {
 		case <-b.catalog.ready:
-		case <-time.After(3 * time.Second):
+		case <-time.After(8 * time.Second):
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
 		}
