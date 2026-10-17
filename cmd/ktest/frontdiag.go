@@ -93,7 +93,7 @@ func printFronts(u *term, checks []frontCheck) {
 	case ca != nil:
 		u.Line(toneWarn, "%-26s created but not trusted yet (`ktest ca -install`)", "ktest CA")
 	case anyOK:
-		u.Line(toneInfo, "%-26s not created. Fronting works here: `ktest ca -install` enables it", "ktest CA")
+		u.Line(toneInfo, "%-26s not created. Optional fronting candidates exist; CA trust alone does not prove origin access", "ktest CA")
 	default:
 		u.Line(toneInfo, "%-26s not created (no front answered, so it would not help on this network)", "ktest CA")
 	}

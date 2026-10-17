@@ -151,7 +151,7 @@ func caInstall(u *term) int {
 		u.Line(toneWarn, "certutil finished but the system does not report the CA as trusted yet.")
 		return 1
 	}
-	u.Line(toneOK, "Trusted. Restart the browser, then run Connect: Google, YouTube and Meta sites will use domain fronting.")
+	u.Line(toneOK, "Local CA trusted. Restart the browser to test optional website fronting. This does not establish a WARP tunnel or guarantee any site's reachability.")
 	u.Note("Firefox: set security.enterprise_roots.enabled to true in about:config.")
 	return 0
 }

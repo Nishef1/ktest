@@ -51,3 +51,10 @@ This creates a local certificate and private key; use the actual filename conven
 3. Only then add optional TLS slicing for the affected TLS handshake paths, not globally.
 4. Integrate domain shadowing **only** when a front domain, CDN account and permitted origin are available; do not market it as free arbitrary-origin access.
 5. Real 2026 Iran ISP outcomes must be labeled unverified until observed on the user's network.
+
+## Operator-visible claims
+
+- A successful ECH/API enrollment proves credential preparation, not reachability of WARP data-plane gateways.
+- A CDN/front probe returning a plausible response is a candidate, not independent proof that an arbitrary requested origin was reached.
+- Local root-CA installation grants interception capability to its private-key holder. Offer it only for explicit website-fronting workflows and never as an Aether/WARP tunnel repair step.
+- If the system DNS returns a private block-page address, mark the DNS path suspicious and separately verify any replacement encrypted resolver. Do not claim it works before a live check.

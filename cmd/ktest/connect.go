@@ -500,7 +500,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	step.Finish(k, "")
 	switch {
 	case poisoned:
-		t.Note("system DNS is poisoned: www.youtube.com → %s (private block-page address); a trusted resolver is used instead", ip)
+		t.Note("system DNS appears intercepted: www.youtube.com → %s (private/block-page address); encrypted DNS will be attempted, not yet verified", ip)
 	case derr != nil:
 		t.Note("system DNS did not answer for www.youtube.com")
 	default:
@@ -1062,7 +1062,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 		fcancel()
 		if len(reach) > 0 {
-			field("Next", t.Yellow("domain fronting reaches "+strings.Join(reach, ", ")+" here: run `ktest ca -install`, then Connect again"))
+			field("Next", t.Yellow("optional website-fronting candidates observed for "+strings.Join(reach, ", ")+"; a local CA would allow HTTPS interception, not establish a VPN tunnel"))
 		}
 	}
 	field("Stop", o.stopHint)
