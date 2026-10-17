@@ -20,14 +20,14 @@ type launcher func(ctx context.Context, dns *dnscheck.Result) error
 // terminal is the interactive menu. Every action runs in the foreground; Enter
 // or Ctrl+C ends a connection or scan and returns to the menu.
 type terminal struct {
-	out io.Writer
-	ui  *term
+	ui *term
 
 	mu     sync.Mutex
 	cancel context.CancelFunc // the running connection or scan
 
-	certDeclined bool // the user skipped the certificate offer this session
-	wholePC      bool // coverage for policies 1-4, 6; Windscribe owns its own tunnel
+	settings     userSettings
+	settingsFile string
+	options      connectOptions
 }
 
 func (t *terminal) print(format string, args ...any) { t.ui.Printf(format, args...) }
@@ -52,7 +52,7 @@ var menuSections = []struct {
 }{
 	{"Connection policy", []menuItem{
 		connectItem("1", "Balanced", "Adaptive routes; AI requires a verified foreign exit", ModeBalanced),
-		connectItem("2", "Fast", "First working route; your ISP IP may be used", ModeFast),
+		connectItem("2", "Fast", "Faster ordinary-site routing; AI requires verified foreign exit", ModeFast),
 		connectItem("3", "Aether", "WARP / Psiphon; verified foreign exit only", ModeAether),
 		connectItem("4", "Aether to Tor", "Tor only; verified exit required", ModeTor),
 		connectItem("5", "Windscribe", "Local bridge; Windscribe owns the VPN", ModeWindscribe),
@@ -94,9 +94,12 @@ func (t *terminal) mainMenu(base string) {
 			if it.key == "9" {
 				desc = setupSummary(base)
 			}
+			if it.mode != "" && it.mode == t.options.mode && t.settings.Connect["mode"] != "" {
+				desc = "Last selected · " + desc
+			}
 			if it.key == "7" {
 				name = "Current Mode: Proxy"
-				if t.wholePC {
+				if t.options.tun {
 					name = "Current Mode: TUN"
 				}
 			}
@@ -179,7 +182,12 @@ func (t *terminal) foreground(job func(ctx context.Context), lines ...<-chan str
 // runInteractive is the menu. It never changes Windows routing or DNS itself;
 // only Whole PC does, after asking for Administrator.
 func runInteractive(in io.Reader, out io.Writer, base string) int {
-	t := &terminal{out: out, ui: newTerm(out)}
+	settings, path, options, err := loadPreferences(base)
+	t := &terminal{ui: newTerm(out), settings: settings, settingsFile: path, options: options}
+	if err != nil {
+		t.ui.Line(toneWarn, "Saved settings unavailable; using defaults: %v", err)
+	}
+	base = options.base
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
@@ -208,7 +216,11 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 	go func() {
 		sc := bufio.NewScanner(in)
 		for sc.Scan() {
-			lines <- sc.Text()
+			select {
+			case lines <- sc.Text():
+			case <-finished:
+				return
+			}
 		}
 		close(lines)
 	}()
@@ -240,8 +252,8 @@ func runInteractive(in io.Reader, out io.Writer, base string) int {
 }
 
 func (t *terminal) menuConnectOptions(base string, mode ConnectionMode) connectOptions {
-	o := defaultConnectOptions(base)
-	o.mode, o.tun = mode, t.wholePC && mode != ModeWindscribe
+	o := optionsForMode(t.options, mode)
+	o.base = base
 	o.stopHint = "Press Enter or Ctrl+C to disconnect and return to the menu"
 	return o
 }
@@ -249,17 +261,19 @@ func (t *terminal) menuConnectOptions(base string, mode ConnectionMode) connectO
 // connectFromMenu offers the certificate first when domain fronting would need
 // it, and Administrator for Whole PC. It reports false when stdin closed.
 func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) bool {
+	t.options.mode = mode
+	t.rememberConnect("mode", string(mode))
 	o := t.menuConnectOptions(base, mode)
 	t.ui.Note("Policy: %s. Coverage: %s", mode, connectionCoverage(o))
 	usesFronting := mode == ModeBalanced || mode == ModeFast
-	if state := certState(); state != "ok" && !t.certDeclined && usesFronting {
+	if state := certState(); state != "ok" && !t.settings.SkipCertificateOffer && usesFronting {
 		why := map[string]string{
 			"missing":   "Domain fronting (YouTube, X, Instagram, Reddit ...) needs a local certificate that is not set up.",
 			"outdated":  "The local certificate predates sites this ktest can front.",
 			"untrusted": "The local certificate exists but this system does not trust it yet.",
 		}[state]
 		t.ui.Line(toneInfo, "%s", why)
-		t.print("  Type YES to set it up now (Windows asks you to confirm), or press Enter to skip > ")
+		t.print("  Type YES to set it up now (Windows asks you to confirm), or Enter to skip future offers (Setup remains available) > ")
 		ans, ok := in.read()
 		if !ok {
 			return false
@@ -267,7 +281,8 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 		if strings.EqualFold(ans, "YES") {
 			ensureCert(t.ui)
 		} else {
-			t.certDeclined = true
+			t.settings.SkipCertificateOffer = true
+			t.savePreferences()
 		}
 	}
 	if o.tun && !systemtun.IsAdmin() {

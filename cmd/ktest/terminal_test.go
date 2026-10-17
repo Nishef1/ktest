@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 func menuOutput(t *testing.T, input string) string {
 	t.Helper()
+	t.Setenv("KTEST_SETTINGS_FILE", filepath.Join(t.TempDir(), "settings.json"))
 	var out bytes.Buffer
 	if code := runInteractive(strings.NewReader(input), &out, t.TempDir()); code != 0 {
 		t.Fatal(code)
@@ -57,7 +59,7 @@ func TestSetupLineShowsState(t *testing.T) {
 func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
 	for _, wholePC := range []bool{false, true} {
 		var output bytes.Buffer
-		menu := &terminal{wholePC: wholePC, ui: plainTerm(&output)}
+		menu := &terminal{options: connectOptions{tun: wholePC}, ui: plainTerm(&output)}
 		menu.mainMenu(t.TempDir())
 		want := "7 Current Mode: Proxy"
 		if wholePC {
@@ -75,7 +77,7 @@ func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
 	}
 	for _, mode := range []ConnectionMode{ModeBalanced, ModeFast, ModeAether, ModePsiphon, ModeTor, ModeWindscribe} {
 		for _, wholePC := range []bool{false, true} {
-			menu := &terminal{wholePC: wholePC}
+			menu := &terminal{options: connectOptions{tun: wholePC}}
 			o := menu.menuConnectOptions("example-base", mode)
 			if o.mode != mode || o.tun != (wholePC && mode != ModeWindscribe) {
 				t.Fatalf("mode=%s wholePC=%t produced mode=%s tun=%t", mode, wholePC, o.mode, o.tun)
@@ -84,16 +86,29 @@ func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
 	}
 }
 
-func TestElevationPreservesChosenPolicyAndOriginalCLIFlags(t *testing.T) {
+func TestElevationPreservesEffectivePolicyAcrossUserProfiles(t *testing.T) {
 	o := defaultConnectOptions("example-base")
 	o.mode, o.tun = ModeTor, true
-	args := elevatedConnectArgs(o, nil)
-	if !strings.Contains(strings.Join(args, " "), "-mode tor") {
-		t.Fatalf("elevation changed Tor policy: %v", args)
+	o.aiExtra, o.exitSocks = "sensitive.example", "127.0.0.1:19001"
+	o.noDirect, o.noFront, o.verbose = true, true, true
+	o.ws.sni, o.ws.direct = "python.org", false
+	o.cert = true // already performed by the parent; never replay it
+	args := elevatedConnectArgs(o)
+	if args[0] != "connect" || args[1] != elevatedSessionArg {
+		t.Fatalf("child could load another user's defaults: %v", args)
 	}
-	original := []string{"-mode", "aether", "-tun", "-exit-socks", "127.0.0.1:9000", "-no-front"}
-	args = elevatedConnectArgs(o, original)
-	if strings.Join(args[1:], "|") != strings.Join(original, "|") {
-		t.Fatalf("elevation lost explicit CLI options: %v", args)
+	child := defaultConnectOptions("another-admin-package")
+	child.mode, child.aiExtra = ModeFast, "other-user.example"
+	flags := connectFlagSet(&child)
+	if err := flags.Parse(args[2:]); err != nil {
+		t.Fatal(err)
+	}
+	// Ignore the completed one-shot action when comparing the full snapshot.
+	o.cert = false
+	if child != o {
+		t.Fatalf("effective options changed across UAC:\nchild: %+v\nparent: %+v", child, o)
+	}
+	if err := validateConnectOptions(child); err != nil {
+		t.Fatal(err)
 	}
 }

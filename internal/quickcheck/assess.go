@@ -21,6 +21,12 @@ func Compare(proxied, direct []Result) []Assessment {
 		a := Assessment{Target: p.Target, Kind: "unavailable", Detail: p.Detail}
 		baseline, checked := byTarget[p.Target]
 		switch {
+		case p.Skipped:
+			a.Kind = "not_checked"
+		case p.Reachable && !p.Success:
+			a.Kind = "service_response"
+		case checked && baseline.Skipped && p.Success:
+			a.Kind = "baseline_unknown"
 		case !p.Success && checked && baseline.Success:
 			a.Kind = "proxy_regression"
 			a.Detail = "direct access succeeds, but the selected ktest proxy fails: check its DNS and routing"

@@ -4,13 +4,20 @@ The everyday path needs no options and no knowledge of the methods behind it.
 
 ```
 .\ktest.exe                 menu: six policies, separate coverage, Diagnose, Setup, CDN/Windscribe tests
-.\ktest.exe connect         connect now
+.\ktest.exe connect         connect with saved preferences (first Windows launch: TUN)
 .\ktest.exe connect -cert   set up or renew the fronting certificate, then connect
 .\ktest.exe connect -tun    Whole PC TCP coverage for the chosen policy (asks for Administrator)
+.\ktest.exe connect -tun=false  use Proxy coverage and remember that choice
 .\ktest.exe doctor          diagnose; changes nothing
 ```
 
 From source: `go run ./cmd/ktest` (see "Where ktest looks for its files").
+
+On Windows, a first launch defaults to **TUN**; other platforms default to Proxy because this TUN integration is Windows-only. Menu option 7 shows `Current Mode: TUN` or `Current Mode: Proxy` and saves a change immediately. Closing the window does not lose it. The last selected connection policy is marked in the menu; reopening never connects automatically. Windscribe always uses its own VPN and does not change the saved coverage of other policies.
+
+Preferences live in the current user's configuration directory: `%APPDATA%\ktest\settings.json` on Windows (`KTEST_SETTINGS_FILE` can select another file). The menu and `connect` use the same saved options; explicit connection flags override and update their saved values. This includes ports, path switches, timings, extra protected AI domains and Windscribe carrier settings. Mode-specific settings remain stored but apply only to compatible policies. The certificate-offer skip choice and the defaults shown in Diagnose, CDN scan and Windscribe test also survive restart. In tool prompts, Enter accepts the displayed previous value; `-` clears a saved optional CDN/target. Certificate generation/install (`-cert`), active connections, Administrator permission and credentials are never saved as repeatable actions. An unreadable or invalid preferences file is preserved and reported; that session uses defaults and reports that changes cannot be saved.
+
+Administrator relaunches receive the complete effective connection policy, including saved extra AI domains and disabled paths. They do not depend on another administrator account having the same preferences, and do not overwrite that account's settings or repeat certificate installation.
 
 ## 1. Connect
 
@@ -22,12 +29,16 @@ The screen shows four phases with a percentage and a final state:
 | --- | --- |
 | Checking the network | System DNS is asked for `www.youtube.com`; a private answer such as `10.10.34.x` is reported as **poisoned**. The public resolver 8.8.8.8 is probed with a real query. |
 | Starting external paths | Xray fragment A and B and the ByeDPI strategies from `profiles/byedpi-strategies.txt` start side by side. A bar shows how many are ready; a core that cannot start is listed with its reason. |
-| Verifying YouTube and Google | Both are fetched through the proxy and directly, with certificate-verified HTTPS. |
+| Representative site checks | YouTube, Google, Wikipedia, Telegram and Discord are checked through the proxy and directly. Each group has at most three concurrent checks and one shared eight-second budget. The first two request tiny 204 endpoints; the others use HEAD. TLS verification stays on. |
 | Result box | **READY** (all reachable), **PARTLY READY** (some), **NOT VERIFIED** (none). It also says whether a site was blocked directly and open through ktest (*bypass confirmed*) or open both ways (nothing to bypass; if another VPN is on, turn it off to see a bypass). |
 
 The result box appears after requested TUN coverage has been checked and states whether TUN is active or only the proxy is available. The live list shows a destination when its route, outcome, or slow/fast state changes. Enter or Ctrl+C disconnects and prints separate response, refusal, TCP-only, and route-setup counts, rather than an application-success percentage inferred from TLS alone.
 
-Nothing outside ktest is changed: no system proxy, DNS, route, firewall or certificate. On Windows ktest runs inside a kill-on-close job object, so closing the window or killing ktest also ends every core and frees the ports.
+These checks exercise normal destination racing and seed its hostname/port history. They do not download full pages or exhaustively benchmark every route for every service. Only a failing/slow initial route expands to alternatives. HTTP 403 and similar service responses are reported separately from reachability failures; an unattempted direct control never counts as bypass proof. Probes have no account cookies and do not follow redirects. AI/account services are excluded from these direct controls.
+
+Every 15 minutes, a session with traffic since its last check repeats only the five proxied checks, sharing an eight-second client budget. Idle sessions send no refresh probes. Internal calibration connections are tagged separately, so even late results cannot count as user activity or enter live traffic statistics; genuine user activity during a refresh remains eligible for the next interval. Normal connection failures still affect route selection immediately. Windscribe runs neither these website checks nor their refreshes. Strict exit modes wait up to 20 seconds for a verified exit before initial checks; they never substitute a direct route.
+
+Proxy coverage only writes per-user preferences; it does not change system proxy, DNS, routes, firewall or certificate trust. Requested TUN coverage changes routes only while its verified tunnel runs; certificate setup is an explicit separate action. On Windows ktest runs inside a kill-on-close job object, so closing the window or killing ktest also ends every core and frees the ports.
 
 ## 2. How the methods are chosen
 
@@ -41,7 +52,11 @@ Choose policy and coverage first (see CONNECTION_MODES.md). Within routes permit
 
 When an application refuses a fronting takeover, that route is demoted for that exact destination for one minute. An available alternative is preferred on the next connection; the refused application's request is never replayed. Certificate verification stays enabled.
 
-The exit summary reads current registered/verified counts when it is rendered and reports whether discovery is continuing or complete. Dead managed exit cores are deregistered even while other profiles are being searched. In Fast mode, a foreign exit being available does not force AI domains onto it. Balanced's protected AI list includes `claude.ai`, `claude.com`, and their subdomains.
+The exit summary reads current registered/verified counts when it is rendered and reports whether discovery is continuing or complete. Dead managed exit cores are deregistered even while other profiles are being searched. Both Fast and Balanced require verified foreign exits for known AI domains, including ChatGPT/OpenAI, Gemini and Claude, and fail closed without one. Plain, fragment and fronting paths cannot carry those destinations. The old `-ai-direct` opt-out is removed. Windscribe's bootstrap listeners reject direct AI use; the Windscribe application owns its VPN traffic.
+
+Foreign verification is refreshed on demand before protected traffic when its five-minute lease expires, using the neutral HTTPS trace endpoint through the individual exit. Concurrent requests share a refresh; failed/unknown geolocation blocks protected dials and is briefly backed off. Protected SNI also takes precedence over an ordinary SOCKS hostname. This is a sampled GeoIP check, not a guarantee that a provider never changes an IP or uses different exits for different destinations. The policy covers traffic routed through ktest whose hostname/SNI can be identified; it cannot control other applications bypassing the proxy.
+
+TLS ClientHello messages are assembled across record boundaries before routing; incomplete or malformed handshakes fail without an upstream attempt. Extra client records are reserved for the selected route. In mixed modes, an otherwise unprotected destination must supply initial client bytes within two seconds: an empty timeout cannot select a direct route before a later protected SNI arrives. Server-first protocols without that initial identity require a verified foreign-only mode. Known protected hostnames and strict foreign-only modes retain server-first operation through verified exits.
 
 ## 3. Names (DNS)
 
@@ -80,6 +95,8 @@ ktest ca -delete      stop trusting it and delete its key
 **Cloudflare sites (X, Discord, Medium, npm) cannot be fronted this way**: Cloudflare answers 403 when the SNI and the Host differ. For them ktest uses Encrypted Client Hello, without any DNS: it sends a well-formed ECH configuration for `cloudflare-ech.com` that nobody holds a key for, the edge rejects it and returns the current configuration (retry_configs, authenticated for that name), and ktest handshakes again with it. The wire shows only `cloudflare-ech.com`; the real name travels encrypted. Any Cloudflare address serves any Cloudflare site, so a few built-in addresses are enough when DNS is poisoned. X's static files and video (`abs.twimg.com`, `video.twimg.com`) are on Fastly instead and use the Fastly route with the site's own address. Not every blocked site is on these CDNs: a site that is not listed is not fronted (the table is `DefaultFamilies` in `internal/front/rules.go`; unknown sites go through the other paths).
 
 A CA is name-constrained when it is created and its list cannot be extended. If ktest learns new sites after you created it, `ktest ca` says so and `ktest ca -renew` replaces it.
+
+CA and leaf-key generation are entirely local and offline using the operating system's secure randomness. Each independent user installation generates its own key and certificate; private keys are not bundled or shared. Trust installation is separate: Windows user confirmation is retained, and a trusted existing CA is reused without repeating setup. This repository's portable TUN package is Windows-only; installing a CA on a phone neither runs that package nor makes every mobile app trust user-added certificates.
 
 What ktest does to keep this safe:
 

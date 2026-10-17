@@ -11,10 +11,11 @@ import (
 	"time"
 )
 
-// clientHello is a minimal record that looks like a TLS ClientHello to the
-// proxy: handshake record, version 3.1, length, handshake type 1.
+// clientHello is a minimal, structurally valid TLS 1.2 ClientHello.
 func clientHello() []byte {
-	body := []byte{0x01, 0, 0, 4, 3, 3, 0, 0}
+	parameters := append([]byte{3, 3}, make([]byte, 32)...)
+	parameters = append(parameters, 0, 0, 2, 0, 0x2f, 1, 0)
+	body := append([]byte{1, 0, 0, byte(len(parameters))}, parameters...)
 	rec := []byte{0x16, 3, 1, 0, byte(len(body))}
 	return append(rec, body...)
 }
@@ -75,7 +76,10 @@ func TestFirstFlightReadsTLSHeaderSplitAcrossWrites(t *testing.T) {
 				_, err := z.Write(want[split:])
 				written <- err
 			}()
-			got := readFirstFlight(a)
+			got, _, err := readFirstFlight(a, 400*time.Millisecond)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if !bytes.Equal(got, want) || !isTLSFlight(got) {
 				t.Fatalf("partial TLS record escaped classification: got %x, want %x", got, want)
 			}
@@ -83,6 +87,41 @@ func TestFirstFlightReadsTLSHeaderSplitAcrossWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestFirstFlightDoesNotRaceExtraClientRecords(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	f := capturedClientHello(t, "www.google.com")
+	extra := []byte{23, 3, 3, 0, 3, 1, 2, 3}
+	written := make(chan error, 1)
+	go func() { _, err := b.Write(append(append([]byte(nil), f...), extra...)); written <- err }()
+	got, pending, err := readFirstFlight(a, 400*time.Millisecond)
+	if err != nil || !bytes.Equal(got, f) || !bytes.Equal(pending, extra) {
+		t.Fatalf("ClientHello/extra boundary lost: flight=%d pending=%x err=%v", len(got), pending, err)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+	c := &pendingConn{Conn: a, pending: pending}
+	read := make([]byte, len(extra))
+	if _, err := io.ReadFull(c, read); err != nil || !bytes.Equal(read, extra) {
+		t.Fatal("extra records were lost after selection")
+	}
+}
+
+func TestIncompleteTLSAndAbandonedClientCannotBecomeRawTraffic(t *testing.T) {
+	f := capturedClientHello(t, "chatgpt.com")
+	for _, size := range []int{0, 1, 4, len(f) - 1} {
+		a, b := net.Pipe()
+		go func() { _, _ = b.Write(f[:size]); b.Close() }()
+		_, _, err := readFirstFlight(a, 400*time.Millisecond)
+		a.Close()
+		if err == nil {
+			t.Fatalf("incomplete/closed client size%d became a raw route", size)
+		}
 	}
 }
 

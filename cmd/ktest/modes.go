@@ -50,10 +50,10 @@ func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.Doma
 	case ModeBalanced:
 		cfg.ExitOnly = rules.Match
 	case ModeFast:
-		cfg.ExitOnly = nil
+		cfg.ExitOnly = rules.Match
 		cfg.Stagger = 125 * time.Millisecond
 	case ModeWindscribe:
-		cfg.ExitOnly = nil
+		cfg.ExitOnly = rules.Match
 		cfg.PreferVerifiedExit = false
 		cfg.RejectExits = true
 		cfg.LocalOnly = true
@@ -67,7 +67,7 @@ func (m ConnectionMode) message() string {
 	case ModeBalanced:
 		return "Mixed routing; AI domains require verified foreign exit and fail closed."
 	case ModeFast:
-		return "Speed first: direct, fronting, desync and VPN exits can win; public IP may change by site."
+		return "Speed first for ordinary sites; AI requires a verified foreign exit and fails closed."
 	case ModeWindscribe:
 		return "OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI, optional own Cloudflare hostname) plus IP-preserving local anti-DPI (Xray TCP fragmentation, ByeDPI, TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."
 	case ModeAether:

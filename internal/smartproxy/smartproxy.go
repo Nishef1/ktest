@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -98,6 +99,10 @@ type Config struct {
 	// ExitOnly forces matched names to use only verified foreign exits.
 	// If none is present, fail closed instead of silently revealing the ISP IP.
 	ExitOnly func(string) bool
+	// VerifyExit rechecks a previously eligible exit using a neutral destination.
+	// Protected connections wait for a fresh successful check before dialing.
+	VerifyExit    func(context.Context, Upstream) error
+	ExitVerifyTTL time.Duration
 	// PreferVerifiedExit is useful for bootstrapping TCP VPN protocols: try an
 	// already checked foreign proxy before a misleading raw TCP/IP connection.
 	PreferVerifiedExit bool
@@ -128,6 +133,7 @@ type Config struct {
 
 // Event reports a connection outcome, or unverified TCP establishment.
 type Event struct {
+	Probe       bool // internal calibration listener; never counts as user activity
 	Host        string
 	Site        string // grouped domain for aggregate reporting; never the exact history key
 	Port        string
@@ -147,6 +153,9 @@ type Event struct {
 }
 
 func (c *Config) defaults() {
+	if c.ExitVerifyTTL <= 0 {
+		c.ExitVerifyTTL = 5 * time.Minute
+	}
 	if c.Stagger <= 0 {
 		c.Stagger = 300 * time.Millisecond
 	}
@@ -171,8 +180,12 @@ type Stat struct {
 
 type upstreamState struct {
 	Upstream
-	wins, fails int
-	ewmaMS      float64
+	wins, fails   int
+	ewmaMS        float64
+	verifiedUntil atomic.Int64
+	verifyMu      sync.Mutex
+	verifyErr     error
+	retryAfter    time.Time
 }
 
 type memo struct {
@@ -227,7 +240,11 @@ func New(cfg Config) (*Proxy, error) {
 			return nil, fmt.Errorf("upstream names must be unique and non-empty (%q)", u.Name)
 		}
 		seen[u.Name] = true
-		p.ups = append(p.ups, &upstreamState{Upstream: u})
+		state := &upstreamState{Upstream: u}
+		if u.AIEligible {
+			state.verifiedUntil.Store(time.Now().Add(cfg.ExitVerifyTTL).UnixNano())
+		}
+		p.ups = append(p.ups, state)
 	}
 	return p, nil
 }
@@ -277,7 +294,7 @@ func (p *Proxy) ExitCounts() (total, verified int) {
 	for _, u := range p.ups {
 		if u.Exit {
 			total++
-			if u.AIEligible {
+			if u.AIEligible && (p.cfg.VerifyExit == nil || time.Now().UnixNano() < u.verifiedUntil.Load()) {
 				verified++
 			}
 		}
@@ -342,6 +359,9 @@ func (p *Proxy) DialWindscribeCarrier(ctx context.Context, host, port string) (n
 }
 
 func (p *Proxy) dialLocalBypass(ctx context.Context, host, port string, report bool) (net.Conn, error) {
+	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) {
+		return nil, errors.New("protected AI domains cannot use the local Windscribe bootstrap bridge")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -388,7 +408,7 @@ func (p *Proxy) dialLocalBypass(ctx context.Context, host, port string, report b
 			p.mu.Unlock()
 		}
 		began := time.Now()
-		conn, err := p.dial(ctx, u.Upstream, host, port)
+		conn, err := p.dial(ctx, u, host, port)
 		if err != nil {
 			p.record(u, host, port, false, time.Since(began))
 			lastErr = err
@@ -396,7 +416,7 @@ func (p *Proxy) dialLocalBypass(ctx context.Context, host, port string, report b
 		}
 		p.logf("Windscribe CONNECT %s:%s accepted via local anti-DPI %s (destination/VPN negotiation not yet verified)", host, port, u.Name)
 		if report {
-			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
+			p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), TCPOnly: true})
 		}
 		return conn, nil
 	}
@@ -432,7 +452,7 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 		}
 		any = true
 		began := time.Now()
-		conn, err := p.dial(ctx, u.Upstream, host, port)
+		conn, err := p.dial(ctx, u, host, port)
 		if err != nil {
 			p.record(u, host, port, false, time.Since(began))
 			lastErr = err
@@ -454,7 +474,7 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 			continue
 		}
 		p.logf("Windscribe CONNECT %s:%s carried through verified exit %s", host, port, u.Name)
-		p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
+		p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Path: u.Name, Took: time.Since(began), OK: true})
 		return conn, nil
 	}
 	if !any {
@@ -467,6 +487,14 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 }
 
 // Serve accepts SOCKS5 clients until ctx ends.
+type probeContextKey struct{}
+
+// ServeProbes shares route learning but permanently tags this listener's
+// events, including results arriving after a calibration client times out.
+func (p *Proxy) ServeProbes(ctx context.Context, l net.Listener) error {
+	return p.Serve(context.WithValue(ctx, probeContextKey{}, true), l)
+}
+
 func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -490,7 +518,8 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 
 func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	defer client.Close()
-	stopClient := context.AfterFunc(ctx, func() { _ = client.Close() })
+	rawClient := client
+	stopClient := context.AfterFunc(ctx, func() { _ = rawClient.Close() })
 	defer stopClient()
 	host, port, err := socksRequest(client)
 	if err != nil {
@@ -501,7 +530,25 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	if _, err := client.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
 		return
 	}
-	flight := readFirstFlight(client)
+	identityRequired := p.cfg.ExitOnly != nil && !p.cfg.ExitOnly(host)
+	firstByteWait := 400 * time.Millisecond
+	if identityRequired {
+		firstByteWait = 2 * time.Second
+	}
+	flight, extra, err := readFirstFlight(client, firstByteWait)
+	if err != nil {
+		if ctx.Err() == nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+			p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Err: err.Error()})
+		}
+		return
+	}
+	if len(flight) == 0 && identityRequired {
+		p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Err: "No client identity received; server-first traffic requires a verified foreign-only mode"})
+		return
+	}
+	if len(extra) > 0 {
+		client = &pendingConn{Conn: client, pending: extra}
+	}
 	var win winner
 	if isTLSFlight(flight) {
 		host = p.nameFor(host, flight)
@@ -517,7 +564,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 				e.OK = len(win.first) > 0
 				e.TCPOnly = !e.OK
 			}
-			p.emit(e)
+			p.emit(ctx, e)
 		}
 	}
 	if err != nil {
@@ -530,7 +577,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 		if err := win.sess.Serve(client, flight); err != nil {
 			p.rejectTakeover(host, port, win.path)
 			p.logf("%s:%s %s: %v", host, port, win.path, err)
-			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: win.path, Err: err.Error(), Rejected: true})
+			p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Path: win.path, Err: err.Error(), Rejected: true})
 		}
 		return
 	}
@@ -542,7 +589,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	}
 	result := pipe(client, win.conn)
 	if win.tls && ctx.Err() == nil {
-		p.observeRelay(host, port, win.path, result)
+		p.observeRelay(ctx, host, port, win.path, result)
 	}
 }
 
@@ -551,15 +598,14 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 // in which case the SNI of its ClientHello is the only truthful name left. This
 // is what lets an application that ignores "proxy DNS" still work.
 func (p *Proxy) nameFor(host string, flight []byte) string {
+	if sni, _, ok := ParseClientHello(flight); ok && sni != "" && p.cfg.ExitOnly != nil && p.cfg.ExitOnly(sni) {
+		return sni
+	}
 	ip := net.ParseIP(host)
 	if ip == nil {
 		return host
 	}
 	if sni, _, ok := ParseClientHello(flight); ok && sni != "" && net.ParseIP(sni) == nil {
-		if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(sni) {
-			p.logf("%s uses protected AI SNI %s; enforcing foreign exit", host, sni)
-			return sni
-		}
 		if Bogus(ip) {
 			p.logf("%s is a block-page address; using the SNI %s instead", host, sni)
 			return sni
@@ -695,7 +741,7 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 				continue
 			}
 			p.logf("%s:%s won by %s in %dms", host, port, r.u.Name, r.took.Milliseconds())
-			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: r.u.Name, Took: time.Since(began), OK: true, TLSResponse: r.win.tls, Prepared: r.win.sess != nil})
+			p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Path: r.u.Name, Took: time.Since(began), OK: true, TLSResponse: r.win.tls, Prepared: r.win.sess != nil})
 			cancel()
 			go drain(results, pending)
 			r.win.path = r.u.Name
@@ -705,14 +751,15 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	if lastErr == nil {
 		lastErr = errors.New("no upstream")
 	}
-	p.emit(Event{Host: host, Port: port, Site: siteKey(host), Err: lastErr.Error()})
+	p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Err: lastErr.Error()})
 	return winner{}, lastErr
 }
 
 // lateAfter is how long a Late path waits behind the others at most.
 const lateAfter = 3 * time.Second
 
-func (p *Proxy) emit(e Event) {
+func (p *Proxy) emit(ctx context.Context, e Event) {
+	e.Probe, _ = ctx.Value(probeContextKey{}).(bool)
 	if p.cfg.OnEvent != nil {
 		p.cfg.OnEvent(e)
 	}
@@ -764,7 +811,7 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 		}
 		return winner{sess: sess}, nil
 	}
-	conn, err := p.dial(ctx, u.Upstream, host, port)
+	conn, err := p.dial(ctx, u, host, port)
 	if err != nil {
 		return winner{}, err
 	}
@@ -850,7 +897,7 @@ func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (wi
 	var lastErr error
 	for _, u := range cands {
 		began := time.Now()
-		conn, err := p.dial(ctx, u.Upstream, host, port)
+		conn, err := p.dial(ctx, u, host, port)
 		if err == nil && len(flight) > 0 {
 			if _, werr := conn.Write(flight); werr != nil {
 				_ = conn.Close()
@@ -900,7 +947,7 @@ func (p *Proxy) racePlain(parent context.Context, cands []*upstreamState, host, 
 			pending++
 			go func() {
 				began := time.Now()
-				conn, err := p.dial(ctx, u.Upstream, host, port)
+				conn, err := p.dial(ctx, u, host, port)
 				if err != nil {
 					results <- res{u: u, err: err, took: time.Since(began)}
 					return
@@ -1007,11 +1054,23 @@ func (p *Proxy) Add(u Upstream) error {
 			return fmt.Errorf("upstream %q already exists", u.Name)
 		}
 	}
-	p.ups = append(p.ups, &upstreamState{Upstream: u})
+	state := &upstreamState{Upstream: u}
+	if u.AIEligible {
+		state.verifiedUntil.Store(time.Now().Add(p.cfg.ExitVerifyTTL).UnixNano())
+	}
+	p.ups = append(p.ups, state)
 	return nil
 }
 
-func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Conn, error) {
+func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (net.Conn, error) {
+	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) {
+		if !u.Exit || !u.AIEligible {
+			return nil, errors.New("protected destination requires a verified foreign exit")
+		}
+		if err := p.verifyExit(ctx, u); err != nil {
+			return nil, err
+		}
+	}
 	dctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
 	defer cancel()
 	d := net.Dialer{}
@@ -1050,35 +1109,6 @@ func (p *Proxy) dial(ctx context.Context, u Upstream, host, port string) (net.Co
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn, nil
-}
-
-// readFirstFlight reads the client's first bytes. A TLS ClientHello is read
-// completely (its record length is known); anything else returns what arrived
-// within a short window, and an empty result means the server speaks first.
-func readFirstFlight(c net.Conn) []byte {
-	_ = c.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
-	defer c.SetReadDeadline(time.Time{})
-	buf := make([]byte, 0, 2048)
-	tmp := make([]byte, 16*1024)
-	for {
-		n, err := c.Read(tmp)
-		buf = append(buf, tmp[:n]...)
-		if err != nil {
-			return buf
-		}
-		if len(buf) > 0 && buf[0] == 0x16 && (len(buf) < 2 || buf[1] == 3) {
-			// TCP may split the record header itself. A partial header must
-			// not route TLS through the non-TLS paths before SNI can be read.
-			if len(buf) < 5 {
-				continue
-			}
-			if len(buf) >= 5+int(binary.BigEndian.Uint16(buf[3:5])) {
-				return buf
-			}
-			continue
-		}
-		return buf
-	}
 }
 
 func isTLSFlight(b []byte) bool {

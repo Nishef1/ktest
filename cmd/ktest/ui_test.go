@@ -78,12 +78,8 @@ func TestBarClampsAndWrapTextRespectsWidth(t *testing.T) {
 }
 
 func TestMainMenuListsModesAndTools(t *testing.T) {
-	var out bytes.Buffer
-	if code := runInteractive(strings.NewReader("0\n"), &out, t.TempDir()); code != 0 {
-		t.Fatal(code)
-	}
-	text := out.String()
-	for _, want := range []string{"CONNECT", "TOOLS", "Proxy", "Diagnose", "Setup", "CDN scan", "Exit"} {
+	text := menuOutput(t, "0\n")
+	for _, want := range []string{"CONNECT", "TOOLS", "Current Mode:", "Diagnose", "Setup", "CDN scan", "Exit"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("menu lacks %q:\n%s", want, text)
 		}
@@ -200,7 +196,7 @@ func TestMenuFitsNarrowAndColoredTerminals(t *testing.T) {
 	for _, width := range []int{40, 60, 80, 120} {
 		var out bytes.Buffer
 		u := &term{w: &out, columns: width, color: true, unicode: true}
-		menu := &terminal{out: &out, ui: u}
+		menu := &terminal{ui: u}
 		menu.mainMenu(t.TempDir())
 		for _, line := range strings.Split(out.String(), "\n") {
 			if visibleLen(line) > width {

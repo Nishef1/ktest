@@ -41,8 +41,16 @@ func TestServerHelloFramingRejectsTruncationAndPreservesFragmentedRecords(t *tes
 }
 
 func TestTLS12AndTLS13StillAuthenticateAndTransferThroughProxy(t *testing.T) {
-	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
-		t.Run(tls.VersionName(version), func(t *testing.T) {
+	for _, tc := range []struct {
+		version    uint16
+		fragmented bool
+	}{{tls.VersionTLS12, false}, {tls.VersionTLS12, true}, {tls.VersionTLS13, false}, {tls.VersionTLS13, true}} {
+		version := tc.version
+		label := tls.VersionName(version)
+		if tc.fragmented {
+			label += "/fragmented-client"
+		}
+		t.Run(label, func(t *testing.T) {
 			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "usable application data") }))
 			server.TLS = &tls.Config{MinVersion: version, MaxVersion: version}
 			server.StartTLS()
@@ -57,7 +65,22 @@ func TestTLS12AndTLS13StillAuthenticateAndTransferThroughProxy(t *testing.T) {
 			}
 			roots := x509.NewCertPool()
 			roots.AddCert(server.Certificate())
-			client := tls.Client(raw, &tls.Config{RootCAs: roots, ServerName: host, MinVersion: version, MaxVersion: version})
+			var wire net.Conn = raw
+			if tc.fragmented {
+				wire = &firstWriteConn{Conn: raw, send: func(c net.Conn, f []byte) error {
+					parts, err := splitRecords(f, []int{6, len(f) - 8})
+					if err != nil {
+						return err
+					}
+					for _, part := range parts {
+						if _, err := c.Write(part); err != nil {
+							return err
+						}
+					}
+					return nil
+				}}
+			}
+			client := tls.Client(wire, &tls.Config{RootCAs: roots, ServerName: host, MinVersion: version, MaxVersion: version})
 			defer client.Close()
 			_ = client.SetDeadline(time.Now().Add(3 * time.Second))
 			if err := client.HandshakeContext(ctx); err != nil {

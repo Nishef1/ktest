@@ -3,17 +3,15 @@ package smartproxy
 import "encoding/binary"
 
 // ParseClientHello extracts the server name and the offered ALPN protocols from
-// a ClientHello that fits in the single TLS record at the start of f. ok is
-// false when f is not such a record.
+// a complete ClientHello, including one fragmented across handshake records.
+// ok is false for an incomplete or malformed handshake.
 func ParseClientHello(f []byte) (sni string, alpn []string, ok bool) {
-	if len(f) < 9 || f[0] != 0x16 || f[5] != 0x01 {
+	f, ok = clientHelloMessage(f)
+	if !ok {
 		return "", nil, false
 	}
-	recEnd := 5 + int(binary.BigEndian.Uint16(f[3:5]))
-	if recEnd > len(f) {
-		return "", nil, false
-	}
-	p := 5 + 4 + 2 + 32
+	recEnd := len(f)
+	p := 4 + 2 + 32
 	skip := func(lenBytes int) bool {
 		if p+lenBytes > recEnd {
 			return false
@@ -28,6 +26,9 @@ func ParseClientHello(f []byte) (sni string, alpn []string, ok bool) {
 	if !skip(1) || !skip(2) || !skip(1) {
 		return "", nil, false
 	}
+	if p == recEnd {
+		return "", nil, true
+	} // TLS 1.2 may omit extensions.
 	if p+2 > recEnd {
 		return "", nil, false
 	}

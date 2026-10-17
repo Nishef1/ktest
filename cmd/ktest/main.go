@@ -34,13 +34,14 @@ func main() {
 const usageText = `ktest: free access toolkit
 
   ktest                    menu
-  ktest connect            Balanced: every method races; AI sites only via a foreign exit
-    -mode fast             fastest working route per site; public IP may change
+  ktest connect            connect with saved choices (initial policy: Balanced)
+    -mode fast             faster ordinary-site routing; AI requires a foreign exit
     -mode aether           Aether WARP/Psiphon search; verified foreign exit
     -mode psiphon          Aether to Psiphon; Psiphon profiles only
     -mode tor              Aether to Tor; Tor circuit only
     -mode windscribe       carry the Windscribe app (OpenVPN TCP over WStunnel)
-    -tun                   coverage for the selected policy: Whole PC TCP (Windows, Administrator)
+    -tun                   Whole PC TCP (initial Windows default; Administrator)
+    -tun=false             Proxy coverage; remember it for the next launch
     -v                     log every decision (ktest connect -h lists every flag)
   ktest doctor             diagnose this network and the package; changes nothing
     -mode windscribe       Windscribe-specific prerequisites/status; no reconnects

@@ -466,7 +466,7 @@ func (m *warpManager) search(ctx context.Context) []*warpFound {
 				if geoErr == nil {
 					m.t.Line(toneOK, "Foreign exit verified and available: %s (%s)", ip, country)
 					if m.o.mode == ModeFast {
-						m.t.Note("Fast may still select direct routes, including for AI domains.")
+						m.t.Note("Fast keeps AI on verified foreign exits; ordinary sites may use direct routes.")
 					}
 				}
 			}

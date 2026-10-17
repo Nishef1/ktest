@@ -4,14 +4,16 @@
 
 The menu separates **policy** (1-6) from **coverage** (7). Policies 1-4 and 6 use the selected proxy-app or Whole PC TCP coverage. Option 5 is the Windscribe bridge and always leaves coverage to Windscribe. Select coverage first, then the policy; choosing Whole PC does not launch a second routing policy or silently reset the selected policy to Balanced.
 
-Use Balanced for ordinary proxy-app access with known AI domains protected, Fast when a working route matters more than exit-IP identity, Aether when all managed traffic must use a verified foreign WARP/Psiphon exit, Aether to Psiphon for Psiphon profiles only, and Aether to Tor for a verified Tor-only route. To carry the installed Windscribe app, choose Windscribe. Setup only prepares optional capabilities: configured WARP/Psiphon paths remain prohibited in Windscribe mode.
+The first Windows launch defaults to TUN; subsequent launches restore the user's saved coverage and connection settings. Other platforms initially use Proxy. Changes are saved when selected, and the last chosen policy is marked without connecting automatically. `connect -tun=false` selects and remembers Proxy coverage. Windscribe does not overwrite the saved TUN/Proxy choice of other policies.
+
+Use Balanced or Fast for adaptive ordinary-site access with known AI domains protected in both, Aether when all managed traffic must use a verified foreign WARP/Psiphon exit, Aether to Psiphon for Psiphon profiles only, and Aether to Tor for a verified Tor-only route. Fast gives ordinary-site alternatives a shorter head start; it does not disable AI protection. To carry the installed Windscribe app, choose Windscribe. Setup only prepares optional capabilities: configured WARP/Psiphon paths remain prohibited in Windscribe mode.
 
 CLI policy options:
 
 | Option | Scope | IP policy | Failure policy |
 | --- | --- | --- | --- |
 | `-mode balanced` | normal mixed access, **AI sites protected** | Ordinary sites may use own IP; AI via verified foreign exit | AI domains stop if foreign exit absent |
-| `-mode fast` | fastest usable destination path | Direct, fragment, fronting, or Psiphon may win; public IP may differ by destination | Can fall back to local ISP IP |
+| `-mode fast` | faster ordinary-site selection, **AI sites protected** | Ordinary sites may use direct/fragment/fronting/exits; known AI domains require a verified foreign exit | AI fails closed; no ISP-IP fallback for AI |
 | `-mode windscribe` | **strict local-only anti-DPI** HTTP/SOCKS bootstrap for installed Windscribe | OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI; optional own Cloudflare hostname whose origin is a Windscribe server) + local Xray TCP fragmentation + ByeDPI; no Psiphon/Aether/WARP/Tor, foreign/unknown Xray exit or Plain; only Windscribe changes public VPN IP | No foreign fallback. HTTP CONNECT may be acknowledged before the carrier race; a later failure closes that stream. Windscribe Firewall controls other apps |
 | `-mode aether` | all traffic **sent through ktest's SOCKS/HTTP listeners** | One verified foreign SOCKS path is pinned after its first success in this session | Fail closed; never switch to direct/fragment/fronting |
 | `-mode psiphon` | Aether to Psiphon; all managed traffic | Only Aether Psiphon profiles, including CDN fronting; verified foreign exit required | Fail closed; no WARP, Tor, direct or external SOCKS fallback |
@@ -49,11 +51,13 @@ For modes other than Windscribe and Aether to Psiphon, an **already running** ex
 
 ## IP stability and limitations
 
-In the `aether` profile, the first verified foreign exit route that succeeds for a managed connection is pinned for the remainder of the session; other exits are no longer chosen automatically. A **pinned route does not guarantee a pinned public IP**: Psiphon may rotate servers and Tor changes circuit exits. The country/IP check is a one-time HTTPS test, not a continuous per-destination geolocation or cryptographic guarantee. Do not claim an identity is fixed based on this.
+In the `aether` profile, the first verified foreign exit route that succeeds for a managed connection is pinned for the remainder of the session; other exits are no longer chosen automatically. Known AI domains are protected and pinned in Fast and Balanced too; `-ai-direct` is no longer accepted. The local-only Windscribe bootstrap bridge rejects direct requests to those AI hosts, while Windscribe controls application VPN coverage. A **pinned route does not guarantee a pinned public IP**: Psiphon may rotate servers and Tor changes circuit exits. The country/IP check has a five-minute lease and is refreshed via a neutral HTTPS endpoint before further protected traffic; a failed refresh blocks that traffic. It is not continuous per-destination geolocation or a cryptographic guarantee. Do not claim an identity is fixed based on this.
 
 When a truly stable login/location is necessary (AI sites may trigger extra checks on exit-IP changes), use a fixed Windscribe location, or consider Windscribe's optional Static IP offering. Use Windscribe Firewall when the VPN is active. Tor is designed for anonymity properties, *not* for fixed identity across websites; some services also block Tor exits.
 
-In `balanced` mode, hostname routing cannot protect what it cannot identify (for example, some opaque IP-only, ECH-without-visible-name, non-proxied, or UDP connections). For sensitive applications, use `aether` with their traffic explicitly through ktest, or a system-wide VPN with a real firewall.
+Hostname routing in Fast and Balanced cannot protect what it cannot identify (for example, some opaque IP-only, ECH-without-visible-name, non-proxied, or UDP connections). For sensitive applications, use a verified foreign-only route with their traffic explicitly through ktest, or a system-wide VPN with a real firewall.
+
+Mixed modes do not preselect an ISP route for a silent connection. If an otherwise unprotected destination sends no initial client bytes within two seconds, that connection is closed; use a verified foreign-only mode for server-first protocols. Fragmented TLS ClientHello messages are gathered before hostname/SNI policy is applied.
 
 ## Windscribe debugging
 

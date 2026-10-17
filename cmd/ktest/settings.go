@@ -1,0 +1,162 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+)
+
+// Keep user choices, never connection state, certificates or credentials.
+// Connection values use the same parser as the CLI instead of a second schema.
+type userSettings struct {
+	Connect              map[string]string `json:"connect,omitempty"`
+	SkipCertificateOffer bool              `json:"skip_certificate_offer,omitempty"`
+	Tools                toolSettings      `json:"tools,omitempty"`
+}
+
+type toolSettings struct {
+	DiagnosisMode    string `json:"diagnosis_mode,omitempty"`
+	ScanProvider     string `json:"scan_provider,omitempty"`
+	ScanCDN          string `json:"scan_cdn,omitempty"`
+	WindscribeTarget string `json:"windscribe_target,omitempty"`
+	WindscribeSNIs   string `json:"windscribe_snis,omitempty"`
+}
+
+func settingsPath() (string, error) {
+	if path := os.Getenv("KTEST_SETTINGS_FILE"); path != "" {
+		return path, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "ktest", "settings.json"), nil
+}
+
+// Invalid/unreadable settings are preserved for repair. This session uses
+// defaults and disables writes rather than silently replacing the user's file.
+func loadPreferences(base string) (userSettings, string, connectOptions, error) {
+	settings := userSettings{Connect: map[string]string{}}
+	defaults := defaultConnectOptions(base)
+	path, err := settingsPath()
+	if err != nil {
+		return settings, "", defaults, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return settings, path, defaults, nil
+	}
+	if err == nil {
+		err = json.Unmarshal(data, &settings)
+	}
+	if err != nil {
+		return userSettings{Connect: map[string]string{}}, "", defaults, fmt.Errorf("read %s: %w", path, err)
+	}
+	if settings.Connect == nil {
+		settings.Connect = map[string]string{}
+	}
+	options := defaults
+	flags := connectFlagSet(&options)
+	// Stable order also makes invalid configuration diagnostics reproducible.
+	names := make([]string, 0, len(settings.Connect))
+	for name := range settings.Connect {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if name == "cert" || flags.Lookup(name) == nil {
+			delete(settings.Connect, name) // removed flags and one-shot actions
+			continue
+		}
+		if err = flags.Set(name, settings.Connect[name]); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		options.mode, err = parseConnectionMode(string(options.mode))
+		if err == nil {
+			err = validateConnectOptions(optionsForMode(options, options.mode))
+		}
+	}
+	if err != nil {
+		return userSettings{Connect: map[string]string{}}, "", defaults, fmt.Errorf("invalid settings in %s: %w", path, err)
+	}
+	return settings, path, options, nil
+}
+
+func optionsForMode(o connectOptions, mode ConnectionMode) connectOptions {
+	o.mode = mode
+	if mode == ModeWindscribe {
+		o.tun = false
+	} else {
+		o.ws.cdnHost, o.ws.cdnSNI, o.ws.cdnEdges = "", "", ""
+	}
+	if mode == ModeWindscribe || mode == ModePsiphon {
+		o.exitSocks = ""
+	}
+	return o
+}
+
+func saveSettings(path string, settings userSettings) error {
+	if path == "" {
+		return errors.New("settings file is unavailable; changes last for this session only")
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".settings-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(append(data, '\n')); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
+func (s *userSettings) rememberFlags(flags *flag.FlagSet) bool {
+	changed := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "cert" {
+			return // issuing/installing trust is an action, never a saved default
+		}
+		if s.Connect == nil {
+			s.Connect = map[string]string{}
+		}
+		if s.Connect[f.Name] != f.Value.String() {
+			s.Connect[f.Name] = f.Value.String()
+			changed = true
+		}
+	})
+	return changed
+}
+
+func (t *terminal) savePreferences() {
+	if err := saveSettings(t.settingsFile, t.settings); err != nil {
+		t.ui.Line(toneWarn, "Settings were not saved: %v", err)
+	}
+}
+
+func (t *terminal) rememberConnect(name, value string) {
+	if t.settings.Connect == nil {
+		t.settings.Connect = map[string]string{}
+	}
+	t.settings.Connect[name] = value
+	t.savePreferences()
+}

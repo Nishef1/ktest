@@ -1,6 +1,7 @@
 package smartproxy
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -25,7 +26,7 @@ func pipe(a, b net.Conn) relayResult {
 	began := time.Now()
 	cp := func(dst, src net.Conn, down bool) {
 		n, err := io.Copy(dst, src)
-		if tc, ok := dst.(*net.TCPConn); ok {
+		if tc, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = tc.CloseWrite()
 		}
 		done <- copied{down, n, err, time.Since(began)}
@@ -44,7 +45,7 @@ func pipe(a, b net.Conn) relayResult {
 	return r
 }
 
-func (p *Proxy) observeRelay(host, port, path string, r relayResult) {
+func (p *Proxy) observeRelay(ctx context.Context, host, port, path string, r relayResult) {
 	// A client-initiated close or small TLS alert is inconclusive. Only two
 	// repeated, prompt upstream closes without response data put a route into
 	// a temporary cooldown. Requests already handed to the client are not replayed.
@@ -78,6 +79,6 @@ func (p *Proxy) observeRelay(host, port, path string, r relayResult) {
 		}
 	}
 	p.mu.Unlock()
-	p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: path, EarlyClose: true,
+	p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Path: path, EarlyClose: true,
 		Err: "Early upstream close without response data; route score updated."})
 }

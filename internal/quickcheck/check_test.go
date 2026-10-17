@@ -2,6 +2,12 @@ package quickcheck
 
 import (
 	"context"
+	"github.com/Nishef1/ktest/internal/smartproxy"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -9,13 +15,90 @@ import (
 func TestClosedProxyFailsRatherThanClaimingAccess(t *testing.T) {
 	// A closed loopback SOCKS listener must never produce an apparent success.
 	results := Run(context.Background(), 1, 500*time.Millisecond)
-	if len(results) != 2 {
+	if len(results) != len(Targets()) {
 		t.Fatalf("got %d results", len(results))
 	}
 	for _, r := range results {
 		if r.Success || r.Detail == "" {
 			t.Fatalf("false positive: %+v", r)
 		}
+	}
+}
+
+func TestStartupTargetsNeverContactAIOrFollowAccountRedirects(t *testing.T) {
+	rules, _ := smartproxy.NewAIDomainRules("")
+	for _, target := range Targets() {
+		u, err := url.Parse(target.URL)
+		if err != nil || u.Scheme != "https" || rules.Match(u.Hostname()) {
+			t.Fatalf("unsafe direct-control target: %+v", target)
+		}
+		if target.Method != http.MethodHead && target.Want != 204 {
+			t.Fatalf("large-page probe: %+v", target)
+		}
+	}
+	var followed atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != "" {
+			t.Error("probe used client cookies")
+		}
+		if r.URL.Path == "/account" {
+			followed.Add(1)
+		}
+		w.Header().Set("Location", "/account")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	client := srv.Client()
+	client.Jar, _ = cookiejar.New(nil)
+	u, _ := url.Parse(srv.URL)
+	client.Jar.SetCookies(u, []*http.Cookie{{Name: "session", Value: "must-not-be-sent"}})
+	results := runTargets(context.Background(), client, []Target{{"redirect", srv.URL, http.MethodHead, 0}}, time.Second)
+	if len(results) != 1 || results[0].Status != 302 || followed.Load() != 0 {
+		t.Fatalf("followed account redirect: %+v", results)
+	}
+}
+
+func TestRepresentativeChecksShareBudgetAndLimitConcurrency(t *testing.T) {
+	var active, peak, hits atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := active.Add(1)
+		defer active.Add(-1)
+		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
+		}
+		hits.Add(1)
+		if r.Header.Get("Cookie") != "" || r.Header.Get("Authorization") != "" {
+			t.Error("probe sent account credentials")
+		}
+		if r.URL.Path == "/slow" {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+	var targets []Target
+	for _, path := range []string{"/slow", "/a", "/b", "/c", "/d"} {
+		targets = append(targets, Target{path, srv.URL + path, http.MethodHead, 204})
+	}
+	began := time.Now()
+	results := runTargets(context.Background(), srv.Client(), targets, 300*time.Millisecond)
+	if time.Since(began) > time.Second || peak.Load() > 3 || hits.Load() != 5 {
+		t.Fatalf("elapsed=%s peak=%d hits=%d", time.Since(began), peak.Load(), hits.Load())
+	}
+	if results[0].Success {
+		t.Fatal("silent target passed")
+	}
+	for _, r := range results[1:] {
+		if !r.Success || !r.Reachable {
+			t.Fatalf("slow target blocked a fast sibling: %+v", r)
+		}
+	}
+}
+
+func TestServiceRefusalAndUncheckedControlAreNotBypassProof(t *testing.T) {
+	a := Compare([]Result{{Target: "restricted", Reachable: true, Status: 403}, {Target: "unmeasured-control", Success: true}}, []Result{{Target: "unmeasured-control", Skipped: true}})
+	if a[0].Kind != "service_response" || a[1].Kind != "baseline_unknown" {
+		t.Fatal(a)
 	}
 }
 

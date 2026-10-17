@@ -33,8 +33,8 @@ func TestConnectionModes(t *testing.T) {
 		prefer   bool
 	}{
 		{"balanced", true, false, false},
-		{"fast", false, false, false},
-		{"windscribe", false, false, false},
+		{"fast", true, false, false},
+		{"windscribe", true, false, false},
 		{"aether", true, true, false},
 		{"psiphon", true, true, false},
 		{"tor", true, true, false},
@@ -62,6 +62,21 @@ func TestConnectionModes(t *testing.T) {
 	}
 }
 
+func TestFastAIHasNoDirectOrFrontingFallback(t *testing.T) {
+	r, _ := smartproxy.NewAIDomainRules("")
+	cfg := smartproxy.Config{Upstreams: []smartproxy.Upstream{{Name: "plain"}}}
+	ModeFast.configure(&cfg, r)
+	p, err := smartproxy.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"chatgpt.com", "api.openai.com", "gemini.google.com", "claude.ai", "claude.com"} {
+		if _, err := p.DialLocalBypass(context.Background(), host, "443"); err == nil {
+			t.Fatalf("local AI dial accepted for %s", host)
+		}
+	}
+}
+
 func TestStrictProxyCanStartWithoutVerifiedExit(t *testing.T) {
 	rules, _ := smartproxy.NewAIDomainRules("")
 	p, err := smartproxy.New(smartproxy.Config{ExitOnly: func(string) bool { return true }})
@@ -81,12 +96,9 @@ func TestStrictProxyCanStartWithoutVerifiedExit(t *testing.T) {
 }
 
 func TestModesVisibleInMainMenu(t *testing.T) {
-	var b bytes.Buffer
-	if code := runInteractive(strings.NewReader("0\n"), &b, t.TempDir()); code != 0 {
-		t.Fatal(code)
-	}
+	output := menuOutput(t, "0\n")
 	for _, name := range []string{"Balanced", "Fast", "Aether", "Aether to Psiphon", "Aether to Tor", "Windscribe"} {
-		if !strings.Contains(b.String(), name) {
+		if !strings.Contains(output, name) {
 			t.Errorf("missing menu item %q", name)
 		}
 	}

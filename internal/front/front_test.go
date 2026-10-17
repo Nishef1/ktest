@@ -46,6 +46,13 @@ func TestCARefusesToReplaceAndLoads(t *testing.T) {
 	if err != nil || !ca.Permits("a.example.com") || ca.Permits("example.org") {
 		t.Fatalf("load: %v", err)
 	}
+	other, err := Create(t.TempDir(), []string{"example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca.Fingerprint() == other.Fingerprint() || ca.key.Equal(other.key) {
+		t.Fatal("independent local installations shared a CA/key")
+	}
 }
 
 func TestCAIsNameConstrained(t *testing.T) {

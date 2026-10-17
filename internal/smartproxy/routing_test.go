@@ -78,6 +78,44 @@ func (rejectedSession) Serve(net.Conn, []byte) error {
 }
 func (rejectedSession) Close() {}
 
+func TestProbeOriginSurvivesAClientClosingBeforeItsRaceCompletes(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	events := make(chan Event, 4)
+	p, _ := New(Config{OnEvent: func(e Event) { events <- e }, Upstreams: []Upstream{{Name: "probe route", Takeover: func(ctx context.Context, _, _ string, _ []byte) (Session, error) {
+		close(started)
+		select {
+		case <-release:
+			return rejectedSession{}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}}}})
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.ServeProbes(ctx, l)
+	c, err := DialVia(ctx, l.Addr().String(), "probe.example", "443", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = c.Write(clientHello())
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("probe never started")
+	}
+	c.Close()
+	close(release)
+	select {
+	case e := <-events:
+		if !e.Probe || !e.OK {
+			t.Fatalf("late result lost probe attribution: %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no late race event")
+	}
+}
+
 func TestRejectedTakeoverUsesAnAlternativeOnTheNextConnection(t *testing.T) {
 	var hits atomic.Int32
 	events := make(chan Event, 8)
@@ -166,7 +204,7 @@ func TestCanceledRaceAndClientAlertDoNotPoisonRouteHistory(t *testing.T) {
 	}
 	p.record(p.ups[0], "alert.example", "443", true, time.Millisecond)
 	for i := 0; i < 3; i++ {
-		p.observeRelay("alert.example", "443", "a", relayResult{remoteFirst: true, up: 7, elapsed: time.Millisecond})
+		p.observeRelay(context.Background(), "alert.example", "443", "a", relayResult{remoteFirst: true, up: 7, elapsed: time.Millisecond})
 	}
 	if got := p.order("alert.example", "443")[0].Name; got != "a" {
 		t.Fatal("small client TLS alert penalized the route")
