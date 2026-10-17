@@ -272,7 +272,7 @@ func TestSavedIdentitiesSkipGlobalEnrollmentLock(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(300*time.Millisecond):
+	case <-time.After(300 * time.Millisecond):
 		t.Fatal("independent ready carrier starved behind slow enrollment")
 	}
 }
