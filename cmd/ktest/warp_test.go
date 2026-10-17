@@ -43,10 +43,10 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
 		lyre += ".exe"
 	}
 	data := zipOf(t, map[string]string{
-		filepath.Base(aetherBinary("x")): "core",
+		filepath.Base(aetherBinary("x")):        "core",
 		"pt/" + filepath.Base(psiphonCore("x")): "psiphon",
-		"pt/" + lyre: "lyre",
-		"pt/other.exe": "no", "../evil": "no", "run-aether.bat": "no",
+		"pt/" + lyre:                            "lyre",
+		"pt/other.exe":                          "no", "../evil": "no", "run-aether.bat": "no",
 	})
 	sum := sha256.Sum256(data)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write(data) }))
