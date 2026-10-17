@@ -1,4 +1,4 @@
-name: Android foundation
+name: Android preview
 on:
   push:
     paths:
@@ -51,12 +51,25 @@ jobs:
           go get -tool golang.org/x/mobile/cmd/gobind
           gomobile init
           mkdir -p android/app/libs
-          gomobile bind -target=android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
-      - name: Build Android debug APK
+          gomobile bind -target=android/arm,android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
+      - name: Build Android preview APK (debug-signed, internal testing only)
         run: gradle -p android :app:assembleDebug --no-daemon
+      - name: Verify APK signature, ABIs, and package
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
+          unzip -t "$APK" | tail -n 1
+          for ABI in armeabi-v7a arm64-v8a; do
+            unzip -Z1 "$APK" | grep -Fx "lib/$ABI/libgojni.so"
+          done
+          mkdir -p android/dist
+          cp "$APK" android/dist/KTest-Connection-Lab-v0.1.1-preview.apk
+          sha256sum android/dist/*.apk
       - uses: actions/upload-artifact@v7
         with:
-          name: ktest-android-debug
-          path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 7
+          name: KTest-Connection-Lab-v0.1.1-preview
+          path: android/dist/KTest-Connection-Lab-v0.1.1-preview.apk
+          retention-days: 14
           if-no-files-found: error

@@ -23,11 +23,11 @@ go install golang.org/x/mobile/cmd/gomobile@latest
 go get -tool golang.org/x/mobile/cmd/gobind
 gomobile init
 mkdir -p android/app/libs
-gomobile bind -target=android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
+gomobile bind -target=android/arm,android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
 gradle -p android :app:assembleDebug
 ```
 
-The Android build workflow on the feature branch does these steps on GitHub Actions. We intentionally do not commit generated AARs or unsigned APKs to source control. The app has no fake/placeholder diagnosis. The first build still needs to pass CI/device validation.
+The Android build workflow on the feature branch produces a **debug-signed preview** named `KTest-Connection-Lab-v0.1.1-preview.apk` inside a GitHub Actions ZIP artifact. Extract the APK from the ZIP before installing. The preview is not a signed production release. No generated AAR or APK is committed to source control. The app has no fake/placeholder diagnosis. CI only checks build/signature/archive/ABIs; physical-device installation and runtime still require testing.
 
 ## UI / updates
 
@@ -39,7 +39,15 @@ For a Play-distributed variant, use Google Play In-App Updates instead of GitHub
 
 ## Next gates
 
-1. Verify arm64 AAR/APK CI output and on-device DNS/TCP/TLS status.
+1. Verify ARMv7 + ARM64 AAR/APK CI output and on-device DNS/TCP/TLS status.
 2. Verify TLS trust roots, captive portal behavior, IPv4/IPv6 differences, background transitions, and 16 KB native library alignment.
 3. Extract Go SOCKS mode behind the mobile API only when it is truly usable on Android.
 4. Benchmark HEV+SOCKS against a single integrated sing-box path with identical traffic and phone conditions; activate VPN only after UDP/DNS safety gates pass.
+
+## Installation troubleshooting
+
+- Download the **ZIP** workflow artifact and extract **KTest-Connection-Lab-v0.1.1-preview.apk**. Do not try to install the ZIP.
+- Minimum supported Android version is **8.0** (API 26). This preview packages Go native libraries for `armeabi-v7a` and `arm64-v8a`; Intel/x86 Android devices are **not supported** by this APK.
+- A new ephemeral debug signing key is created on each GitHub Actions runner. Therefore installing a new Actions preview **over an earlier CI preview with the same package ID can fail with a signature conflict**. For a test-only install, uninstall the earlier `com.nishef.ktest` first (this deletes its local app data), then install the new preview. Do not use this mechanism for production updates.
+- Before public or in-app updates, set up an owner-controlled persistent signing key in encrypted GitHub Actions secrets, separate signed release workflow, and publish verified Android APK release assets. A filename change is **not** a signing fix.
+- To collect an exact install failure reason, run `adb install -r KTest-Connection-Lab-v0.1.1-preview.apk` and check the `INSTALL_FAILED_*` code; do not diagnose from the filename alone.
