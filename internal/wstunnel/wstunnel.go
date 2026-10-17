@@ -49,9 +49,10 @@ type Config struct {
 	// VerifyPeer, when set, still decides whether to accept the peer.
 	Verify     bool
 	VerifyPeer func(certs []*x509.Certificate) error
-	// OfficialHello reproduces Windscribe's randomized uTLS ClientHello
-	// family instead of ktest's existing Chrome preset. The caller selects
-	// this as a separate carrier; existing working profiles are unchanged.
+	// OfficialHello selects a Windscribe-style randomized uTLS ClientHello
+	// instead of the existing Chrome preset. Unsupported post-quantum groups
+	// are removed because pinned uTLS 1.8.2 cannot finish their TLS HRR flow.
+	// It is an alternative, not a byte-for-byte official fingerprint.
 	OfficialHello bool
 	// Dial opens the TCP leg (directly or through a local anti-DPI core).
 	Dial func(ctx context.Context, addr string) (net.Conn, error)

@@ -319,28 +319,34 @@ func TestClientWebSocketFrameSurvivesShortSuccessfulWrites(t *testing.T) {
 
 func TestWindscribeOfficialClientHelloWebSocketAndStealth(t *testing.T) {
 	srv := wsEcho(t, DefaultPath, nil)
-	// The origin is a local test TLS server; the normal public profile never
-	// disables OpenVPN's separate certificate checks.
 	dial := func(ctx context.Context, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", srv.Listener.Addr().String())
 	}
 	for _, official := range []bool{false, true} {
 		t.Run(fmt.Sprintf("upstream_hello=%t", official), func(t *testing.T) {
-			conn, err := Dial(context.Background(), Config{
-				Addr: srv.Listener.Addr().String(), Host: "127.0.0.1",
-				Dial: dial, OfficialHello: official,
-			})
-			if err != nil {
-				t.Fatal(err)
+			attempts := 1
+			if official {
+				attempts = 12 // randomized ClientHello must not fail intermittently
 			}
-			defer conn.Close()
-			data := []byte("OpenVPN-test-control-record")
-			if _, err := conn.Write(data); err != nil {
-				t.Fatal(err)
-			}
-			out := make([]byte, len(data))
-			if _, err := io.ReadFull(conn, out); err != nil || !bytes.Equal(data, out) {
-				t.Fatalf("WStunnel payload mismatch: %v", err)
+			for i := 0; i < attempts; i++ {
+				conn, err := Dial(context.Background(), Config{
+					Addr: srv.Listener.Addr().String(), Host: "127.0.0.1",
+					Dial: dial, OfficialHello: official,
+				})
+				if err != nil {
+					t.Fatalf("attempt %d: %v", i, err)
+				}
+				data := []byte("OpenVPN-test-control-record")
+				if _, err := conn.Write(data); err != nil {
+					_ = conn.Close()
+					t.Fatal(err)
+				}
+				out := make([]byte, len(data))
+				_, err = io.ReadFull(conn, out)
+				_ = conn.Close()
+				if err != nil || !bytes.Equal(data, out) {
+					t.Fatalf("WStunnel payload mismatch on attempt %d: %v", i, err)
+				}
 			}
 		})
 	}
