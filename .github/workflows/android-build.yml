@@ -1,0 +1,65 @@
+# Intentional release gate: Android APK/AAR builds are not triggered by pushes or PRs.
+# Use a manual dispatch only after the Android implementation is feature-complete
+# and the full device-validation checklist has been satisfied.
+name: Android APK (manual release gate)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '9.5.0'
+      - name: Validate Go mobile API
+        run: |
+          gofmt -w mobilebridge
+          go test ./mobilebridge ./internal/pathdiag
+      - name: Build Go mobile AAR
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/28.2.13676358"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go get -tool golang.org/x/mobile/cmd/gobind
+          gomobile init
+          mkdir -p android/app/libs
+          gomobile bind -target=android/arm,android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
+      - name: Fetch pinned HEV Android tun2socks adapter
+        run: bash android/scripts/fetch-hev-aar.sh
+      - name: Build Android preview APK (debug-signed, internal testing only)
+        run: gradle -p android :app:assembleDebug --no-daemon
+      - name: Verify APK signature, ABIs, and package
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
+          unzip -t "$APK" | tail -n 1
+          for ABI in armeabi-v7a arm64-v8a; do
+            unzip -Z1 "$APK" | grep -Fx "lib/$ABI/libgojni.so"
+          done
+          mkdir -p android/dist
+          cp "$APK" android/dist/KTest-Connection-v0.3.0-preview.apk
+          sha256sum android/dist/*.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: KTest-Connection-v0.3.0-preview
+          path: android/dist/KTest-Connection-v0.3.0-preview.apk
+          retention-days: 14
+          if-no-files-found: error
