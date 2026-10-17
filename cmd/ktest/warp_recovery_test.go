@@ -88,3 +88,36 @@ func TestVerifiedExitStartsAFreshOutage(t *testing.T) {
 		t.Fatal("the profile that worked was excluded from the next recovery")
 	}
 }
+
+// Recovery may reorder the *attempts*, but never the indexes of running cores.
+func TestReplenishmentKeepsOriginalCorePortIndexes(t *testing.T) {
+	profiles := []aetherProfile{
+		recoveryProfile("h2", "--masque", "--h2"),
+		recoveryProfile("wg", "--wg"),
+		recoveryProfile("h3", "--masque", "--h3"),
+	}
+	m := &warpManager{profs: append([]aetherProfile(nil), profiles...)}
+	history := networkProfile{Results: map[string]aetherMeasurement{
+		profiles[2].id(): {
+			ID: profiles[2].id(), State: "verified", Checked: time.Now(),
+			Attempts: 3, Successes: 3, LatencyMS: 60, ExitIP: "198.51.100.9", Country: "DE",
+		},
+	}}
+	indices := m.orderedCandidateIndices(nil, history)
+	if len(indices) != 3 || indices[0] != 2 {
+		t.Fatalf("measured profile did not lead recovery: %v", indices)
+	}
+	if m.profs[2].Label != "h3" {
+		t.Fatal("recovery silently changed an existing core's port index")
+	}
+	active := map[string]*warpFound{profiles[2].id(): {p: profiles[2]}}
+	indices = m.orderedCandidateIndices(active, history)
+	if len(indices) != 2 {
+		t.Fatalf("expected only spare candidates, got %v", indices)
+	}
+	for _, i := range indices {
+		if i == 2 {
+			t.Fatalf("active core port was scheduled for reuse: %v", indices)
+		}
+	}
+}

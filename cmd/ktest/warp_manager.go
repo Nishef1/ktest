@@ -350,55 +350,105 @@ func (m *warpManager) waitRetry(ctx context.Context, delay time.Duration) bool {
 // Connected; killing one would also kill an OpenVPN session using that path.
 // Dead transports are removed immediately rather than advertised as healthy.
 func (m *warpManager) run(ctx context.Context) {
-	for ctx.Err() == nil {
-		if !m.waitWhileConnected(ctx) {
+	// Keep established transports alive while replenishing spare capacity.
+	// A port is tied to a stable profile index, never a reordered search rank.
+	active := make(map[string]*warpFound)
+	ended := make(chan *warpFound, maxExits)
+	stopAll := func() {
+		for _, w := range active {
+			w.rc.stop()
+		}
+		for _, w := range active {
+			if w.unregistered != nil {
+				<-w.unregistered
+			}
+		}
+	}
+	retire := func(w *warpFound) {
+		id := w.p.id()
+		if current, ok := active[id]; !ok || current != w {
 			return
 		}
-		m.searching.Store(true)
-		found := m.search(ctx)
-		m.searching.Store(false)
-		if ctx.Err() == nil {
-			m.t.Note("Exit status: %s", m.status())
+		w.rc.stop()
+		if w.unregistered != nil {
+			<-w.unregistered
 		}
-		if len(found) == 0 {
-			delay := m.recoveryDelay()
-			m.t.Line(toneWarn, "No permitted exit verified; continuing recovery in %s (%d compatible profiles). Saved identities are kept.", delay, len(m.profs))
-			if !m.waitRetry(ctx, delay) {
+		delete(active, id)
+		m.t.Line(toneWarn, "%s ended; replenishing available exit capacity", w.p.Label)
+	}
+	defer stopAll()
+	for ctx.Err() == nil {
+		// Do not disrupt an authenticated Windscribe session with new scans.
+		// Continue processing dead-core events even while discovery is paused.
+		if m.monitor != nil && m.monitor.Connected() {
+			select {
+			case <-ctx.Done():
 				return
+			case w := <-ended:
+				retire(w)
+			case <-time.After(2 * time.Second):
 			}
 			continue
 		}
-		m.resetRecovery()
-		done := make(chan *warpFound, len(found))
-		for _, w := range found {
-			go func(w *warpFound) {
-				select {
-				case <-ctx.Done():
-				case <-w.rc.done:
-					done <- w
+		if len(active) < maxExits {
+			m.searching.Store(true)
+			found := m.search(ctx, active)
+			m.searching.Store(false)
+			for _, w := range found {
+				active[w.p.id()] = w
+				go func(w *warpFound) {
+					select {
+					case <-ctx.Done():
+					case <-w.rc.done:
+						select {
+						case ended <- w:
+						case <-ctx.Done():
+						}
+					}
+				}(w)
+			}
+			if len(found) > 0 {
+				m.resetRecovery()
+				// Live exits are excluded from the next recovery attempt.
+				if m.attempted == nil {
+					m.attempted = make(map[string]bool)
 				}
-			}(w)
-		}
-		remaining := len(found)
-		for remaining > 0 {
-			select {
-			case <-ctx.Done():
-				for _, w := range found {
-					w.rc.cancel()
-					w.rc.stop()
-				}
-				return
-			case ended := <-done:
-				remaining--
-				ended.rc.stop()
-				// A late observer from this generation must not remove a
-				// replacement with the same profile name on the next search.
-				if ended.unregistered != nil {
-					<-ended.unregistered
+				for id := range active {
+					m.attempted[id] = true
 				}
 			}
+			if ctx.Err() == nil {
+				m.t.Note("Exit status: %s", m.status())
+			}
 		}
-		m.t.Line(toneWarn, "Every exit path ended; searching again")
+		if ctx.Err() != nil {
+			return
+		}
+		// When capacity is full, wait for the first failure. When partially
+		// available, back off before probing for another independent exit.
+		delay := m.recoveryDelay()
+		if len(active) >= maxExits {
+			delay = 0
+		} else if len(active) == 0 {
+			m.t.Line(toneWarn, "No permitted exit verified; retrying discovery in %s (%d compatible profiles). Saved identities are kept.", delay, len(m.profs))
+		} else {
+			m.t.Note("%d/%d exits active; checking alternatives in %s", len(active), maxExits, delay)
+		}
+		var retry <-chan time.Time
+		var timer *time.Timer
+		if delay > 0 {
+			timer = time.NewTimer(delay)
+			retry = timer.C
+		}
+		select {
+		case <-ctx.Done():
+		case w := <-ended:
+			retire(w)
+		case <-retry:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
 	}
 }
 
@@ -428,19 +478,41 @@ type warpFound struct {
 	unregistered chan struct{}
 }
 
+// orderedCandidateIndices ranks measurements without mutating m.profs:
+// active Aether processes already own their original index-derived ports.
+func (m *warpManager) orderedCandidateIndices(active map[string]*warpFound, history networkProfile) []int {
+	byID := make(map[string]int, len(m.profs))
+	for i, p := range m.profs {
+		byID[p.id()] = i
+	}
+	var indices []int
+	for _, p := range recoveryProfilesFirst(m.profs, history, m.o.mode) {
+		if _, inUse := active[p.id()]; inUse || m.attempted[p.id()] {
+			continue
+		}
+		indices = append(indices, byID[p.id()])
+	}
+	return indices
+}
+
 // Compare before exposing the initial choice. A cached winner gets one worker;
 // first-use discovery has a shared deadline rather than delaying the UI for minutes.
-func (m *warpManager) search(ctx context.Context) []*warpFound {
-	limit := maxExits
-	history, _ := cachedNetwork(m.network, m.core)
-	m.profs = recoveryProfilesFirst(m.profs, history, m.o.mode)
-	indices := m.remainingProfiles()
-	if len(indices) == 0 {
-		m.attempted = nil
-		indices = m.remainingProfiles()
+func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) []*warpFound {
+	limit := maxExits - len(active)
+	if limit <= 0 {
+		return nil
 	}
-	if len(m.profs) > 0 {
-		if r, ok := history.Results[m.profs[0].id()]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
+	history, _ := cachedNetwork(m.network, m.core)
+	indices := m.orderedCandidateIndices(active, history)
+	if len(indices) == 0 {
+		// Every inactive candidate had a turn. Revisit failures without
+		// touching already-running ports or their pinned sessions.
+		m.attempted = nil
+		indices = m.orderedCandidateIndices(active, history)
+	}
+	if len(active) == 0 && len(indices) > 0 {
+		first := m.profs[indices[0]]
+		if r, ok := history.Results[first.id()]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
 			limit = 1
 		}
 	}
