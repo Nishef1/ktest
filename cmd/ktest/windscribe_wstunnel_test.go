@@ -12,6 +12,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -697,5 +698,36 @@ func TestAmbiguousConcurrentWindscribeSessionsAreNotPromoted(t *testing.T) {
 	b.observeCLIConnected()
 	if !first.confirmed || second.confirmed {
 		t.Fatal("single active carrier was not attributed correctly")
+	}
+}
+
+func TestWindscribeRaceCapsCandidateCountWhileRotatingRetries(t *testing.T) {
+	b := testBridge(&dialLog{})
+	var attempted atomic.Int32
+	b.stagger = time.Millisecond
+	b.candidates = func(string) []wsCarrier {
+		var cs []wsCarrier
+		for i := range 80 {
+			n := i
+			cs = append(cs, wsCarrier{
+				name: fmt.Sprintf("WStunnel index=%d", i),
+				open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					attempted.Add(1)
+					return nil, errors.New(fmt.Sprintf("failed-%d", n))
+				},
+			})
+		}
+		return cs
+	}
+	_, _, _ = b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+	if n := attempted.Load(); n != 24 {
+		t.Fatalf("unbounded carrier race: attempted %d of 80, want 24", n)
+	}
+	// A second call advances the rotation rather than launching the same
+	// first candidate from the provider's list every time.
+	first := b.ordered("68.67.118.163:443", b.carriersFor("68.67.118.163"))[0].name
+	second := b.ordered("68.67.118.163:443", b.carriersFor("68.67.118.163"))[0].name
+	if first == second {
+		t.Fatalf("retries did not explore new SNI/IP candidates: %q", first)
 	}
 }

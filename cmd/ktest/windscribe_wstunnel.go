@@ -507,6 +507,13 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		}
 	}
 	cs := b.ordered(key, b.carriersFor(host))
+	// Each connection attempt is a bounded experiment, not a broadcast to
+	// every advertised entry/IP/SNI. Later retries rotate the candidates.
+	const maxRaceCandidates = 24
+	if len(cs) > maxRaceCandidates {
+		b.logf("Windscribe %s: testing %d of %d candidates this attempt; alternatives rotate on retry", key, maxRaceCandidates, len(cs))
+		cs = cs[:maxRaceCandidates]
+	}
 	live, stopLive := context.WithCancel(ctx)
 	rctx, cancel := context.WithTimeout(live, 25*time.Second)
 	defer cancel()
@@ -564,7 +571,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 			conn, err := c.open(rctx, host, port)
 			if err != nil {
-				if ctx.Err() == nil && rctx.Err() != context.Canceled {
+				if ctx.Err() == nil && rctx.Err() == nil {
 					fail(c, err)
 				}
 				return
@@ -590,7 +597,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				if err == nil {
 					err = errors.New("no answer")
 				}
-				if ctx.Err() == nil && rctx.Err() != context.Canceled {
+				if ctx.Err() == nil && rctx.Err() == nil {
 					fail(c, &wstunnel.StageError{Stage: "openvpn", Err: err})
 				}
 				return
