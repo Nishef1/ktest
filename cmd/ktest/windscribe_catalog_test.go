@@ -411,3 +411,19 @@ func TestWindscribeCatalogNodeWaitIsBoundedAndCancelable(t *testing.T) {
 	}
 	c.finishInitialRefresh()
 }
+
+func TestWindscribeCatalogCachedExactNodeDoesNotWaitForRefresh(t *testing.T) {
+	c := newWSNodeCatalog()
+	c.startInitialRefresh()
+	if err := c.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	begin := time.Now()
+	if err := c.waitForNode(context.Background(), "203.0.113.100", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(begin) > 200*time.Millisecond {
+		t.Fatal("cached exact-node mapping should be used without waiting for the slower provider")
+	}
+	c.finishInitialRefresh()
+}
