@@ -4,16 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/edges"
+	"github.com/Nishef1/ktest/internal/egresscheck"
 )
 
 type observedExit struct {
@@ -22,33 +19,34 @@ type observedExit struct {
 	Region  string
 }
 
-// verifyLocalUpstream checks the existing CLI -exit-socks route through a
-// bounded, certificate-validated HTTPS request. It does not start a second
-// Tor/Psiphon/Aether transport or authenticate the name of the external core.
-// This is the same foreign exit verification implementation used by
-// cmd/ktest, reached through internal/egresscheck rather than forked logic.
+// verifyLocalUpstream checks the existing CLI -exit-socks route using the
+// exact same Go TLS-protected foreign-exit probe as the desktop CLI.
 func verifyLocalUpstream(parent context.Context, address string) (observedExit, error) {
-    host, portText, err := net.SplitHostPort(strings.TrimSpace(address))
-    if err != nil {
-        return observedExit{}, errors.New("SOCKS address must be host:port")
-    }
-    port, err := strconv.Atoi(portText)
-    if err != nil || port < 1 || port > 65535 {
-        return observedExit{}, errors.New("invalid SOCKS port")
-    }
-    if host == "localhost" { host = "127.0.0.1" }
-    ip := net.ParseIP(host)
-    if ip == nil || !ip.IsLoopback() {
-        return observedExit{}, errors.New("only a loopback SOCKS server is allowed")
-    }
-    address = net.JoinHostPort(host, portText)
-    ipText, country, err := egresscheck.ProbeForeignExit(parent, address)
-    if err != nil { return observedExit{}, err }
-    return observedExit{Address: address, IP: ipText, Region: country}, nil
+	host, portText, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return observedExit{}, errors.New("SOCKS address must be host:port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return observedExit{}, errors.New("invalid SOCKS port")
+	}
+	if host == "localhost" {
+		host = "127.0.0.1"
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return observedExit{}, errors.New("only a loopback SOCKS server is allowed")
+	}
+	address = net.JoinHostPort(host, portText)
+	outIP, country, err := egresscheck.ProbeForeignExit(parent, address)
+	if err != nil {
+		return observedExit{}, err
+	}
+	return observedExit{Address: address, IP: outIP, Region: country}, nil
 }
 
-// TestFront calls the existing Go edges diagnostic. It does not create a
-// second CDN-fronting transport or assert that a TLS handshake proves routing.
+// TestFront calls the existing Go edges diagnostic rather than creating an
+// independent Android CDN-fronting transport.
 func TestFront(rawURL, sni, host, edgeIP string) (string, error) {
 	edgeIP = strings.TrimSpace(edgeIP)
 	if net.ParseIP(edgeIP) == nil {
