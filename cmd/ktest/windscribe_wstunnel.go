@@ -160,13 +160,13 @@ type wsBridge struct {
 	// candidates overrides the carrier list (tests).
 	candidates func(host string) []wsCarrier
 
-	mu        sync.Mutex
-	edges     []string                        // CDN edges found by the scan, best first
-	good      map[string]string               // destination -> carrier that carried a working VPN
-	bad       map[string]map[string]time.Time // destination -> carrier -> demoted until
-	retries   map[string]uint64               // attempt index for choosing independent alternatives
-	active    map[*wsActiveCarrier]bool       // streams awaiting CLI state correlation
-	shortEnds map[string]int                  // consecutive short unexpected ends of correlated sessions
+	mu          sync.Mutex
+	edges       []string                        // CDN edges found by the scan, best first
+	good        map[string]string               // destination -> carrier that carried a working VPN
+	bad         map[string]map[string]time.Time // destination -> carrier -> demoted until
+	retries     map[string]uint64               // attempt index for choosing independent alternatives
+	active      map[*wsActiveCarrier]bool       // streams awaiting CLI state correlation
+	shortEnds   map[string]int                  // consecutive short unexpected ends of correlated sessions
 	nextAttempt uint64
 }
 
