@@ -1,46 +1,54 @@
-# KTest Connection — Android preview v0.2.0
+# KTest Connection for Android — 0.3.0 Preview
 
-The app now has a **Connect / Disconnect dashboard**, not a diagnostic-first home page. Its display language is English only.
+**Scope:** an English-only Jetpack Compose client with a real Go SOCKS5 + HTTP proxy service, bounded network diagnostics, CDN/ECH research tools and user-initiated official-update checks. It is **not** a system VPN and it does not embed Aether, Psiphon or Tor cores.
 
-## What works
+## Current capabilities
 
-- The central animated power control starts/stops a **real**, foreground-managed, loopback-only Go SOCKS5 proxy and an HTTP proxy bridge (via existing `internal/smartproxy` and `internal/httpproxy`).
-- The two built-in desktop **Balanced** and **Fast** plain/ClientHello-splitting paths are wired. No Xray, Aether, Windscribe, Psiphon or Tor executables are bundled on Android yet.
-- Known protected AI hostnames have an `ExitOnly` restriction; without a verified foreign exit they fail closed **when identifiable by hostname/SNI**. IP-only requests that cannot be attributed to a domain are an explicit limitation; do not rely on this as an identity-protecting VPN.
-- Live SOCKS5 and HTTP listeners use ephemeral `127.0.0.1` ports and are displayed in the UI for users to configure in compatible apps.
-- Long-running listeners are owned by a foreground service with a persistent notification and Disconnect action. Starting/stopping is driven by a real Kotlin service calling the Go core.
-- Tools tab provides bounded real DNS/TCP/TLS diagnostics. Settings keeps manual release update checks.
-- Mode selector shows all the terminal's main modes: Balanced, Fast, Aether, Psiphon, Tor, Windscribe Local, Windscribe + Aether. **Unavailable** modes are labeled and cannot be connected; no fabricated status.
-- No CA installation or global system network modification. MITM, CA and fronting code remain untouched in the existing Go source tree.
+| Mode | Android implementation | Meaning of success |
+| --- | --- | --- |
+| Balanced | Existing Go plain + TLS ClientHello-splitting paths; optional separately running SOCKS5 foreign exit | Local proxy started; use the "Verify real HTTPS traffic" control to check actual sites |
+| Fast | Same Go paths, shorter hedge delay; optional separately running foreign SOCKS5 | Same limitations as Balanced |
+| Aether | Requires user-supplied local SOCKS5 listener from a separately running compatible Aether installation | An HTTPS Cloudflare trace passed through configured proxy and reported a country other than IR/RU; **does not verify WARP/MASQUE transport** |
+| Psiphon | Requires a separately running Psiphon SOCKS5 listener; not built into KTest | Same HTTPS egress requirement; **does not prove Psiphon's own server authentication or transport** |
+| Tor | Requires a separately running Tor SOCKS5 listener; not built into KTest | Both HTTPS egress and official Tor Project API `IsTor` checks passed |
+| Windscribe / Windscribe+Aether | Not implemented on Android | Disabled; no fabricated "connected" indicator |
+| CDN fronting | Controlled test using existing `internal/edges` + `internal/probe`, one numeric edge IP, explicit TLS SNI/Host | Reports `http_2xx_unverified`, `tls_only`, etc.; no origin claim without challenge proof |
+| ECH | Existing `internal/front.FetchCloudflareECH` accessed from Tools | ECH retry configuration fetched, **not** a working tunnel |
 
-## What does not work yet
+External SOCKS entry is **loopback-only**, with a strict port validation, system TLS verification, bounded HTTPS validation and no direct fallback for the single-upstream modes. Protected known AI hostnames remain fail-closed without a verified foreign exit, but not all raw-IP/unknown-domain traffic can be attributed; do not claim an identity kill switch.
 
-This **is not an Android VPN**. The power button means a local proxy is listening, **not** that device-wide traffic is tunneled or that a remote destination has been reached. Only apps explicitly configured to use `SOCKS5` or `HTTP` proxy will use it. Most ordinary Android apps don't expose an individual proxy setting, and the stock Wi-Fi HTTP proxy setting is not a system-wide SOCKS5 solution. This preview does not implement HEV/tun2socks, UDP, IPv6 end-to-end VPN, per-network socket binding, background autostart or verified foreign exit.
+External upstream validation depends on an HTTPS Cloudflare trace that supplies a public egress IP and non-IR/RU `loc` value. This is an *observed egress check*, not cryptographic geolocation attestation. Geographic classifications, shared networks and censorship change. Tor additionally requires HTTPS confirmation from Tor Project's `check.torproject.org/api/ip`. No app could guarantee the success of such checks on every ISP.
 
-HEV remains the planned lean adapter when we integrate `VpnService`, after binding/protecting upstream sockets and validating DNS and UDP end to end. No Rust rewrite.
+### Usage
 
-## Build
+1. Pick Balanced/Fast or select Aether/Psiphon/Tor.
+2. For Aether/Psiphon/Tor, start the compatible external core **first** and enter its actual local SOCKS5 port (e.g. `127.0.0.1:9050` only if that is really where it listens). Aether/Psiphon/Tor are not bundled.
+3. Tap Connect. On foreign-core modes this validates HTTPS egress **before** activating a local proxy. The status is **PROXY ACTIVE**, not `VPN Connected`.
+4. An application which supports proxies must explicitly use the displayed local SOCKS5 or HTTP address. Tap "Verify real HTTPS traffic" to check representative destinations.
+5. Disconnect from the main Power control or foreground notification. Listener port and mode persist only for that session.
 
-Use Android SDK 36, NDK r28c, Java 17+, Go from `go.mod`, `gomobile` and Gradle 9.5+.
+### Limitations and required future work
 
-```sh
-go install golang.org/x/mobile/cmd/gomobile@latest
-go get -tool golang.org/x/mobile/cmd/gobind
-gomobile init
-mkdir -p android/app/libs
-gomobile bind -target=android/arm,android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
-gradle -p android :app:assembleDebug
-```
+* The app does **not** use `VpnService`, HEV, TUN or UDP. Most ordinary Android apps will not use a local SOCKS5 proxy automatically.
+* External Tor/ Psiphon / Aether modes require the corresponding third-party core or instance. Aether may itself be a VPN, which cannot run alongside a second active Android `VpnService` in the same user profile.
+* Full embedded Psiphon requires the upstream official Android AAR and valid sponsor/channel/server-list configuration; it also has GPL-3.0 licensing implications. No credentials are invented.
+* Embedding Tor requires packaging a maintained Tor engine and testing bridge/bootstrap and circuit isolation. Reaching `9050` alone is not a Tor proof.
+* Native Aether requires Android-compatible Zeptun and transport configuration. The Windows external-binary launcher is not portable.
+* Domain fronting is not an arbitrary-free relay. Provider policies vary (CloudFront can return 421), and real MITM/CA modes need **explicit opt-in**, secure on-device key handling and upstream certificate validation. Existing Go `internal/front` CA functionality is preserved but **not activated** in this APK.
+* Background status and foreground service require testing across OEM battery policies, process death, and connectivity changes.
+* Release updates require a stable developer-owned signing key; GitHub CI preview Debug signing is NOT update-compatible across runs. The artifact is a ZIP containing an APK and must be extracted.
 
-CI uses debug signing for preview only. Find `KTest-Connection-v0.2.0-preview.apk` inside the matching Actions ZIP artifact. Extract it first. Temporary CI signing keys aren't stable across runs; you may have to uninstall an earlier CI-signed preview before installing another (this clears local app data). Stable update-over-install requires a persistent **secure release signing key**; renaming files never fixes signature mismatches.
+### Technical build
 
-## Safety / remaining checks
+Go version from root `go.mod`, SDK 36, NDK r28c, Java 17+, Gradle 9.5+; `gomobile bind -target=android/arm,android/arm64 -androidapi=26`. CI executes Go tests, builds native AAR, compiles Kotlin/Compose APK, validates signature and both ABIs, and uploads preview. This establishes build correctness, not on-device connectivity.
 
-1. Run Android APK CI, verify arm32/arm64 native libraries and signature.
-2. On-device: test that Connect starts listeners, other apps can use the local SOCKS5/HTTP proxy, Disconnect closes all connections, notification stops service, and screen-off lifecycle works.
-3. Verify that a non-Iran foreign exit is required for protected services, including unresolved/IP-only cases, before claiming privacy protection.
-4. Test HEV + proxy against real mobile networks and implement controlled Android VPN permission, socket `protect()`, UDP, DNS and IPv6 routing and fail-closed recovery.
-5. Evaluate Aether, Windscribe, Tor, Psiphon integration only with Android-compatible engines and meaningful transport verification.
+### Verification gates before a release claim
 
-The Android foreground service currently declares `specialUse` with an explicit subtype. Google Play publication will require confirming the permitted use case and developer declarations.
-
+- [ ] Physical ARM32/ARM64 install, foreground/notification/rotation/background.
+- [ ] Native core startup and shutdown, concurrent rapid taps and stale state.
+- [ ] Proxy HTTPS smoke tests and TLS certificate verification on Android 8–16.
+- [ ] Aether / Psiphon / Tor upstreams with independently supplied valid endpoints and protected-site fail-closed checks.
+- [ ] Network change and DNS/IPv6 leakage tests.
+- [ ] Real CDN origin challenge verification on an operator-owned test endpoint.
+- [ ] HEV + `VpnService.protect` + UDP-aware upstream design and complete routing validation.
+- [ ] Stable release signing and OTA upgrade compatibility.

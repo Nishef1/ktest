@@ -65,11 +65,11 @@ jobs:
             unzip -Z1 "$APK" | grep -Fx "lib/$ABI/libgojni.so"
           done
           mkdir -p android/dist
-          cp "$APK" android/dist/KTest-Connection-v0.2.0-preview.apk
+          cp "$APK" android/dist/KTest-Connection-v0.3.0-preview.apk
           sha256sum android/dist/*.apk
       - uses: actions/upload-artifact@v7
         with:
-          name: KTest-Connection-v0.2.0-preview
-          path: android/dist/KTest-Connection-v0.2.0-preview.apk
+          name: KTest-Connection-v0.3.0-preview
+          path: android/dist/KTest-Connection-v0.3.0-preview.apk
           retention-days: 14
           if-no-files-found: error

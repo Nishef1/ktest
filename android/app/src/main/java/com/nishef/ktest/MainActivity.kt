@@ -63,9 +63,9 @@ private data class ConnectionMode(val id: String, val title: String, val subtitl
 private val modes = listOf(
     ConnectionMode("balanced", "Balanced", "Adaptive routes · protected AI sites fail closed", true),
     ConnectionMode("fast", "Fast", "Faster adaptive race · protected AI sites fail closed", true),
-    ConnectionMode("aether", "Aether", "Verified foreign exit required", false),
-    ConnectionMode("psiphon", "Psiphon", "Aether Psiphon profile", false),
-    ConnectionMode("tor", "Tor", "Tor-only route", false),
+    ConnectionMode("aether", "Aether", "External local SOCKS5 core required", true),
+    ConnectionMode("psiphon", "Psiphon", "External local SOCKS5 core required", true),
+    ConnectionMode("tor", "Tor", "Requires a Tor SOCKS5 service · Tor exit checked", true),
     ConnectionMode("windscribe", "Windscribe", "Local anti-DPI bridge", false),
     ConnectionMode("windscribe-aether", "Windscribe + Aether", "WARP carrier for Windscribe", false),
 )
@@ -92,11 +92,23 @@ private fun ConnectionApp() {
     val prefs = remember { context.getSharedPreferences("ktest_android", Context.MODE_PRIVATE) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var modeId by rememberSaveable { mutableStateOf(prefs.getString("mode", "balanced") ?: "balanced") }
+    var upstream by remember { mutableStateOf(prefs.getString("upstream_$modeId", "") ?: "") }
     var status by remember { mutableStateOf(JSONObject(Mobilebridge.proxyStatus())) }
+    var connecting by remember { mutableStateOf(false) }
+    var checkingRoute by remember { mutableStateOf(false) }
+    var routeReport by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
     var target by rememberSaveable { mutableStateOf("https://example.com") }
     var report by remember { mutableStateOf<JSONObject?>(null) }
+    var frontUrl by rememberSaveable { mutableStateOf("https://example.com") }
+    var frontSni by rememberSaveable { mutableStateOf("example.com") }
+    var frontHost by rememberSaveable { mutableStateOf("example.com") }
+    var frontEdge by rememberSaveable { mutableStateOf("") }
+    var frontBusy by remember { mutableStateOf(false) }
+    var frontReport by remember { mutableStateOf<JSONObject?>(null) }
+    var echBusy by remember { mutableStateOf(false) }
+    var echReport by remember { mutableStateOf<JSONObject?>(null) }
     var checkingUpdates by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
     val scope = rememberCoroutineScope()
@@ -107,6 +119,7 @@ private fun ConnectionApp() {
         while (isActive) {
             status = runCatching { JSONObject(Mobilebridge.proxyStatus()) }
                 .getOrElse { JSONObject() }
+            if (status.optBoolean("running") || ProxyService.lastError != null) connecting = false
             if (ProxyService.lastError != null) error = ProxyService.lastError
             delay(900)
         }
@@ -140,21 +153,47 @@ private fun ConnectionApp() {
                         activeMode = activeMode,
                         running = running,
                         status = status,
+                        connecting = connecting,
+                        routeReport = routeReport, checkingRoute = checkingRoute,
+                        onCheckRoute = {
+                            checkingRoute = true
+                            routeReport = null
+                            scope.launch {
+                                try {
+                                    routeReport = withContext(Dispatchers.IO) {
+                                        JSONObject(Mobilebridge.checkRoute())
+                                    }
+                                } catch (e: Exception) {
+                                    error = e.message ?: "Route check failed"
+                                } finally {
+                                    checkingRoute = false
+                                }
+                            }
+                        },
+                        upstream = upstream,
+                        onUpstream = { upstream = it; prefs.edit().putString("upstream_$modeId", it).apply() },
                         error = error,
                         onMode = {
                             if (!running) {
                                 modeId = it
+                                upstream = prefs.getString("upstream_$it", "") ?: ""
                                 prefs.edit().putString("mode", it).apply()
                                 error = null
                             }
                         },
                         onPower = {
+                            if (!running) {
+                                connecting = true
+                                routeReport = null
+                                scope.launch { delay(15000); connecting = false }
+                            }
                             error = null
                             ProxyService.lastError = null
                             try {
                                 val intent = Intent(context, ProxyService::class.java).apply {
                                     action = if (running) ProxyService.ACTION_STOP else ProxyService.ACTION_CONNECT
                                     putExtra(ProxyService.EXTRA_MODE, modeId)
+                                    putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
                                 }
                                 if (running) context.startService(intent)
                                 else androidx.core.content.ContextCompat.startForegroundService(context, intent)
@@ -175,6 +214,32 @@ private fun ConnectionApp() {
                 1 -> ToolsScreen(
                     target = target, onTarget = { target = it }, busy = testing,
                     report = report, error = error,
+                    frontUrl = frontUrl, frontSni = frontSni, frontHost = frontHost, frontEdge = frontEdge,
+                    setFrontUrl = { frontUrl = it }, setFrontSni = { frontSni = it },
+                    setFrontHost = { frontHost = it }, setFrontEdge = { frontEdge = it },
+                    frontBusy = frontBusy, frontReport = frontReport,
+                    echBusy = echBusy, echReport = echReport,
+                    runFront = {
+                        frontBusy = true; frontReport = null; error = null
+                        scope.launch {
+                            try {
+                                frontReport = withContext(Dispatchers.IO) {
+                                    JSONObject(Mobilebridge.testFront(frontUrl.trim(), frontSni.trim(),
+                                        frontHost.trim(), frontEdge.trim()))
+                                }
+                            } catch (e: Exception) { error = e.message ?: "CDN test failed" }
+                            finally { frontBusy = false }
+                        }
+                    },
+                    runEch = {
+                        echBusy = true; echReport = null; error = null
+                        scope.launch {
+                            try {
+                                echReport = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.probeEch()) }
+                            } catch (e: Exception) { error = e.message ?: "ECH probe failed" }
+                            finally { echBusy = false }
+                        }
+                    },
                     runTest = {
                         testing = true
                         report = null
@@ -230,7 +295,10 @@ private fun ConnectionApp() {
 
 @Composable
 private fun ConnectionScreen(
-    activeMode: ConnectionMode, running: Boolean, status: JSONObject, error: String?,
+    activeMode: ConnectionMode, running: Boolean, status: JSONObject,
+    connecting: Boolean, routeReport: JSONObject?, checkingRoute: Boolean,
+    onCheckRoute: () -> Unit,
+    upstream: String, onUpstream: (String) -> Unit, error: String?,
     onMode: (String) -> Unit, onPower: () -> Unit, onCopy: (String) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -245,10 +313,13 @@ private fun ConnectionScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                val canConnect = activeMode.available
+                val coreNeeded = activeMode.id in listOf("aether", "psiphon", "tor")
+                val canConnect = activeMode.available && (!coreNeeded || upstream.isNotBlank())
                 val stateLabel = when {
                     running -> "PROXY ACTIVE"
-                    !canConnect -> "NOT AVAILABLE YET"
+                    connecting -> "CHECKING ROUTE"
+                    !activeMode.available -> "NOT AVAILABLE YET"
+                    !canConnect -> "SOCKS5 CORE REQUIRED"
                     else -> "DISCONNECTED"
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -260,25 +331,40 @@ private fun ConnectionScreen(
                     Text(stateLabel, color = if (running) accent else muted,
                         fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 1.4.sp)
                 }
-                PowerOrb(enabled = canConnect || running, active = running, onClick = onPower)
+                PowerOrb(enabled = (canConnect || running) && !connecting, active = running, onClick = onPower)
                 Text(
                     when {
                         running -> "Disconnect"
-                        !canConnect -> "Unavailable on Android"
+                        connecting -> "Connecting..."
+                        !activeMode.available -> "Unavailable on Android"
+                        !canConnect -> "Configure SOCKS5 first"
                         else -> "Connect"
                     },
                     color = white, fontSize = 23.sp, fontWeight = FontWeight.SemiBold
                 )
                 Text(
                     when {
-                        running -> "Local proxy is running · Not a system VPN"
-                        !canConnect -> "This desktop core has not been ported."
+                        running -> "Local proxy active · Not a system VPN"
+                        connecting -> "Verifying local upstream and foreign exit..."
+                        !activeMode.available -> "This desktop core has not been ported."
+                        !canConnect -> "Connect an existing local SOCKS5 core"
                         else -> "Start local SOCKS5 + HTTP proxy"
                     },
                     color = muted, textAlign = TextAlign.Center, fontSize = 12.sp
                 )
                 if (running) {
                     Spacer(Modifier.height(8.dp))
+                    Button(onClick = onCheckRoute, enabled = !checkingRoute,
+                        colors = ButtonDefaults.buttonColors(containerColor = edge, contentColor = white)) {
+                        Text(if (checkingRoute) "Checking HTTPS routes..." else "Verify real HTTPS traffic")
+                    }
+                    if (routeReport != null) {
+                        val successes = routeReport.optInt("verified")
+                        val attempts = routeReport.optInt("attempted")
+                        Text("$successes / $attempts real HTTPS targets succeeded",
+                            color = if (successes > 0) accent else amber, fontSize = 12.sp)
+                    }
+
                     for ((label, key) in listOf("SOCKS5" to "socks", "HTTP" to "http")) {
                         val address = status.optString(key)
                         if (address.isNotBlank()) {
@@ -331,11 +417,49 @@ private fun ConnectionScreen(
                             if (!mode.available) {
                                 Text("SOON", color = amber, fontSize = 10.sp,
                                     fontWeight = FontWeight.SemiBold)
+                            } else if (mode.id in listOf("aether", "psiphon", "tor")) {
+                                Text(if (selected && upstream.isNotBlank()) "CONFIGURED" else "EXTERNAL",
+                                    color = amber, fontSize = 10.sp)
                             } else if (selected) {
-                                Text("READY", color = accent, fontSize = 10.sp)
+                                Text("LOCAL", color = accent, fontSize = 10.sp)
                             }
                         }
                     }
+                }
+            }
+        }
+
+        Surface(color = surface, shape = RoundedCornerShape(20.dp)) {
+            Column(
+                Modifier.fillMaxWidth().padding(17.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                Text("OPTIONAL UPSTREAM SOCKS5", color = accent, fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp, letterSpacing = 1.sp)
+                Text(
+                    if (activeMode.id in listOf("aether", "psiphon", "tor"))
+                        "Required: start the corresponding core separately and enter its loopback SOCKS5 address."
+                    else
+                        "Balanced and Fast can add a separately running, verified foreign SOCKS5 exit.",
+                    color = muted, fontSize = 12.sp
+                )
+                OutlinedTextField(
+                    value = upstream,
+                    onValueChange = onUpstream,
+                    enabled = !running,
+                    singleLine = true,
+                    label = { Text("Local address (e.g. 127.0.0.1:9050)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = accent, unfocusedBorderColor = edge,
+                        focusedTextColor = white, unfocusedTextColor = white
+                    )
+                )
+                Text("On Connect, the core's live HTTPS exit is checked. Tor mode also requires confirmation from the Tor Project. A listening port alone is never enough.",
+                    color = muted, fontSize = 11.sp)
+                if (running && status.optString("exit_location").isNotEmpty()) {
+                    Text("Observed exit region: ${status.optString("exit_location")}",
+                        color = accent, fontSize = 12.sp)
                 }
             }
         }
@@ -349,7 +473,7 @@ private fun ConnectionScreen(
                     fontSize = 16.sp)
                 Text("Set the app to use the local SOCKS5 or HTTP endpoint. Other apps are not tunneled. TUN/VPN mode is under development.",
                     color = muted, fontSize = 12.sp, lineHeight = 18.sp)
-                Text("Protected AI sites need a verified foreign exit. Local paths fail closed for known protected hostnames.",
+                Text("Protected hostnames require a verified foreign exit. Raw IP destinations and unknown subdomains are not identity-safe.",
                     color = amber, fontSize = 11.sp, lineHeight = 16.sp)
             }
         }
@@ -365,13 +489,14 @@ private fun ConnectionScreen(
 @Composable
 private fun PowerOrb(enabled: Boolean, active: Boolean, onClick: () -> Unit) {
     val transition = rememberInfiniteTransition(label = "power")
-    val pulse by transition.animateFloat(
+    val animatedPulse by transition.animateFloat(
         initialValue = 0f, targetValue = 1f,
         animationSpec = infiniteRepeatable(
             animation = tween(2200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ), label = "pulse"
     )
+    val pulse = if (active) animatedPulse else 0f
     val color = when {
         active -> accent
         enabled -> white
@@ -410,7 +535,12 @@ private fun PowerOrb(enabled: Boolean, active: Boolean, onClick: () -> Unit) {
 @Composable
 private fun ToolsScreen(
     target: String, onTarget: (String) -> Unit, busy: Boolean,
-    report: JSONObject?, error: String?, runTest: () -> Unit
+    report: JSONObject?, error: String?, runTest: () -> Unit,
+    frontUrl: String, frontSni: String, frontHost: String, frontEdge: String,
+    setFrontUrl: (String) -> Unit, setFrontSni: (String) -> Unit,
+    setFrontHost: (String) -> Unit, setFrontEdge: (String) -> Unit,
+    frontBusy: Boolean, frontReport: JSONObject?, runFront: () -> Unit,
+    echBusy: Boolean, echReport: JSONObject?, runEch: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(17.dp)) {
         Text("Tools & diagnostics", fontSize = 25.sp, color = white,
@@ -453,12 +583,53 @@ private fun ToolsScreen(
             }
         }
         Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("CDN FRONTING TEST", color = accent, fontSize = 11.sp, letterSpacing = 1.5.sp)
+                Text("Use an authorized edge. TLS or HTTP success alone does not prove origin routing.",
+                    color = muted, fontSize = 12.sp)
+                OutlinedTextField(value = frontUrl, onValueChange = setFrontUrl,
+                    label = { Text("HTTPS URL") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = frontSni, onValueChange = setFrontSni,
+                    label = { Text("TLS SNI / certificate name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = frontHost, onValueChange = setFrontHost,
+                    label = { Text("HTTP Host") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = frontEdge, onValueChange = setFrontEdge,
+                    label = { Text("Edge IP address") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                Button(onClick = runFront, enabled = !frontBusy && frontEdge.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = background)) {
+                    Text(if (frontBusy) "Testing…" else "Test fronting route")
+                }
+                if (frontReport != null) {
+                    val candidates = frontReport.optJSONArray("candidates")
+                    val first = if (candidates != null && candidates.length() > 0)
+                        candidates.optJSONObject(0) else null
+                    Text("Assessment: ${first?.optString("assessment") ?: "Unknown"}",
+                        color = amber, fontSize = 13.sp)
+                    Text("Origin verified: ${first?.optInt("origin_verified") ?: 0}",
+                        color = muted, fontSize = 12.sp)
+                }
+                HorizontalDivider(color = edge)
+                Text("ECH BOOTSTRAP", color = accent, fontSize = 11.sp, letterSpacing = 1.5.sp)
+                Text("Check if Cloudflare returns a fresh ECH configuration. No tunnel is opened.",
+                    color = muted, fontSize = 12.sp)
+                Button(onClick = runEch, enabled = !echBusy,
+                    colors = ButtonDefaults.buttonColors(containerColor = edge, contentColor = white)) {
+                    Text(if (echBusy) "Checking ECH…" else "Test ECH configuration")
+                }
+                if (echReport != null) {
+                    Text("ECH config from ${echReport.optString("edge")}",
+                        color = accent, fontSize = 12.sp)
+                    Text(echReport.optString("note"), color = muted, fontSize = 11.sp)
+                }
+            }
+        }
+        Surface(color = surface, shape = RoundedCornerShape(23.dp)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("MORE DESKTOP TOOLS", color = accent, fontSize = 11.sp, letterSpacing = 1.4.sp)
                 for (entry in listOf(
                     "Aether comparison" to "Requires Android-compatible Aether core",
                     "Windscribe tests" to "Requires Windscribe integration",
-                    "CDN / fronting tests" to "Requires Android research adapter",
+                    "CDN / fronting tests" to "Available above with controlled origin checks",
                     "Saved recommendations" to "Requires per-network measurements"
                 )) {
                     Column {
@@ -505,7 +676,7 @@ private fun SettingsScreen(
             Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("ENGINE & PRIVACY", color = accent, fontSize = 11.sp, letterSpacing = 1.5.sp)
                 Text("Go local proxy core", color = white, fontWeight = FontWeight.SemiBold)
-                Text("Balanced and Fast use the built-in desktop Go TCP paths. No external VPN exit is bundled.",
+                Text("Balanced and Fast use Go TCP paths. Aether/Psiphon/Tor can use a separately running local SOCKS5 upstream after live verification; their engines are not bundled.",
                     color = muted, fontSize = 12.sp)
                 HorizontalDivider(color = edge)
                 Text("System VPN / HEV", color = white, fontWeight = FontWeight.SemiBold)
