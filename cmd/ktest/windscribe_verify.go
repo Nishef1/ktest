@@ -15,14 +15,40 @@ type wsCLIStatus struct {
 	err          error
 }
 
+// Decode only known status fields. Never echo arbitrary CLI output: it may
+// contain account names or sensitive diagnostic details.
+func windscribeStatusIssue(raw string, state windscribeState, loggedIn bool) string {
+	if !loggedIn {
+		for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
+			field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+			if ok && strings.EqualFold(strings.TrimSpace(field), "Login state") {
+				if !strings.EqualFold(strings.TrimSpace(value), "logged in") {
+					return "Windscribe desktop app is not logged in; open the app and log in"
+				}
+			}
+		}
+		return "Windscribe CLI returned no recognizable login state; inspect windscribe-cli status"
+	}
+	if state == windscribeUnknown {
+		return "Windscribe CLI returned an unrecognized connection state"
+	}
+	return ""
+}
+
 func readWSStatus(ctx context.Context, cli string) wsCLIStatus {
 	if cli == "" {
-		return wsCLIStatus{err: fmt.Errorf("Windscribe CLI unavailable")}
+		return wsCLIStatus{err: fmt.Errorf("Windscribe CLI executable not found; check its installed path")}
 	}
 	out, err := (&windscribeMonitor{cli: cli}).command(ctx, "status")
+	if err != nil {
+		return wsCLIStatus{err: fmt.Errorf("Windscribe CLI status command failed: %w", err)}
+	}
 	state, loggedIn := parseWindscribeStatus(string(out))
-	if err != nil || !loggedIn || state == windscribeUnknown {
-		return wsCLIStatus{err: fmt.Errorf("CLI status unavailable or not logged in")}
+	if !loggedIn {
+		return wsCLIStatus{err: fmt.Errorf("%s", windscribeStatusIssue(string(out), state, loggedIn))}
+	}
+	if state == windscribeUnknown {
+		return wsCLIStatus{err: fmt.Errorf("Windscribe CLI returned an unrecognized connection state")}
 	}
 	return wsCLIStatus{state: state, protocol: parseWindscribeProtocol(string(out)), ip: parseWindscribeVPNIP(string(out))}
 }
