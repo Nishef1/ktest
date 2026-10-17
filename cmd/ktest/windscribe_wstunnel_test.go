@@ -764,3 +764,27 @@ func TestUnconfirmedWindscribeHandshakeTimeoutDemotesBriefly(t *testing.T) {
 		t.Fatalf("24-second unverified stream was not temporarily deprioritized: %v", delay)
 	}
 }
+
+func TestWindscribeCarrierReportsUnexpectedUpstreamEOFOnce(t *testing.T) {
+	a, peer := net.Pipe()
+	defer a.Close()
+	var logs []string
+	c := &carrierConn{
+		Conn: a, cancel: func(){}, stopClose: func() bool {return true},
+		name: "Stealth entry=198.51.100.4", destination: "203.0.113.2:443",
+		started: time.Now(),
+		logf: func(format string, args ...any) {logs = append(logs, fmt.Sprintf(format, args...))},
+	}
+	_ = peer.Close()
+	buf := make([]byte, 8)
+	_, _ = c.Read(buf)
+	_, _ = c.Read(buf)
+	if len(logs) != 1 || !strings.Contains(logs[0], "source of closure unverified") {
+		t.Fatalf("EOF must be observed once without incorrectly blaming DPI: %v", logs)
+	}
+	_ = c.Close()
+	_, _ = c.Read(buf)
+	if len(logs) != 1 {
+		t.Fatalf("local shutdown was misreported as upstream failure: %v", logs)
+	}
+}

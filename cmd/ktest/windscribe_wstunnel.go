@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/smartproxy"
@@ -686,16 +687,36 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		b.logf("Windscribe %s carrier=%s session ended after %s, returned=%d bytes, CLI-authenticated=%v", key, r.c.name, shortDur(lived), received, confirmed)
 	}
 	stopClose := context.AfterFunc(live, func() { _ = r.conn.Close() })
-	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose}, done, nil
+	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose, logf: b.logf, name: r.c.name, destination: key, started: time.Now()}, done, nil
 }
 
+// carrierConn exposes only observed stream failures. EOF may be the
+// remote peer ending the stream normally; neither EOF nor reset is by itself
+// proof that a DPI device terminated the connection.
 type carrierConn struct {
 	net.Conn
-	cancel    context.CancelFunc
-	stopClose func() bool
+	cancel      context.CancelFunc
+	stopClose   func() bool
+	logf        func(string, ...any)
+	name        string
+	destination string
+	started     time.Time
+	ended       sync.Once
+	closed      atomic.Bool
+}
+
+func (c *carrierConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err != nil && !c.closed.Load() && c.logf != nil {
+		c.ended.Do(func() {
+			c.logf("Windscribe %s carrier=%s upstream read ended after %s: %v (source of closure unverified)", c.destination, c.name, shortDur(time.Since(c.started)), err)
+		})
+	}
+	return n, err
 }
 
 func (c *carrierConn) Close() error {
+	c.closed.Store(true)
 	c.cancel()
 	c.stopClose()
 	return c.Conn.Close()
