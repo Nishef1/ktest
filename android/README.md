@@ -8,6 +8,8 @@ Android is a **thin client of the existing KTest Go core**. Network protocols, r
 - `internal/smartproxy`: shared Go adaptive TCP/SOCKS engine and RFC 1928 UDP ASSOCIATE. Non-DNS datagrams require a verified foreign loopback transport with a working UDP relay, and never fall back to a direct UDP socket.
 - `internal/connectionpolicy`: shared CLI and Android routing policy and mode catalog.
 - `internal/connectionsession`: shared SOCKS/HTTP/probe listener lifetime, failure propagation and stream cancellation. Both `connectSession` and Android use this package; desktop native-core discovery/launch is still outside it.
+- `internal/aether`: the original CLI method/profile catalog, mode filters, identity requirements, private identity validation, staged enrollment transaction, command construction and native process launcher. CLI now uses this shared implementation. Android can inspect the same catalog and checksum-pinned native package through `mobilebridge`.
+- `internal/coreprocess`: shared scoped native process execution, cancellation and descendant cleanup on Windows/Unix/Android. The terminal adapters retain no independent process registry.
 - `internal/connectiondns`: shared trusted hostname resolution and Android packet DNS. Complete UDP/TCP DNS messages use certificate-verified wire DoH, preserving record types and negative answers.
 - `internal/egresscheck`: **shared foreign egress verification**. CLI `probeForeignExit` and Android `verifyLocalUpstream` now call the same Go HTTPS trace policy.
 - `mobilebridge`: narrow Go API consumed by `gomobile bind` (status, start/stop, diagnostics, route verification and VPN capability).
@@ -67,6 +69,46 @@ Packet DNS failures appear separately in proxy status and the connection screen.
 
 Passing it establishes Java/Kotlin source compatibility, including callback signatures. It does not establish native linkage, JNI loading, rendered UI, device traffic, leaks, battery use or reconnect on a phone. The native-release workflow remains manual and separate.
 
+## Native Aether packaging
+
+The official v2.3.0 release includes dedicated Android arm64, ARMv7 and x86_64
+archives. `internal/aether/android-cores.json` pins each archive and every
+unmodified Aether, Psiphon and Lyrebird executable. It is shared by the Python
+packager and the Go runtime verifier; a missing, modified or wrong-ABI bundle
+cannot be accepted as a native core installation.
+
+```sh
+# Download/verify official artifacts and ELF architecture/linker/page alignment.
+# This produces no APK/AAR and does not start a tunnel.
+python3 android/scripts/prepare-native-cores.py --verify-only
+
+# Explicit native preparation for the manually gated packaging workflow.
+python3 android/scripts/prepare-native-cores.py
+```
+
+The native directory contains `libaether.so`, `libpsiphon-tunnel-core.so` and
+`liblyrebird.so`. These are separate executables, not additional in-process VPN
+implementations. Gradle preserves their exact bytes and extracts them to the
+read-only `ApplicationInfo.nativeLibraryDir`; the app must never copy them into
+writable app storage to execute them. The manual workflow verifies their hashes
+again inside the final APK. It has **not** been dispatched as part of this work.
+
+The shipped ABI set remains ARMv7 and arm64; x86_64 is an optional native-check
+target. The pinned arm64 executables meet at least 16 KiB ELF load alignment.
+The x86_64 helper executables have 4 KiB alignment and are not a claim of 16 KiB
+emulator/device support.
+
+Observed native evidence: the pinned x86_64 Aether and Psiphon executables ran
+their help/version commands on `emulator-5554`, outside the app sandbox, without
+starting a tunnel or registering credentials. This proves base executable
+compatibility on that emulator, **not** execution under the app UID, managed
+network connectivity, a Tor circuit, whole-device routing or leak protection.
+
+The source API now exposes `AetherProfileCatalog` and `InspectAndroidBundle`.
+Connecting the shared supervisor/enrollment flow to Android's connection service
+is still required; profile definitions or packaged files alone are not an active
+Aether/Psiphon/Tor connection.
+
 ## Release gate
 
 **Do not run the APK/AAR workflow without approval.** `.github/workflows/android-build.yml` remains **manual-only**. Go CI runs formatting, vet, Linux/Windows tests and race tests without creating Android APKs or feature-branch distributable artifacts.
@@ -77,13 +119,13 @@ Before calling this an Android port complete: finish extracting native-core orch
 
 | Area | Implemented in source | Still required |
 | --- | --- | --- |
-| Shared Go connection | SOCKS/HTTP/probe lifetime, failure shutdown, Android startup phase/cancel | Full managed native-core orchestration parity |
+| Shared Go connection | SOCKS/HTTP/probe lifetime; Aether profiles, identity/enrollment contracts and scoped native process execution | Complete shared supervisor and Android connection integration |
 | Balanced / Fast | Existing Go TCP routes, packet DNS and verified-exit UDP | Xray/ByeDPI/native strategy bundle and device evidence |
-| Aether | Verified external loopback SOCKS path | Managed MASQUE/WireGuard profiles, enrollment and Android packaging |
+| Aether | External SOCKS path; shared native profile/enrollment implementation; pinned Android packaging and runtime verification | Wire managed supervisor/enrollment to Android and validate actual native sessions |
 | Tor / Psiphon | Existing desktop implementations preserved | Managed Android transport integration |
 | Windscribe / through Aether | Shared carrier probe exposed to Android | Operational native bridge, catalog/profile integration and authenticated data |
 | UDP / DNS | Real SOCKS UDP, wire DoH, DNS over UDP/TCP, no direct UDP fallback | Public-exit data-plane tests and HEV/TUN validation |
 | IPv6 / whole-device VPN | IPv6 packet encoding and platform wiring | Dual-stack public egress, leak tests and device approval gates |
 | CDN / ECH tools | Shared four-provider scanner, one-route front/ECH UI, multi-edge Go API | Full CLI tool parity and rendered/device verification |
 | MITM / CA | Go implementation preserved, no automatic trust changes | Explicit Android consent/trust flow and optional activation |
-| Verification / release | Go checks, Android/arm64 package compilation, source-check tooling | Native linking/device/network/battery/reconnect/signing validation; APK/AAR release remains gated |
+| Verification / release | Go checks, ARM bridge package compilation, source checks, official native payload verification and limited x86_64 executable checks | App-UID native execution, JNI/TUN/device/network/battery/reconnect/signing validation; APK/AAR release remains gated |

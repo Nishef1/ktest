@@ -40,8 +40,8 @@ func TestRecoveryKeepsProvenFirstAndRecentFailuresLast(t *testing.T) {
 		recoveryProfile("proven", "--h2"),
 	}
 	history := networkProfile{Results: map[string]aetherMeasurement{
-		profiles[0].id(): {ID: profiles[0].id(), State: "failed", Checked: time.Now().Add(-time.Minute)},
-		profiles[2].id(): {ID: profiles[2].id(), State: "verified", Checked: time.Now().Add(-time.Minute), Attempts: 3, Successes: 3, LatencyMS: 80, ExitIP: "198.51.100.7", Country: "DE"},
+		profiles[0].ID(): {ID: profiles[0].ID(), State: "failed", Checked: time.Now().Add(-time.Minute)},
+		profiles[2].ID(): {ID: profiles[2].ID(), State: "verified", Checked: time.Now().Add(-time.Minute), Attempts: 3, Successes: 3, LatencyMS: 80, ExitIP: "198.51.100.7", Country: "DE"},
 	}}
 	got := profileLabels(recoveryProfilesFirst(profiles, history, ModeAether))
 	want := []string{"proven", "untried", "failed"}
@@ -57,14 +57,14 @@ func TestRecoveryRetriesPromptlyUntilEveryProfileHadATurn(t *testing.T) {
 	if len(m.remainingProfiles()) != 2 || m.recoveryDelay() != time.Second {
 		t.Fatal("untried profiles must be retried after one second")
 	}
-	m.attempted[m.profs[0].id()] = true
+	m.attempted[m.profs[0].ID()] = true
 	if got := m.remainingProfiles(); len(got) != 1 || got[0] != 1 || m.recoveryDelay() != time.Second {
 		t.Fatalf("remaining = %v", got)
 	}
 	var delays []time.Duration
 	for range 4 {
 		for _, p := range m.profs {
-			m.attempted[p.id()] = true
+			m.attempted[p.ID()] = true
 		}
 		delays = append(delays, m.recoveryDelay())
 		if m.attempted != nil {
@@ -82,7 +82,7 @@ func TestRecoveryRetriesPromptlyUntilEveryProfileHadATurn(t *testing.T) {
 
 func TestVerifiedExitStartsAFreshOutage(t *testing.T) {
 	m := &warpManager{profs: []aetherProfile{recoveryProfile("a"), recoveryProfile("b", "--wg")}, attempted: map[string]bool{}, failedSweeps: 2}
-	m.attempted[m.profs[0].id()] = true
+	m.attempted[m.profs[0].ID()] = true
 	m.resetRecovery()
 	if len(m.remainingProfiles()) != 2 || m.failedSweeps != 0 {
 		t.Fatal("the profile that worked was excluded from the next recovery")
@@ -98,8 +98,8 @@ func TestReplenishmentKeepsOriginalCorePortIndexes(t *testing.T) {
 	}
 	m := &warpManager{profs: append([]aetherProfile(nil), profiles...)}
 	history := networkProfile{Results: map[string]aetherMeasurement{
-		profiles[2].id(): {
-			ID: profiles[2].id(), State: "verified", Checked: time.Now(),
+		profiles[2].ID(): {
+			ID: profiles[2].ID(), State: "verified", Checked: time.Now(),
 			Attempts: 3, Successes: 3, LatencyMS: 60, ExitIP: "198.51.100.9", Country: "DE",
 		},
 	}}
@@ -110,7 +110,7 @@ func TestReplenishmentKeepsOriginalCorePortIndexes(t *testing.T) {
 	if m.profs[2].Label != "h3" {
 		t.Fatal("recovery silently changed an existing core's port index")
 	}
-	active := map[string]*warpFound{profiles[2].id(): {p: profiles[2]}}
+	active := map[string]*warpFound{profiles[2].ID(): {p: profiles[2]}}
 	indices = m.orderedCandidateIndices(active, history)
 	if len(indices) != 2 {
 		t.Fatalf("expected only spare candidates, got %v", indices)

@@ -54,13 +54,13 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	templates = measuredProfilesFirst(templates, history, o.mode)
 	needECH := false
 	for _, p := range templates {
-		if p.has("--ech") {
+		if p.Has("--ech") {
 			needECH = true
 			break
 		}
 	}
-	if !full && len(templates) > 0 && !templates[0].has("--ech") {
-		if r, ok := history.Results[templates[0].id()]; ok && measurementScore(r, o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
+	if !full && len(templates) > 0 && !templates[0].Has("--ech") {
+		if r, ok := history.Results[templates[0].ID()]; ok && measurementScore(r, o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
 			needECH = false
 		}
 	}
@@ -79,11 +79,11 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	profiles = filterAetherMethod(profiles, o.aetherMethod)
 	supported := map[string]bool{}
 	for _, p := range templates {
-		supported[p.id()] = true
+		supported[p.ID()] = true
 	}
 	var available []aetherProfile
 	for _, p := range profiles {
-		if supported[p.id()] && (!p.psiphon() || fileOK(psiphonCore(o.base))) {
+		if supported[p.ID()] && (!p.Psiphon() || fileOK(psiphonCore(o.base))) {
 			available = append(available, p)
 		}
 	}
@@ -210,7 +210,7 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 				i := indices[next]
 				next++
 				p := m.profs[i]
-				m.attempted[p.id()] = true
+				m.attempted[p.ID()] = true
 				mu.Unlock()
 				// A slow/blocked family cannot consume the whole comparison.
 				attempt, cancel := context.WithTimeout(ctx, profileAttemptBudget(p))
@@ -220,7 +220,7 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 				r := measurementFor(p)
 				if up {
 					r = benchmarkAetherRoute(attempt, fmt.Sprintf("127.0.0.1:%d", aetherPort(i)), speed && speedSlots.Add(-1) >= 0)
-					r.ID, r.Label, r.Method = p.id(), p.Label, p.method()
+					r.ID, r.Label, r.Method = p.ID(), p.Label, p.Method()
 				} else {
 					r.Failure = failure
 					if attempt.Err() == context.DeadlineExceeded && ctx.Err() == nil {

@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package coreprocess
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// killProcessTree ends a core and everything it started.
-func killProcessTree(pid int) {
+// KillTree ends a core and everything it started.
+func KillTree(pid int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	kill := exec.CommandContext(ctx, "taskkill.exe", "/PID", strconv.Itoa(pid), "/T", "/F")
@@ -22,9 +22,9 @@ func killProcessTree(pid int) {
 
 // Aether can start a Psiphon child for enrollment. Cancelling setup must
 // stop that child too, rather than leave it holding a port after Back.
-func configureEnrollmentProcess(cmd *exec.Cmd) {
+func Configure(cmd *exec.Cmd) {
 	cmd.Cancel = func() error {
-		killProcessTree(cmd.Process.Pid)
+		KillTree(cmd.Process.Pid)
 		if err := cmd.Process.Kill(); err != nil {
 			return os.ErrProcessDone
 		}

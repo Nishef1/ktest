@@ -32,10 +32,10 @@ func TestNetworkMeasurementsAreIsolatedAndExpireWithoutAuthorizingExits(t *testi
 		t.Fatal(err)
 	}
 	profiles := []aetherProfile{p1, p2}
-	if measuredProfilesFirst(profiles, history, ModeFast)[0].id() != p1.id() {
+	if measuredProfilesFirst(profiles, history, ModeFast)[0].ID() != p1.ID() {
 		t.Fatal("Fast ignored lower measured latency")
 	}
-	if measuredProfilesFirst(profiles, history, ModeBalanced)[0].id() != p2.id() {
+	if measuredProfilesFirst(profiles, history, ModeBalanced)[0].ID() != p2.ID() {
 		t.Fatal("Balanced ignored reliability")
 	}
 	for _, key := range []struct{ network, core string }{{"network-b", "core-a"}, {"network-a", "core-b"}} {
@@ -45,14 +45,14 @@ func TestNetworkMeasurementsAreIsolatedAndExpireWithoutAuthorizingExits(t *testi
 		}
 	}
 	fast.Checked = time.Now().Add(-25 * time.Hour)
-	history.Results[p1.id()] = fast
-	if measuredProfilesFirst(profiles, history, ModeFast)[0].id() != p2.id() {
+	history.Results[p1.ID()] = fast
+	if measuredProfilesFirst(profiles, history, ModeFast)[0].ID() != p2.ID() {
 		t.Fatal("expired measurement won")
 	}
 	stable.State = "timeout"
 	stable.Checked = time.Now()
-	history.Results[p2.id()] = stable
-	if measuredProfilesFirst(profiles, history, ModeBalanced)[0].id() != p1.id() {
+	history.Results[p2.ID()] = stable
+	if measuredProfilesFirst(profiles, history, ModeBalanced)[0].ID() != p1.ID() {
 		t.Fatal("recent timeout did not yield to an untested/stale alternative")
 	}
 	// Cached data is deliberately not a smartproxy.Upstream or a verification lease.
@@ -119,7 +119,7 @@ func TestProfileStateStaysWithTransportAfterReorderingAndECHRefresh(t *testing.T
 	t.Setenv("KTEST_WARP_DIR", t.TempDir())
 	p := aetherProfile{Label: "h2", Args: []string{"--masque", "--h2", "--ech", "old", "--enroll-address", "1.2.3.4"}}
 	q := aetherProfile{Label: p.Label, Args: []string{"--masque", "--h2", "--ech", "new", "--enroll-address", "2.3.4.5"}}
-	if p.id() != q.id() {
+	if p.ID() != q.ID() {
 		t.Fatal("ECH refresh invalidated stable profile identity")
 	}
 	first := enrollmentArg(aetherRunArgs(0, p, 10830), "--config")
@@ -128,7 +128,7 @@ func TestProfileStateStaysWithTransportAfterReorderingAndECHRefresh(t *testing.T
 		t.Fatal("sorting mixed profile state", first, second)
 	}
 	q.Args = []string{"--masque", "--h3"}
-	if q.id() == p.id() {
+	if q.ID() == p.ID() {
 		t.Fatal("different transports share state")
 	}
 	t.Setenv("KTEST_NETWORK_ID", "wifi-a")

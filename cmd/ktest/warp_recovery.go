@@ -9,7 +9,7 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 	ranked := measuredProfilesFirst(profiles, history, mode)
 	var proven, unknown, failed []aetherProfile
 	for _, p := range ranked {
-		r, ok := history.Results[p.id()]
+		r, ok := history.Results[p.ID()]
 		switch {
 		case ok && time.Since(r.Checked) <= networkCacheTTL && time.Until(r.Checked) <= time.Minute && measurementScore(r, mode) < 1e12:
 			proven = append(proven, p)
@@ -22,7 +22,7 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 	var diverse, variants []aetherProfile
 	seen := map[string]bool{}
 	for _, p := range unknown {
-		method := p.method()
+		method := p.Method()
 		if seen[method] {
 			variants = append(variants, p)
 			continue
@@ -32,7 +32,7 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 	}
 	if len(diverse) > 1 {
 		for i := 1; i < len(diverse); i++ {
-			if diverse[i].method() == "psiphon-cdn" {
+			if diverse[i].Method() == "psiphon-cdn" {
 				p := diverse[i]
 				copy(diverse[2:i+1], diverse[1:i])
 				diverse[1] = p
@@ -49,7 +49,7 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 func (m *warpManager) remainingProfiles() []int {
 	var indices []int
 	for i, p := range m.profs {
-		if !m.attempted[p.id()] {
+		if !m.attempted[p.ID()] {
 			indices = append(indices, i)
 		}
 	}

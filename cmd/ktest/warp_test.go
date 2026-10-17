@@ -116,7 +116,7 @@ func TestDefaultProfilesCoverTheTransportsAndSkipWhatNeedsECH(t *testing.T) {
 		if strings.Contains(strings.Join(p.Args, " "), "{ECH") {
 			t.Fatalf("placeholder left in %v", p)
 		}
-		if p.psiphon() {
+		if p.Psiphon() {
 			psiphon++
 		}
 	}
@@ -163,7 +163,7 @@ func TestPsiphonModeSelectsOnlyPsiphonProfiles(t *testing.T) {
 		t.Fatalf("default Psiphon profiles: %v, %v", profiles, err)
 	}
 	for _, p := range profiles {
-		if !p.psiphon() {
+		if !p.Psiphon() {
 			t.Fatalf("non-Psiphon profile selected: %v", p)
 		}
 	}
@@ -270,11 +270,11 @@ func TestAetherHelpOptionMatchingAndEqualsValues(t *testing.T) {
 		}
 	}
 	p := aetherProfile{Label: "custom", Args: []string{"--masque", "--startup-secs=100", "--ech=one"}}
-	if !p.has("--startup-secs") || p.value("--startup-secs") != "100" || !p.has("--ech") {
+	if !p.Has("--startup-secs") || p.Value("--startup-secs") != "100" || !p.Has("--ech") {
 		t.Fatal("equals-form flags were not parsed")
 	}
 	other := aetherProfile{Label: "custom", Args: []string{"--masque", "--startup-secs=100", "--ech=two"}}
-	if p.id() != other.id() {
+	if p.ID() != other.ID() {
 		t.Fatal("ECH session material should not destabilize profile identities")
 	}
 	for _, reserved := range []string{"--config=foo", "--bind=0.0.0.0:5"} {

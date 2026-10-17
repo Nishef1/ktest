@@ -1,0 +1,294 @@
+// Package aether owns the existing KTest Aether profile and identity contracts.
+// It is shared by CLI and Android; it does not implement a second tunnel core.
+package aether
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// DefaultProfiles is the shipped list; profiles/aether-profiles.txt
+// replaces it. {ECH} and {ECHIP} are an ECH configuration and a Cloudflare edge
+// address that ktest fetched itself, with no DNS: they make the calls to the
+// WARP API (the key) possible where the API's name is filtered. A line that uses
+// them is skipped when they could not be fetched.
+const DefaultProfiles = `# Aether profiles, one per line:  label | flags
+# Two at a time; fresh measurements for this network/core take priority.
+# ktest adds the loopback bind address, the identity files and the prompts' answers.
+WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --fragment --ech {ECH} --enroll-address {ECHIP}
+WARP, MASQUE over HTTP/3 (QUIC) with ECH | --masque --h3 --ech {ECH} --enroll-address {ECHIP}
+WARP, WireGuard | --wg --noize balanced --ech {ECH} --enroll-address {ECHIP}
+WARP, MASQUE over HTTP/2, fragmented | --masque --h2 --api-fragment
+WARP, MASQUE over HTTP/3 | --masque --h3
+WARP, WireGuard without ECH enrollment | --wg --noize balanced
+WARP, Gool WireGuard over MASQUE H2 | --gool --h2
+WARP, Gool WireGuard over MASQUE H3 | --gool --h3
+WARP, MASQUE-in-MASQUE H2 | --mim --h2
+WARP, MASQUE-in-MASQUE H3 | --mim --h3
+WARP, classic WireGuard-in-WireGuard | --gool-classic
+WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --enroll-address {ECHIP}
+WARP, MASQUE over HTTP/2 with ECH, IPv6 | --masque --h2 --no-fragment -6 --ech {ECH} --enroll-address {ECHIP}
+Psiphon | --psiphon-only
+Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
+WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --fragment --scan thorough --startup-secs 100 --ech {ECH} --enroll-address {ECHIP}
+`
+
+// Profile is one way of running Aether.
+type Profile struct {
+	Label string
+	Args  []string
+}
+
+func (p Profile) Has(flag string) bool {
+	for _, a := range p.Args {
+		if a == flag || strings.HasPrefix(a, flag+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func (p Profile) Psiphon() bool { return p.Has("--psiphon-only") }
+
+// ParseProfiles reads "label | flags" lines, substituting the ECH
+// placeholders and dropping lines that need what is not available.
+func ParseProfiles(text, ech, ip string) ([]Profile, error) {
+	var out []Profile
+	seen := map[string]bool{}
+	for n, line := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		label, flags, ok := strings.Cut(line, "|")
+		label, flags = strings.TrimSpace(label), strings.TrimSpace(flags)
+		if !ok || label == "" || flags == "" {
+			return nil, fmt.Errorf("line %d: want \"label | flags\"", n+1)
+		}
+		args := strings.Fields(flags)
+		for _, arg := range args {
+			name, _, _ := strings.Cut(arg, "=")
+			switch name {
+			case "--bind", "--config", "--masque-config", "--wg-config", "--http-proxy", "--tor-bind", "--psiphon-bind", "--register":
+				return nil, fmt.Errorf("line %d: %s is managed by ktest", n+1, name)
+			}
+		}
+		if strings.Contains(flags, "{ECH") && (ech == "" || ip == "") {
+			continue
+		}
+		flags = strings.NewReplacer("{ECHIP}", ip, "{ECH}", ech).Replace(flags)
+		if seen[label] {
+			return nil, fmt.Errorf("line %d: duplicate label %q", n+1, label)
+		}
+		seen[label] = true
+		out = append(out, Profile{Label: label, Args: strings.Fields(flags)})
+		if len(out) > 64 {
+			return nil, fmt.Errorf("at most 64 Aether profiles are supported")
+		}
+	}
+	return out, nil
+}
+
+func ValidMethod(method string) bool {
+	if method == "" {
+		return true
+	}
+	for _, choice := range Methods() {
+		if choice.ID == method {
+			return true
+		}
+	}
+	return false
+}
+
+func (p Profile) Method() string {
+	suffix := "-h3"
+	if p.Has("--h2") || p.Has("--http2") {
+		suffix = "-h2"
+	}
+	switch {
+	case p.Psiphon():
+		if p.Value("--psiphon-mode") == "cdn" {
+			return "psiphon-cdn"
+		}
+		return "psiphon"
+	case p.Has("--tor-only"):
+		return "tor"
+	case p.Has("--gool-classic") || p.Has("--wiw-outer") || p.Has("--wiw-inner") || p.Has("--wiw-peers"):
+		return "wiw"
+	case p.Has("--gool") || p.Has("--wiw") || p.Value("--protocol") == "gool":
+		return "gool" + suffix
+	case p.Has("--mim") || p.Has("--masque-in-masque") || p.Value("--protocol") == "mim":
+		return "mim" + suffix
+	case p.Has("--wg") || p.Has("--wireguard") || p.Has("--warp") || p.Value("--protocol") == "wg":
+		return "wireguard"
+	default:
+		return "masque" + suffix
+	}
+}
+
+func (p Profile) Value(flag string) string {
+	for i, v := range p.Args {
+		if v == flag && i+1 < len(p.Args) {
+			return p.Args[i+1]
+		}
+		if value, ok := strings.CutPrefix(v, flag+"="); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+// ECH retry configurations are short-lived discovery data, not profile identity.
+// Stable IDs keep endpoint files associated with the same transport after sorting.
+func (p Profile) ID() string {
+	args := append([]string(nil), p.Args...)
+	for i, flag := range args {
+		if (flag == "--ech" || flag == "--enroll-address") && i+1 < len(args) {
+			args[i+1] = "<discovered>"
+		}
+		for _, key := range []string{"--ech=", "--enroll-address="} {
+			if strings.HasPrefix(flag, key) {
+				args[i] = key + "<discovered>"
+			}
+		}
+	}
+	sum := sha256.Sum256([]byte(p.Label + "\n" + strings.Join(args, "\x00")))
+	return hex.EncodeToString(sum[:8])
+}
+
+func FilterMethod(profiles []Profile, method string) []Profile {
+	if method == "" || method == "auto" {
+		return profiles
+	}
+	var selected []Profile
+	for _, p := range profiles {
+		if p.Method() == method {
+			selected = append(selected, p)
+		}
+	}
+	return selected
+}
+
+// Saved recommendations and live launches use the same transport boundary.
+func ProfilesForMode(profiles []Profile, mode string) []Profile {
+	var selected []Profile
+	for _, p := range profiles {
+		if mode == "windscribe" {
+			continue
+		}
+		if mode == "psiphon" && (!p.Psiphon() || p.Has("--tor-only") || p.Has("--masque") || p.Has("--wg") || p.Has("--gool") || p.Has("--mim") || p.Has("--gool-classic")) {
+			continue
+		}
+		if mode == "windscribe-aether" && (p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") || p.Has("--upstream")) {
+			continue
+		}
+		selected = append(selected, p)
+	}
+	return selected
+}
+
+// The help output is not a bag of substrings. Read option declarations from
+// their own lines so --h is not falsely accepted because --help exists.
+func DocumentedOptions(help string) map[string]bool {
+	known := make(map[string]bool)
+	for _, line := range strings.Split(help, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "-") {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			for _, alias := range strings.Split(field, ",") {
+				alias = strings.TrimSpace(alias)
+				name, _, _ := strings.Cut(alias, "=")
+				name = strings.TrimRight(name, ",|")
+				if !strings.HasPrefix(name, "--") {
+					continue
+				}
+				ok := len(name) > 2
+				for _, c := range name[2:] {
+					if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+						ok = false
+						break
+					}
+				}
+				if ok {
+					known[name] = true
+				}
+			}
+		}
+	}
+	return known
+}
+
+// RunArgs is the full command line of a profile on a local port. Every
+// prompt Aether would ask has a flag here, so it never waits for input; flags
+// the profile sets itself are not repeated.
+func RunArgs(p Profile, port int, stateDir string) []string {
+	args := append([]string(nil), p.Args...)
+	has := func(flags ...string) bool {
+		for _, f := range flags {
+			if p.Has(f) {
+				return true
+			}
+		}
+		return false
+	}
+	if !p.Psiphon() {
+		if !has("-4", "-6", "--dual", "--ip") {
+			args = append(args, "-4")
+		}
+		if !has("--scan", "--turbo", "--balanced", "--thorough", "--verified", "--ironclad") {
+			args = append(args, "--turbo")
+		}
+		if !has("--startup-secs") {
+			args = append(args, "--startup-secs", "45")
+		}
+		if !has("--quick-reconnect", "--no-quick-reconnect") {
+			// Aether 2.3.0 can repeatedly select a failed cached gateway (upstream #147).
+			// Explicit profile quick-reconnect settings still take precedence.
+			args = append(args, "--no-quick-reconnect")
+		}
+	}
+	return append(args,
+		"--log-level", "warn",
+		"--bind", fmt.Sprintf("127.0.0.1:%d", port),
+		"--config", filepath.Join(stateDir, "run-"+p.ID()+".toml"),
+		"--masque-config", filepath.Join(stateDir, "masque.toml"),
+		"--wg-config", filepath.Join(stateDir, "wg.toml"),
+	)
+}
+
+// AttemptTimeout includes the native startup limit and a readiness margin.
+func AttemptTimeout(p Profile) time.Duration {
+	startup := 45 * time.Second
+	if duration, err := time.ParseDuration(p.Value("--startup-secs") + "s"); err == nil && duration >= 0 && duration <= time.Duration(1<<63-1)-20*time.Second {
+		startup = duration
+	}
+	return startup + 20*time.Second
+}
+
+func SupportedProfiles(profiles []Profile, help string) []Profile {
+	known := DocumentedOptions(help)
+	var supported []Profile
+	for _, p := range profiles {
+		ok := true
+		for _, arg := range p.Args {
+			if strings.HasPrefix(arg, "--") {
+				name, _, _ := strings.Cut(arg, "=")
+				if !known[name] {
+					ok = false
+					break
+				}
+			}
+		}
+		if ok {
+			supported = append(supported, p)
+		}
+	}
+	return supported
+}

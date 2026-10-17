@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package coreprocess
 
 import (
 	"os/exec"
@@ -8,7 +8,7 @@ import (
 	"unsafe"
 )
 
-func hideConsole(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} }
+func HideConsole(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} }
 
 // Layout of JOBOBJECT_EXTENDED_LIMIT_INFORMATION (winnt.h).
 type jobIOCounters struct{ a, b, c, d, e, f uint64 }
@@ -39,10 +39,10 @@ type jobExtendedLimits struct {
 // Windows closes the handle and kills every core still running in the job.
 var job syscall.Handle
 
-// killChildrenOnExit puts ktest into a kill-on-close job object. Child
+// KillChildrenOnExit puts ktest into a kill-on-close job object. Child
 // processes started afterwards (Xray, ByeDPI, sing-box) inherit the job, so a
 // crash can no longer leave orphaned cores holding the local ports.
-func killChildrenOnExit() {
+func KillChildrenOnExit() {
 	kernel := syscall.NewLazyDLL("kernel32.dll")
 	create := kernel.NewProc("CreateJobObjectW")
 	setInfo := kernel.NewProc("SetInformationJobObject")

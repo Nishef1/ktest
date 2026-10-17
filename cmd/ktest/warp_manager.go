@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -24,88 +25,6 @@ import (
 // obfuscation, over IPv6, and Psiphon, which does not depend on WARP at all),
 // compares them two at a time and ranks successful neutral HTTPS measurements.
 // A fresh per-network measurement orders the next live connection attempt.
-
-// defaultAetherProfiles is the shipped list; profiles/aether-profiles.txt
-// replaces it. {ECH} and {ECHIP} are an ECH configuration and a Cloudflare edge
-// address that ktest fetched itself, with no DNS: they make the calls to the
-// WARP API (the key) possible where the API's name is filtered. A line that uses
-// them is skipped when they could not be fetched.
-const defaultAetherProfiles = `# Aether profiles, one per line:  label | flags
-# Two at a time; fresh measurements for this network/core take priority.
-# ktest adds the loopback bind address, the identity files and the prompts' answers.
-WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --fragment --ech {ECH} --enroll-address {ECHIP}
-WARP, MASQUE over HTTP/3 (QUIC) with ECH | --masque --h3 --ech {ECH} --enroll-address {ECHIP}
-WARP, WireGuard | --wg --noize balanced --ech {ECH} --enroll-address {ECHIP}
-WARP, MASQUE over HTTP/2, fragmented | --masque --h2 --api-fragment
-WARP, MASQUE over HTTP/3 | --masque --h3
-WARP, WireGuard without ECH enrollment | --wg --noize balanced
-WARP, Gool WireGuard over MASQUE H2 | --gool --h2
-WARP, Gool WireGuard over MASQUE H3 | --gool --h3
-WARP, MASQUE-in-MASQUE H2 | --mim --h2
-WARP, MASQUE-in-MASQUE H3 | --mim --h3
-WARP, classic WireGuard-in-WireGuard | --gool-classic
-WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --enroll-address {ECHIP}
-WARP, MASQUE over HTTP/2 with ECH, IPv6 | --masque --h2 --no-fragment -6 --ech {ECH} --enroll-address {ECHIP}
-Psiphon | --psiphon-only
-Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
-WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --fragment --scan thorough --startup-secs 100 --ech {ECH} --enroll-address {ECHIP}
-`
-
-// aetherProfile is one way of running Aether.
-type aetherProfile struct {
-	Label string
-	Args  []string
-}
-
-func (p aetherProfile) has(flag string) bool {
-	for _, a := range p.Args {
-		if a == flag || strings.HasPrefix(a, flag+"=") {
-			return true
-		}
-	}
-	return false
-}
-
-func (p aetherProfile) psiphon() bool { return p.has("--psiphon-only") }
-
-// parseAetherProfiles reads "label | flags" lines, substituting the ECH
-// placeholders and dropping lines that need what is not available.
-func parseAetherProfiles(text, ech, ip string) ([]aetherProfile, error) {
-	var out []aetherProfile
-	seen := map[string]bool{}
-	for n, line := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		label, flags, ok := strings.Cut(line, "|")
-		label, flags = strings.TrimSpace(label), strings.TrimSpace(flags)
-		if !ok || label == "" || flags == "" {
-			return nil, fmt.Errorf("line %d: want \"label | flags\"", n+1)
-		}
-		args := strings.Fields(flags)
-		for _, arg := range args {
-			name, _, _ := strings.Cut(arg, "=")
-			switch name {
-			case "--bind", "--config", "--masque-config", "--wg-config", "--http-proxy", "--tor-bind", "--psiphon-bind", "--register":
-				return nil, fmt.Errorf("line %d: %s is managed by ktest", n+1, name)
-			}
-		}
-		if strings.Contains(flags, "{ECH") && (ech == "" || ip == "") {
-			continue
-		}
-		flags = strings.NewReplacer("{ECHIP}", ip, "{ECH}", ech).Replace(flags)
-		if seen[label] {
-			return nil, fmt.Errorf("line %d: duplicate label %q", n+1, label)
-		}
-		seen[label] = true
-		out = append(out, aetherProfile{Label: label, Args: strings.Fields(flags)})
-		if len(out) > 64 {
-			return nil, fmt.Errorf("at most 64 Aether profiles are supported")
-		}
-	}
-	return out, nil
-}
 
 func aetherProfilesFile(base string) string {
 	return filepath.Join(base, "profiles", "aether-profiles.txt")
@@ -124,55 +43,6 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 	return profilesForMode(profiles, mode), nil
 }
 
-// aetherRunArgs is the full command line of a profile on a local port. Every
-// prompt Aether would ask has a flag here, so it never waits for input; flags
-// the profile sets itself are not repeated.
-func aetherRunArgs(i int, p aetherProfile, port int) []string {
-	args := append([]string(nil), p.Args...)
-	has := func(flags ...string) bool {
-		for _, f := range flags {
-			if p.has(f) {
-				return true
-			}
-		}
-		return false
-	}
-	if !p.psiphon() {
-		if !has("-4", "-6", "--dual", "--ip") {
-			args = append(args, "-4")
-		}
-		if !has("--scan", "--turbo", "--balanced", "--thorough", "--verified", "--ironclad") {
-			args = append(args, "--turbo")
-		}
-		if !has("--startup-secs") {
-			args = append(args, "--startup-secs", "45")
-		}
-		if !has("--quick-reconnect", "--no-quick-reconnect") {
-			// Aether 2.3.0 can repeatedly select a failed cached gateway (upstream #147).
-			// Explicit profile quick-reconnect settings still take precedence.
-			args = append(args, "--no-quick-reconnect")
-		}
-	}
-	return append(args,
-		"--log-level", "warn",
-		"--bind", fmt.Sprintf("127.0.0.1:%d", port),
-		"--config", filepath.Join(warpDir(), "run-"+p.id()+".toml"),
-		"--masque-config", identityFile(),
-		"--wg-config", wireguardIdentityFile(),
-	)
-}
-
-// attemptTimeout is how long a profile may take to open its proxy port.
-func attemptTimeout(p aetherProfile) time.Duration {
-	secs := 45
-	for i, a := range p.Args {
-		if a == "--startup-secs" && i+1 < len(p.Args) {
-			fmt.Sscanf(p.Args[i+1], "%d", &secs)
-		}
-	}
-	return time.Duration(secs+20) * time.Second
-}
-
 // A first-use nested method must bootstrap its inner identity over an outer
 // tunnel before the final carrier can even start. That work cannot fit inside
 // the standard 45-second probe. Existing valid identities take the fast path.
@@ -183,7 +53,7 @@ func profileAttemptBudget(p aetherProfile) time.Duration {
 		budget = 45 * time.Second
 	}
 	var protocol, path string
-	switch p.method() {
+	switch p.Method() {
 	case "gool-h2", "gool-h3":
 		protocol, path = "wg", filepath.Join(warpDir(), "masque-gool.toml")
 	case "wiw":
@@ -371,7 +241,7 @@ func (m *warpManager) run(ctx context.Context) {
 		}
 	}
 	retire := func(w *warpFound) {
-		id := w.p.id()
+		id := w.p.ID()
 		if current, ok := active[id]; !ok || current != w {
 			return
 		}
@@ -401,7 +271,7 @@ func (m *warpManager) run(ctx context.Context) {
 			found := m.search(ctx, active)
 			m.searching.Store(false)
 			for _, w := range found {
-				active[w.p.id()] = w
+				active[w.p.ID()] = w
 				go func(w *warpFound) {
 					select {
 					case <-ctx.Done():
@@ -489,14 +359,14 @@ type warpFound struct {
 func (m *warpManager) orderedCandidateIndices(active map[string]*warpFound, history networkProfile) []int {
 	byID := make(map[string]int, len(m.profs))
 	for i, p := range m.profs {
-		byID[p.id()] = i
+		byID[p.ID()] = i
 	}
 	var indices []int
 	for _, p := range recoveryProfilesFirst(m.profs, history, m.o.mode) {
-		if _, inUse := active[p.id()]; inUse || m.attempted[p.id()] {
+		if _, inUse := active[p.ID()]; inUse || m.attempted[p.ID()] {
 			continue
 		}
-		indices = append(indices, byID[p.id()])
+		indices = append(indices, byID[p.ID()])
 	}
 	return indices
 }
@@ -518,7 +388,7 @@ func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) 
 	}
 	if len(active) == 0 && len(indices) > 0 {
 		first := m.profs[indices[0]]
-		if r, ok := history.Results[first.id()]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
+		if r, ok := history.Results[first.ID()]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
 			limit = 1
 		}
 	}
@@ -560,7 +430,7 @@ func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) 
 // try starts one profile and waits for its proxy port. On success the process
 // keeps running; on failure it is stopped.
 func (m *warpManager) try(ctx context.Context, i int, p aetherProfile) (bool, *runningCore, string) {
-	if !p.psiphon() {
+	if !p.Psiphon() {
 		if err := m.prepareIdentity(ctx, p); err != nil {
 			if ctx.Err() == nil {
 				m.t.Note("%s skipped: %v", p.Label, err)
@@ -663,30 +533,10 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 // readyIdentity checks only local credentials; it does not claim a live tunnel.
 // A worker with existing identities must not wait for another worker's slow,
 // unrelated enrollment, or "two profiles at once" degenerates into one.
-func readyIdentity(p aetherProfile) bool {
-	if p.psiphon() || p.has("--tor-only") {
-		return true
-	}
-	protocol, path := "masque", identityFile()
-	if p.method() == "wireguard" || p.method() == "wiw" {
-		protocol, path = "wg", wireguardIdentityFile()
-	}
-	if checkWarpIdentity(path, protocol) != nil {
-		return false
-	}
-	switch p.method() {
-	case "wiw":
-		return checkWarpIdentity(filepath.Join(warpDir(), "wg-secondary.toml"), "wg") == nil
-	case "mim-h2", "mim-h3":
-		return checkWarpIdentity(filepath.Join(warpDir(), "masque-secondary.toml"), "masque") == nil
-	case "gool-h2", "gool-h3":
-		return checkWarpIdentity(filepath.Join(warpDir(), "masque-gool.toml"), "wg") == nil
-	}
-	return true
-}
+func readyIdentity(p aetherProfile) bool { return aether.ReadyIdentity(p, warpDir()) }
 
 func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) error {
-	if p.psiphon() || p.has("--tor-only") {
+	if p.Psiphon() || p.Has("--tor-only") {
 		return nil // standalone carriers have no WARP enrollment requirement
 	}
 	if readyIdentity(p) {
@@ -701,18 +551,18 @@ func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) erro
 		return err
 	}
 	protocol, path := "masque", identityFile()
-	if p.method() == "wireguard" || p.method() == "wiw" {
+	if p.Method() == "wireguard" || p.Method() == "wiw" {
 		protocol, path = "wg", wireguardIdentityFile()
 	}
 	if err := m.prepareIdentityFile(ctx, protocol, path, nil); err != nil {
 		return err
 	}
 	switch {
-	case p.method() == "wiw":
+	case p.Method() == "wiw":
 		return m.prepareIdentityFile(ctx, "wg", filepath.Join(warpDir(), "wg-secondary.toml"), nil)
-	case strings.HasPrefix(p.method(), "mim-"):
+	case strings.HasPrefix(p.Method(), "mim-"):
 		return m.prepareIdentityFile(ctx, "masque", filepath.Join(warpDir(), "masque-secondary.toml"), nil)
-	case strings.HasPrefix(p.method(), "gool-"):
+	case strings.HasPrefix(p.Method(), "gool-"):
 		inner := filepath.Join(warpDir(), "masque-gool.toml")
 		if err := checkWarpIdentity(inner, "wg"); err == nil {
 			return nil
@@ -722,25 +572,7 @@ func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) erro
 		if m.enrollTried[inner] {
 			return fmt.Errorf("Gool inner enrollment already attempted this connection; retry diagnosis or reconnect")
 		}
-		var args []string
-		for i := 0; i < len(p.Args); i++ {
-			arg := p.Args[i]
-			if arg == "--protocol" && i+1 < len(p.Args) {
-				args = append(args, arg, "masque")
-				i++
-				continue
-			}
-			if arg == "--gool" || arg == "--wiw" {
-				args = append(args, "--masque")
-				continue
-			}
-			if arg == "--gool-peer" {
-				i++
-				continue
-			}
-			args = append(args, arg)
-		}
-		outer := aetherProfile{Label: "Gool registration carrier " + p.method(), Args: args}
+		outer := aether.GoolOuterProfile(p)
 		up, rc, reason := m.startProfile(ctx, 80, outer)
 		if !up {
 			// Cancellation is not evidence of a bad identity. Permit a fresh

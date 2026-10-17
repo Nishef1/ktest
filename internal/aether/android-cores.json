@@ -1,0 +1,78 @@
+{
+  "version": "v2.3.0",
+  "repository": "https://github.com/CluvexStudio/Aether",
+  "abis": {
+    "arm64-v8a": {
+      "archive": "aether-android-arm64.tar.gz",
+      "sha256": "038748745244828ea41a808958f16a1c25053dc61db977c95ceb2d3a0b2f7970",
+      "machine": 183,
+      "bits": 64,
+      "min_load_alignment": 16384,
+      "files": [
+        {
+          "source": "aether",
+          "name": "libaether.so",
+          "sha256": "2b44db73249eab204416c4e4977151db47aee487e1b96bae3c7e729f2812680e"
+        },
+        {
+          "source": "pt/psiphon-tunnel-core",
+          "name": "libpsiphon-tunnel-core.so",
+          "sha256": "7cab04ebf82ceed76ae53b99c306db26233b80825b930e2e7288f07a4087387a"
+        },
+        {
+          "source": "pt/lyrebird",
+          "name": "liblyrebird.so",
+          "sha256": "185cdbcfb8189cb502e841bc21ee5e19545bd0c4699bb656d21028ef5eacbd73"
+        }
+      ]
+    },
+    "armeabi-v7a": {
+      "archive": "aether-android-armv7.tar.gz",
+      "sha256": "9e9c59b188ff235053ae22b9f007f31de3e9bc71c8252ef73b0d626b85b64dae",
+      "machine": 40,
+      "bits": 32,
+      "min_load_alignment": 4096,
+      "files": [
+        {
+          "source": "aether",
+          "name": "libaether.so",
+          "sha256": "d8f3865a33366831aef881685f6c2d6e85c934c70fd18c38aa920ba140bb7bfb"
+        },
+        {
+          "source": "pt/psiphon-tunnel-core",
+          "name": "libpsiphon-tunnel-core.so",
+          "sha256": "719bf754d197ecb2b320e6251ace79109dc1972c6675206950bf8cb5a55f03ca"
+        },
+        {
+          "source": "pt/lyrebird",
+          "name": "liblyrebird.so",
+          "sha256": "9745d7799856c6993aae01ebd657472dce9e1049962eb820b6f525873b9cf667"
+        }
+      ]
+    },
+    "x86_64": {
+      "archive": "aether-android-x86_64.tar.gz",
+      "sha256": "9acd35dc7bafd4bbf0f4bd8337cb26c4efe6ab0d84ec01d1a0a9fa68168b09c1",
+      "machine": 62,
+      "bits": 64,
+      "min_load_alignment": 4096,
+      "files": [
+        {
+          "source": "aether",
+          "name": "libaether.so",
+          "sha256": "46735a4808500a21b5f95af340c6977cb0c7dad264fa57427903a9aaed2161f3"
+        },
+        {
+          "source": "pt/psiphon-tunnel-core",
+          "name": "libpsiphon-tunnel-core.so",
+          "sha256": "0ffe5cf61bb12bf14310c1dd24ba6af0b15475baf52291121af793508129484f"
+        },
+        {
+          "source": "pt/lyrebird",
+          "name": "liblyrebird.so",
+          "sha256": "cad26f72e7e6411e514131da7b0d477cbb2e248bb0c989a6bce6e4d4ce9dbd13"
+        }
+      ]
+    }
+  }
+}

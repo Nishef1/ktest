@@ -75,7 +75,10 @@ func TestCatalogUsesBothProviderListsForExactNode(t *testing.T) {
 
 func TestCatalogRejectsUnsafeAmbiguousAndStaleMappings(t *testing.T) {
 	c := newWSNodeCatalog()
-	if err := c.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+	// The scenario requires a strictly newer regional snapshot. Consecutive
+	// time.Now calls can be equal on Windows and accidentally test a tie.
+	fetched := time.Now()
+	if err := c.replace("global", []byte(globalNodeFixture), fetched.Add(-time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	for _, body := range []string{
@@ -91,7 +94,7 @@ func TestCatalogRejectsUnsafeAmbiguousAndStaleMappings(t *testing.T) {
 			t.Fatalf("invalid update destroyed fresh data: %+v", got)
 		}
 	}
-	if err := c.replace("regional", []byte(strings.ReplaceAll(regionalNodeFixture, "node.example.com", "other.example.com")), time.Now()); err != nil {
+	if err := c.replace("regional", []byte(strings.ReplaceAll(regionalNodeFixture, "node.example.com", "other.example.com")), fetched); err != nil {
 		t.Fatal(err)
 	}
 	// Conflicting snapshots must not mix IPs across node identities.

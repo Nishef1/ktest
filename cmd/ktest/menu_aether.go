@@ -3,23 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/Nishef1/ktest/internal/aether"
 	"strconv"
 	"time"
 )
 
-var aetherMethodChoices = []struct{ name, value string }{
-	{"Automatic (measured network order)", "auto"},
-	{"MASQUE HTTP/2 (TCP)", "masque-h2"},
-	{"MASQUE HTTP/3 (QUIC/UDP)", "masque-h3"},
-	{"WireGuard", "wireguard"},
-	{"Gool: WireGuard inside MASQUE H2", "gool-h2"},
-	{"Gool: WireGuard inside MASQUE H3", "gool-h3"},
-	{"Classic WARP-in-WARP (WireGuard inside WireGuard)", "wiw"},
-	{"MASQUE-in-MASQUE H2", "mim-h2"},
-	{"MASQUE-in-MASQUE H3", "mim-h3"},
-	{"Psiphon only", "psiphon"},
-	{"Psiphon CDN only", "psiphon-cdn"},
-}
+var aetherMethodChoices = func() []struct{ name, value string } {
+	var choices []struct{ name, value string }
+	for _, method := range aether.Methods() {
+		choices = append(choices, struct{ name, value string }{method.Title, method.ID})
+	}
+	return choices
+}()
 
 func printSavedAether(ctx context.Context, u *term, base string) {
 	profiles, err := loadAetherProfiles(base, "cached", "cached", ModeAether)

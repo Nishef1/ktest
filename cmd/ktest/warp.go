@@ -14,12 +14,12 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/dnscheck"
 )
 
@@ -108,12 +108,7 @@ func warpState(base string) string {
 // aetherLauncher runs Aether until ctx ends.
 func aetherLauncher(bin string, args []string, output io.Writer) launcher {
 	return func(ctx context.Context, _ *dnscheck.Result) error {
-		cmd := exec.CommandContext(ctx, bin, args...)
-		cmd.Env = append(os.Environ(), "AETHER_REPROVISION=0")
-		configureEnrollmentProcess(cmd)
-		hideConsole(cmd)
-		cmd.Stdout, cmd.Stderr = output, output
-		err := runTracked(cmd)
+		err := aether.Run(ctx, bin, args, output)
 		if ctx.Err() != nil {
 			return nil
 		}

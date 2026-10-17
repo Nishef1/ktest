@@ -53,7 +53,7 @@ func TestAllAetherFamiliesRemainAvailableWithoutECH(t *testing.T) {
 	}
 	for _, method := range []string{"masque-h2", "masque-h3", "wireguard", "gool-h2", "gool-h3", "wiw", "mim-h2", "mim-h3"} {
 		for _, p := range filterAetherMethod(profiles, method) {
-			if p.psiphon() {
+			if p.Psiphon() {
 				t.Fatal("forced WARP family selected Psiphon")
 			}
 		}
@@ -218,7 +218,7 @@ func TestDefaultAetherH2AndFreshGatewayPolicy(t *testing.T) {
 			continue
 		}
 		found = true
-		if !p.has("--fragment") || p.has("--no-fragment") {
+		if !p.Has("--fragment") || p.Has("--no-fragment") {
 			t.Fatalf("H2 ECH disables fragmentation: %+v", p)
 		}
 		args := strings.Join(aetherRunArgs(0, p, 10830), " ")

@@ -1,0 +1,50 @@
+package mobilebridge
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestAetherCatalogPreservesAndroidModeAndIdentityBoundaries(t *testing.T) {
+	for _, mode := range []string{"psiphon", "windscribe-aether", "tor"} {
+		raw, err := AetherProfileCatalog(mode, "auto")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var report struct {
+			Profiles []struct {
+				Method     string `json:"method"`
+				Identities []struct {
+					Protocol string `json:"protocol"`
+				} `json:"identities"`
+			} `json:"profiles"`
+		}
+		if err := json.Unmarshal([]byte(raw), &report); err != nil {
+			t.Fatal(err)
+		}
+		if len(report.Profiles) == 0 {
+			t.Fatal("shared transport inventory missing")
+		}
+		for _, profile := range report.Profiles {
+			switch mode {
+			case "psiphon":
+				if profile.Method != "psiphon" && profile.Method != "psiphon-cdn" {
+					t.Fatal("non-Psiphon profile escaped mode filter")
+				}
+			case "tor":
+				if profile.Method != "tor" || len(profile.Identities) != 0 {
+					t.Fatal("Tor inherited WARP identity or method")
+				}
+			case "windscribe-aether":
+				if profile.Method == "psiphon" || profile.Method == "psiphon-cdn" || profile.Method == "tor" {
+					t.Fatal("Windscribe WARP carrier inherited Tor/Psiphon")
+				}
+			}
+		}
+	}
+	for _, tc := range [][2]string{{"windscribe", "auto"}, {"unknown", "auto"}, {"psiphon", "wireguard"}, {"tor", "masque-h2"}, {"aether", "unknown"}} {
+		if _, err := AetherProfileCatalog(tc[0], tc[1]); err == nil {
+			t.Fatalf("invalid mode/method accepted: %v", tc)
+		}
+	}
+}

@@ -26,6 +26,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // The existing native cores are separate executables, invoked from the
+    // read-only package nativeLibraryDir rather than writable app storage.
+    packaging {
+        jniLibs.useLegacyPackaging = true
+        // Runtime hashes refer to the unmodified upstream executables.
+        jniLibs.keepDebugSymbols += setOf(
+            "**/libaether.so", "**/libpsiphon-tunnel-core.so", "**/liblyrebird.so"
+        )
+    }
+
 }
 
 dependencies {

@@ -16,3 +16,23 @@ The ktest menu and scanner are an independent Go orchestration project. The pack
 - **psiphon-tunnel-core** (Psiphon Labs, https://github.com/Psiphon-Labs/psiphon-tunnel-core, GPL-3.0) and **lyrebird** (Tor Project, https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird, BSD-style) are the unmodified helpers that ship in the `pt/` folder of the pinned Aether archive. They are extracted next to `aether.exe` only when the user enables the exit paths, and only Aether starts them.
 
 TUN may temporarily change system routes or DNS behavior. Windows requires Administrator approval; it is never silently enabled. An unexpected crash may require manual network adapter recovery.
+
+## Android native preparation
+
+Android uses the unmodified Android executables in the official Aether v2.3.0
+release, not the Windows or generic Linux Aether binary. Archive and per-file
+SHA-256 values are recorded in `internal/aether/android-cores.json`; the native
+packaging script verifies both levels before copying any file into `jniLibs`.
+
+The x86_64 Psiphon executable's Go build metadata identifies the source revision
+`83aa73b9b982e7421e00117f5b0c5aceb5dda452`, with `vcs.modified=false`; Aether's
+pinned build script uses the CluvexStudio/psiphon-tunnel-core fork at that commit.
+The x86_64 Lyrebird metadata identifies revision
+`fc105a03c0e0acc2479301c361c012ffed359c43`, also unmodified. The corresponding
+sources and license notices must be preserved in Android distribution just as
+for the desktop executables. No Android APK/AAR has been produced or distributed
+by this native-preparation step.
+
+- Aether source and build scripts: https://github.com/CluvexStudio/Aether/tree/v2.3.0
+- Psiphon helper source: https://github.com/CluvexStudio/psiphon-tunnel-core/tree/83aa73b9b982e7421e00117f5b0c5aceb5dda452
+- Lyrebird helper source: https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/-/tree/fc105a03c0e0acc2479301c361c012ffed359c43
