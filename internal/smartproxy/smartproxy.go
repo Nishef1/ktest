@@ -107,7 +107,7 @@ type Config struct {
 	// LocalOnly forbids any path other than explicitly marked local anti-DPI
 	// SOCKS cores or built-in ClientHello modifiers on direct connections.
 	LocalOnly bool
-	// Stagger is the minimum head start before the small fallback wave.
+	// Stagger bounds the preferred path's head start before the small fallback wave.
 	Stagger time.Duration
 	// ConnectTimeout bounds dial plus SOCKS handshake; FirstByteTimeout bounds
 	// the wait for the server's first TLS record after the flight was sent.
@@ -507,7 +507,18 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 		host = p.nameFor(host, flight)
 		win, err = p.race(ctx, host, port, flight)
 	} else {
+		began := time.Now()
 		win, err = p.plain(ctx, host, port, flight)
+		if ctx.Err() == nil {
+			e := Event{Host: host, Port: port, Site: siteKey(host), Path: win.path, Took: time.Since(began)}
+			if err != nil {
+				e.Err = err.Error()
+			} else {
+				e.OK = len(win.first) > 0
+				e.TCPOnly = !e.OK
+			}
+			p.emit(e)
+		}
 	}
 	if err != nil {
 		p.logf("%s:%s no path answered: %v", host, port, err)
@@ -517,6 +528,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	defer stopWinner()
 	if win.sess != nil {
 		if err := win.sess.Serve(client, flight); err != nil {
+			p.rejectTakeover(host, port, win.path)
 			p.logf("%s:%s %s: %v", host, port, win.path, err)
 			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: win.path, Err: err.Error(), Rejected: true})
 		}
@@ -586,6 +598,7 @@ func (w winner) release() {
 // If these stay silent, all remaining normal routes join after a bounded
 // 250ms hedge. Explicit Late routes retain their separate last-resort gate.
 func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (winner, error) {
+	began := time.Now()
 	if err := parent.Err(); err != nil {
 		return winner{}, err
 	}
@@ -682,7 +695,7 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 				continue
 			}
 			p.logf("%s:%s won by %s in %dms", host, port, r.u.Name, r.took.Milliseconds())
-			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: r.u.Name, Took: r.took, OK: true, TLSResponse: r.win.tls, Prepared: r.win.sess != nil})
+			p.emit(Event{Host: host, Port: port, Site: siteKey(host), Path: r.u.Name, Took: time.Since(began), OK: true, TLSResponse: r.win.tls, Prepared: r.win.sess != nil})
 			cancel()
 			go drain(results, pending)
 			r.win.path = r.u.Name

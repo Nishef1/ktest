@@ -73,7 +73,7 @@ type Fronter struct {
 	scores   map[string]*score
 	ech      map[string][]byte // learned ECH configurations by public name
 	accepted int
-	refused  int // consecutive refusals since the last accepted connection
+	refused  int // total application refusals
 	disabled string
 }
 
@@ -516,7 +516,6 @@ func (f *Fronter) refusedOne() {
 func (f *Fronter) acceptedOne() {
 	f.mu.Lock()
 	f.accepted++
-	f.refused = 0
 	f.mu.Unlock()
 }
 

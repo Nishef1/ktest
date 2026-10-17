@@ -4,12 +4,86 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestDoHLearnsEndpointAndReusesTLSAcrossNames(t *testing.T) {
+	var requests, dials atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		fmt.Fprint(w, `{"Status":0,"Answer":[{"type":1,"TTL":60,"data":"142.250.1.1"}]}`)
+	}))
+	defer srv.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
+		dials.Add(1)
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}
+	endpoints := make([]DoHEndpoint, 9)
+	for i := range endpoints {
+		endpoints[i] = DoHEndpoint{URL: "https://example.com/resolve"}
+	}
+	r := NewDoH(endpoints, dial, pool)
+	for i := 0; i < 20; i++ {
+		if _, err := r(context.Background(), fmt.Sprintf("host%d.example", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := requests.Load(); n != 20 {
+		t.Fatalf("fast healthy resolver caused %d queries for 20 names", n)
+	}
+	if n := dials.Load(); n > 2 {
+		t.Fatalf("repeated resolver TLS setup: %d connections", n)
+	}
+	t.Logf("20 distinct names: %d queries, %d TLS connections", requests.Load(), dials.Load())
+}
+
+func TestDoHFallbackRemainsBoundedAndLearnsADeepEndpoint(t *testing.T) {
+	var badSecond atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/good" {
+			if r.URL.Query().Get("name") == "second.example" {
+				badSecond.Add(1)
+			}
+			<-r.Context().Done()
+			return
+		}
+		fmt.Fprint(w, `{"Status":0,"Answer":[{"type":1,"TTL":60,"data":"142.250.1.1"}]}`)
+	}))
+	defer srv.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	var endpoints []DoHEndpoint
+	for i := 0; i < 8; i++ {
+		endpoints = append(endpoints, DoHEndpoint{URL: fmt.Sprintf("https://example.com/bad%d", i)})
+	}
+	endpoints = append(endpoints, DoHEndpoint{URL: "https://example.com/good"})
+	r := NewDoH(endpoints, func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}, pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	began := time.Now()
+	if _, err := r(ctx, "first.example"); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(began) > time.Second {
+		t.Fatal("deep resolver fallback accumulated serial delays")
+	}
+	if _, err := r(ctx, "second.example"); err != nil {
+		t.Fatal(err)
+	}
+	if badSecond.Load() != 0 {
+		t.Fatal("working deep endpoint was not tried first for the next name")
+	}
+}
 
 func TestDoHResolvesCachesAndVerifiesCertificates(t *testing.T) {
 	var hits atomic.Int32

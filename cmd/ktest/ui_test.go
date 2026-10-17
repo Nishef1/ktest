@@ -162,6 +162,22 @@ func TestConnectionFeedSeparatesHostsPortsAndResponseStages(t *testing.T) {
 	}
 }
 
+func TestSessionSummaryKeepsRefusalsAndLiveRouteCounts(t *testing.T) {
+	var out bytes.Buffer
+	feed := &siteEvents{t: plainTerm(&out)}
+	for i := 0; i < 2; i++ {
+		feed.print(smartproxy.Event{Host: "app.example", Port: "443", Path: "end-to-end", OK: true, TLSResponse: true, Took: 1200 * time.Millisecond})
+	}
+	feed.print(smartproxy.Event{Host: "front.example", Port: "443", Path: "front", OK: true, Prepared: true})
+	feed.print(smartproxy.Event{Host: "front.example", Port: "443", Path: "front", Rejected: true, Err: "unknown certificate"})
+	out.Reset()
+	summarize(feed.t, feed, nil)
+	text := out.String()
+	if strings.Contains(text, "100%") || !strings.Contains(text, "1 application refusal") || !strings.Contains(text, "2 selected") || !strings.Contains(text, "end-to-end") {
+		t.Fatalf("misleading or incomplete live summary:\n%s", text)
+	}
+}
+
 func TestLiveProgressKeepsStatusMessagesAndFitsWidth(t *testing.T) {
 	var out bytes.Buffer
 	u := &term{w: &out, columns: 40, color: true, unicode: true, live: true}

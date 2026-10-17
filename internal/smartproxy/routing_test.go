@@ -46,6 +46,82 @@ func TestExactDestinationHistoryAndHysteresis(t *testing.T) {
 	}
 }
 
+func TestSlowRememberedRouteDoesNotDelayAFasterAlternative(t *testing.T) {
+	var slow, fast atomic.Int32
+	events := make(chan Event, 1)
+	p, _ := New(Config{Upstreams: []Upstream{
+		{Name: "remembered", Addr: silentSocks(t, &slow)},
+		{Name: "alternative", Addr: fakeSocks(t, destination(t), true, &fast), Rank: 1},
+	}, Stagger: 80 * time.Millisecond, FirstByteTimeout: 2 * time.Second, OnEvent: func(e Event) { events <- e }})
+	p.record(p.ups[0], "recover.example", "443", true, 700*time.Millisecond)
+	began := time.Now()
+	w, err := p.race(context.Background(), "recover.example", "443", clientHello())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.release()
+	elapsed := time.Since(began)
+	if elapsed > 350*time.Millisecond {
+		t.Fatalf("remembered route imposed an exclusive wait: %s", elapsed)
+	}
+	e := <-events
+	if e.Took < 70*time.Millisecond || e.Took > elapsed {
+		t.Fatalf("reported %s excludes race waiting; actual %s", e.Took, elapsed)
+	}
+	t.Logf("recovered in %s; reported %s", elapsed, e.Took)
+}
+
+type rejectedSession struct{}
+
+func (rejectedSession) Serve(net.Conn, []byte) error {
+	return fmt.Errorf("remote error: tls: unknown certificate")
+}
+func (rejectedSession) Close() {}
+
+func TestRejectedTakeoverUsesAnAlternativeOnTheNextConnection(t *testing.T) {
+	var hits atomic.Int32
+	events := make(chan Event, 8)
+	p, _ := New(Config{Upstreams: []Upstream{
+		{Name: "front", Takeover: func(context.Context, string, string, []byte) (Session, error) { return rejectedSession{}, nil }},
+		{Name: "end-to-end", Addr: fakeSocks(t, destination(t), true, &hits), Rank: 1},
+	}, OnEvent: func(e Event) { events <- e }})
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Serve(ctx, l)
+	c, err := DialVia(ctx, l.Addr().String(), "refused.example", "443", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write(clientHello())
+	for {
+		select {
+		case e := <-events:
+			if !e.Rejected {
+				continue
+			}
+			if got := p.order("refused.example", "443")[0].Name; got != "end-to-end" {
+				t.Fatalf("rejected takeover still preferred: %s", got)
+			}
+			if hits.Load() != 0 {
+				t.Fatal("request replayed after the takeover answered")
+			}
+			w, err := p.race(ctx, "refused.example", "443", clientHello())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.release()
+			if w.path != "end-to-end" {
+				t.Fatalf("next connection chose %s", w.path)
+			}
+			return
+		case <-time.After(2 * time.Second):
+			t.Fatal("no refusal event")
+		}
+	}
+}
+
 func TestConcurrentProtectedConnectionsAcceptOnlyOneExitRoute(t *testing.T) {
 	p, _ := New(Config{ExitOnly: func(string) bool { return true }, Upstreams: []Upstream{
 		{Name: "exit-a", Exit: true, AIEligible: true}, {Name: "exit-b", Exit: true, AIEligible: true},

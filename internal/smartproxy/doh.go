@@ -141,9 +141,9 @@ func NewDoH(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool) Resolv
 	return NewDoHType(endpoints, dial, roots, "A")
 }
 
-// NewDoHType is NewDoH for a record type: "A" (IPv4) or "AAAA" (IPv6). All
-// endpoints are asked at once and the first usable answer wins, so a filtered
-// provider or IP costs nothing while another one answers.
+// NewDoHType is NewDoH for a record type: "A" (IPv4) or "AAAA" (IPv6).
+// The last successful endpoint starts first, with bounded hedges to the rest.
+// Healthy HTTPS connections are reused across different destination names.
 func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qtype string) Resolver {
 	clients := make([]*http.Client, len(endpoints))
 	for i, ep := range endpoints {
@@ -168,7 +168,10 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 			DialTLSContext:      dialTLS(ep),
 			ForceAttemptHTTP2:   true,
 			TLSHandshakeTimeout: 6 * time.Second,
-			DisableKeepAlives:   true,
+			MaxIdleConns:        2,
+			MaxIdleConnsPerHost: 2,
+			MaxConnsPerHost:     4,
+			IdleConnTimeout:     30 * time.Second,
 		}
 		clients[i] = &http.Client{Transport: transport, Timeout: 8 * time.Second}
 	}
@@ -203,8 +206,15 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 		if resp.StatusCode != http.StatusOK {
 			return nil, 0, fmt.Errorf("DoH %s: HTTP %d", u.Host, resp.StatusCode)
 		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<16)+1))
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(body) > 1<<16 {
+			return nil, 0, errors.New("DoH response too large")
+		}
 		var ans dohAnswer
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&ans); err != nil {
+		if err := json.Unmarshal(body, &ans); err != nil {
 			return nil, 0, err
 		}
 		var out []string
@@ -223,6 +233,8 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 		}
 		return out, time.Duration(ttl) * time.Second, nil
 	}
+	var endpointMu sync.Mutex
+	preferred := 0
 	lookup := func(ctx context.Context, host string) ([]string, time.Duration, error) {
 		if len(endpoints) == 0 {
 			return nil, 0, errors.New("no DoH endpoint configured")
@@ -230,25 +242,55 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 		rctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		type res struct {
-			ips []string
-			ttl time.Duration
-			err error
+			index int
+			ips   []string
+			ttl   time.Duration
+			err   error
 		}
 		ch := make(chan res, len(endpoints))
+		endpointMu.Lock()
+		first := preferred
+		endpointMu.Unlock()
+		order := []int{first}
 		for i := range endpoints {
-			go func(i int) {
-				ips, ttl, err := query(rctx, i, host)
-				ch <- res{ips, ttl, err}
-			}(i)
+			if i != first {
+				order = append(order, i)
+			}
 		}
+		next, pending := 0, 0
+		launch := func(n int) {
+			for ; n != 0 && next < len(order); n-- {
+				i := order[next]
+				next++
+				pending++
+				go func() {
+					ips, ttl, err := query(rctx, i, host)
+					ch <- res{i, ips, ttl, err}
+				}()
+			}
+		}
+		launch(1)
+		hedge := time.NewTimer(150 * time.Millisecond)
+		defer hedge.Stop()
+		expand := time.NewTimer(400 * time.Millisecond)
+		defer expand.Stop()
 		var last error
-		for range endpoints {
+		for pending > 0 {
 			select {
+			case <-hedge.C:
+				launch(2)
+			case <-expand.C:
+				launch(-1)
 			case r := <-ch:
+				pending--
 				if r.err == nil {
+					endpointMu.Lock()
+					preferred = r.index
+					endpointMu.Unlock()
 					return r.ips, r.ttl, nil
 				}
 				last = r.err
+				launch(1) // an immediate failure never waits for the next hedge
 			case <-ctx.Done():
 				return nil, 0, ctx.Err()
 			}

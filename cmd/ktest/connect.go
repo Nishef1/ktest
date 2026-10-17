@@ -153,7 +153,7 @@ func runConnect(args []string) int {
 	fs.BoolVar(&o.tun, "tun", false, "route the whole system through ktest (Windows; asks for Administrator)")
 	fs.BoolVar(&o.cert, "cert", false, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", false, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
-	fs.DurationVar(&o.stagger, "stagger", o.stagger, "head start of the first path before all others join")
+	fs.DurationVar(&o.stagger, "stagger", o.stagger, "maximum preferred-path head start before the small fallback wave")
 	fs.DurationVar(&o.firstByte, "first-byte", o.firstByte, "how long a path may take to answer the TLS ClientHello")
 	fs.DurationVar(&o.ready, "ready", o.ready, "how long to wait for each core's local port")
 	fs.BoolVar(&o.verbose, "v", false, "log every path decision and core output")
@@ -218,7 +218,20 @@ type siteEvents struct {
 	tcpOnly     atomic.Int64
 	prepared    atomic.Int64
 	earlyClosed atomic.Int64
+	rejected    atomic.Int64
+	routes      map[string]*routeSelection
+	setupTotal  time.Duration
+	setupMax    time.Duration
+	slow        int
+	dropped     *atomic.Int64
+	fronts      *hostAggregate
 	verbose     bool
+}
+
+type routeSelection struct {
+	name  string
+	count int
+	setup time.Duration
 }
 
 func (s *siteEvents) print(e smartproxy.Event) {
@@ -247,6 +260,23 @@ func (s *siteEvents) print(e smartproxy.Event) {
 		}
 		return
 	}
+	if e.OK || e.TCPOnly {
+		if s.routes == nil {
+			s.routes = make(map[string]*routeSelection)
+		}
+		r := s.routes[e.Path]
+		if r == nil {
+			r = &routeSelection{name: e.Path}
+			s.routes[e.Path] = r
+		}
+		r.count++
+		r.setup += e.Took
+		s.setupTotal += e.Took
+		s.setupMax = max(s.setupMax, e.Took)
+		if e.Took >= time.Second {
+			s.slow++
+		}
+	}
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
 		if isWindscribeCarrier(e.Path) {
@@ -258,11 +288,16 @@ func (s *siteEvents) print(e smartproxy.Event) {
 			t.Note("Control framing only; VPN authentication and data not verified.")
 			return
 		}
+		if s.last[key] == e.Path+"|TCP OPEN" {
+			return
+		}
+		s.last[key] = e.Path + "|TCP OPEN"
 		t.Line(toneInfo, "%s · %s · %s · %s", t.Bold(target), t.Cyan("TCP OPEN"), e.Path, t.Dim(shortDur(e.Took)))
-		t.Note("Proxy TCP accepted; destination reply and VPN handshake not verified.")
+		t.Note("TCP connected; no application response was checked before selection.")
 		return
 	}
 	if e.Rejected {
+		s.rejected.Add(1)
 		if time.Since(s.failedAt[key]) >= 20*time.Second {
 			s.failedAt[key] = time.Now()
 			reason := e.Err
@@ -271,10 +306,12 @@ func (s *siteEvents) print(e smartproxy.Event) {
 			}
 			t.Line(toneWarn, "%s · %s", t.Bold(target), t.Yellow("CERTIFICATE REFUSED"))
 			s.detail(reason)
+			t.Note("Another route will be preferred on the next connection.")
 		}
 		return
 	}
 	if e.OK {
+		slow := e.Took >= time.Second
 		state := "ANSWERED"
 		if e.Prepared {
 			s.prepared.Add(1)
@@ -285,11 +322,16 @@ func (s *siteEvents) print(e smartproxy.Event) {
 		if e.TLSResponse {
 			state = "TLS RESPONSE"
 		}
-		if s.last[key] == e.Path+state {
+		identity := fmt.Sprintf("%s|%s|%t", e.Path, state, slow)
+		if s.last[key] == identity {
 			return
 		}
-		s.last[key] = e.Path + state
-		t.Line(toneOK, "%s · %s · %s · %s", t.Bold(target), t.Green(state), e.Path, t.Dim(shortDur(e.Took)))
+		s.last[key] = identity
+		k := toneOK
+		if slow {
+			k = toneWarn
+		}
+		t.Line(k, "%s · %s · %s · %s", t.Bold(target), t.tinted(k, state), t.tinted(k, shortDur(e.Took)), e.Path)
 		return
 	}
 	s.fail.Add(1)
@@ -577,12 +619,14 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		return 1
 	}
 	events := make(chan smartproxy.Event, 256)
+	var dropped atomic.Int64
 	cfg := smartproxy.Config{
 		Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte,
 		OnEvent: func(e smartproxy.Event) {
 			select {
 			case events <- e:
 			default:
+				dropped.Add(1)
 			}
 		},
 	}
@@ -620,11 +664,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// Domain fronting is a takeover path: it needs the application to trust the
 	// ktest CA, so it is only added when the system says it does.
 	var fronter *front.Fronter
+	frontHistory := &hostAggregate{rows: map[string]*hostRow{}}
 	frontNote := ""
 	if !o.mode.exitOnly() && o.mode != ModeWindscribe {
 		// A CDN front can act as an egress/HTTP takeover; its public-IP
 		// semantics are not guaranteed. Local-only means no CDN relay.
-		fronter, frontNote = newFronter(o, cfg.Resolve, t, logDNS)
+		fronter, frontNote = newFronter(o, cfg.Resolve, t, logDNS, frontHistory)
 	}
 	if fronter != nil {
 		cfg.Upstreams = append(cfg.Upstreams, fronter.Upstream())
@@ -759,6 +804,29 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 	}
 
+	// Verify requested coverage before announcing READY.
+	coverage := "Proxy · configure SOCKS5/HTTP in each application"
+	if o.mode == ModeWindscribe {
+		coverage = "Windscribe bridge · Windscribe controls system coverage"
+	}
+	if o.tun {
+		coverage = "TUN inactive · proxy available only"
+		if verdict != toneFail {
+			tn := startTunnel(ctx, o.base, lport, o.verbose, t)
+			defer tn.stop(t)
+			if ctx.Err() != nil {
+				return 0
+			}
+			if tn != nil {
+				coverage = "TUN active · system TCP verified; LAN/helpers exempt, most UDP rejected"
+			} else {
+				verdict = toneWarn
+			}
+		} else {
+			t.Line(toneWarn, "The proxy did not verify, so TUN was not started.")
+		}
+	}
+
 	// 5. The result.
 	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
 	if o.mode == ModeWindscribe {
@@ -767,7 +835,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}
 	}
-	pathsDesc := fmt.Sprintf("%d configured routes · per-site selection", len(proxy.Stats()))
+	pathsDesc := fmt.Sprintf("%d configured routes · adaptive selection per hostname and port", len(proxy.Stats()))
 	if o.mode.exitOnly() {
 		pathsDesc = "Verified foreign exits only; direct fallback blocked"
 	}
@@ -777,33 +845,42 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			pathsDesc = o.ws.describe() + " + " + pathsDesc
 		}
 	}
-	lines := []string{
-		t.Bold("Proxy   ") + "  socks5://" + l.Addr().String() + t.Dim("   (turn on \"proxy DNS\" / remote DNS in the app)"),
-		t.Bold("Paths   ") + "  " + pathsDesc,
+	var lines []string
+	field := func(label, value string) {
+		for i, line := range wrapText(value, max(t.width()-15, 1)) {
+			prefix := strings.Repeat(" ", 10)
+			if i == 0 {
+				prefix = t.Bold(fmt.Sprintf("%-8s", label)) + "  "
+			}
+			lines = append(lines, prefix+line)
+		}
 	}
+	field("Coverage", coverage)
+	field("SOCKS", "socks5://"+l.Addr().String()+t.Dim(" · remote DNS in the app"))
+	field("Paths", pathsDesc)
 	if httpAddr != "" {
-		lines = append(lines, t.Bold("HTTP    ")+"  http://"+httpAddr+t.Dim("   (Windscribe Proxy Settings; TCP only)"))
+		field("HTTP", "http://"+httpAddr+t.Dim(" · CONNECT, TCP only"))
 		if o.mode == ModeWindscribe {
-			lines = append(lines, t.Bold("VPN     ")+"  "+t.Yellow("Windscribe on OpenVPN TCP 443; only Windscribe can confirm the VPN connected"))
+			field("VPN", t.Yellow("Windscribe on OpenVPN TCP 443; only Windscribe can confirm the VPN connected"))
 		}
 	}
 	if frontNote != "" {
-		lines = append(lines, t.Bold("Front   ")+"  "+t.Dim(frontNote))
+		field("Front", t.Dim(frontNote))
 	}
 	if currentExitStatus != nil {
 		warpNote = currentExitStatus()
 	}
-	lines = append(lines, t.Bold("Exit    ")+"  "+t.Dim(warpNote))
-	lines = append(lines, t.Bold("Mode    ")+"  "+t.Dim(o.mode.message()))
+	field("Exit", t.Dim(warpNote))
+	field("Policy", string(o.mode))
 	switch {
 	case o.mode == ModeWindscribe:
-		lines = append(lines, t.Bold("Result  ")+"  "+t.Dim("ktest watches windscribe-cli status; Windscribe owns the public IP"))
+		field("Result", t.Dim("ktest watches windscribe-cli status; Windscribe owns the public IP"))
 	case bypassed > 0:
-		lines = append(lines, t.Bold("Result  ")+"  "+t.Green(fmt.Sprintf("%d site(s) blocked on this network are open through ktest", bypassed)))
+		field("Result", t.Green(fmt.Sprintf("%d blocked test %s opened through ktest", bypassed, plural(bypassed, "site", "sites"))))
 	case passed == len(proxied) && passed > 0:
-		lines = append(lines, t.Bold("Result  ")+"  "+"everything tested is also open directly; if another VPN is on, turn it off to see a bypass")
+		field("Result", "Tested sites also open directly; a bypass is not established by these checks")
 	case passed == 0:
-		lines = append(lines, t.Bold("Result  ")+"  "+t.Red("no tested site was reachable; run `ktest doctor` to see why"))
+		field("Result", t.Red("No tested site was reachable; run `ktest doctor` to see why"))
 	}
 	if o.mode != ModeWindscribe && verdict != toneOK && fronter == nil && !o.noFront && ctx.Err() == nil {
 		// The paths that need no certificate did not reach everything. If fronting
@@ -817,10 +894,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 		fcancel()
 		if len(reach) > 0 {
-			lines = append(lines, t.Bold("Next    ")+"  "+t.Yellow("domain fronting reaches "+strings.Join(reach, ", ")+" here: run `ktest ca -install`, then Connect again"))
+			field("Next", t.Yellow("domain fronting reaches "+strings.Join(reach, ", ")+" here: run `ktest ca -install`, then Connect again"))
 		}
 	}
-	lines = append(lines, t.Bold("Stop    ")+"  "+o.stopHint)
+	field("Stop", o.stopHint)
 	t.Println("")
 	t.Box(title, verdict, lines)
 	t.Println("")
@@ -831,28 +908,19 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		t.Println("  " + t.Dim("Live connections (a site is listed when its winning path is known or changes)"))
 	}
 
-	// 5b. The system-wide tunnel, once the proxy has proven itself.
-	if o.tun && verdict != toneFail {
-		t.Println("")
-		tn := startTunnel(ctx, o.base, lport, o.verbose, t)
-		defer tn.stop(t)
-		if tn != nil {
-			t.Line(toneOK, "System-wide: every application on this PC now goes through ktest %s", t.Dim("(TCP; UDP is dropped so applications fall back to TCP)"))
-		}
-		t.Println("")
-	} else if o.tun {
-		t.Line(toneWarn, "The proxy did not verify, so the system-wide tunnel was not started.")
-	}
-
 	// 6. Live feed until the user disconnects.
 	for len(events) > 0 { // self-test traffic is already reported above
 		<-events
 	}
-	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose}
+	dropped.Store(0)
+	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory}
 	for {
 		select {
 		case <-ctx.Done():
-			summarize(t, proxy, feed, fronter)
+			for len(events) > 0 {
+				feed.print(<-events)
+			}
+			summarize(t, feed, fronter)
 			return 0
 		case e := <-events:
 			feed.print(e)
@@ -869,7 +937,7 @@ func trimDetail(s string) string {
 }
 
 // summarize prints what happened during the session.
-func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *front.Fronter) {
+func summarize(t *term, feed *siteEvents, fronter *front.Fronter) {
 	t.Println("")
 	t.Println("  " + t.Bold("Session summary"))
 	ok, fail := feed.ok.Load(), feed.fail.Load()
@@ -879,42 +947,50 @@ func summarize(t *term, proxy *smartproxy.Proxy, feed *siteEvents, fronter *fron
 	if n := feed.prepared.Load(); n > 0 {
 		t.Note("%d fronting routes prepared; application acceptance checked separately", n)
 	}
+	if n := feed.rejected.Load(); n > 0 {
+		t.Line(toneWarn, "%d application %s; another route preferred on retry", n, plural(int(n), "refusal", "refusals"))
+	}
 	if n := feed.earlyClosed.Load(); n > 0 {
 		t.Note("%d connections closed before post-hello response data", n)
 	}
-	if total := ok + fail; total > 0 {
-		pct := float64(ok) / float64(total)
-		k := toneOK
-		if pct < 0.9 {
-			k = toneWarn
-		}
-		if pct < 0.5 {
-			k = toneFail
-		}
-		t.Note("%s %3d%%  %d of %d connections returned an initial response", t.Bar(pct, 12, k), int(pct*100+0.5), ok, total)
+	if ok+fail > 0 {
+		t.Note("Initial responses: %d · no working route: %d", ok, fail)
 	} else if feed.tcpOnly.Load() == 0 && feed.prepared.Load() == 0 {
 		t.Note("No connections were made through the proxy")
 	}
-	stats := proxy.Stats()
-	maxWins := 0
-	for _, s := range stats {
-		maxWins = max(maxWins, s.Wins)
+	var routes []*routeSelection
+	selected := 0
+	for _, r := range feed.routes {
+		routes = append(routes, r)
+		selected += r.count
 	}
-	shown := 0
-	for _, s := range stats {
-		if s.Wins == 0 || shown == 8 {
-			continue
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i].count == routes[j].count {
+			return routes[i].name < routes[j].name
 		}
-		shown++
-		t.Note("%s %s · %d %s · %dms avg", t.Bar(float64(s.Wins)/float64(maxWins), 8, toneInfo), s.Name, s.Wins, plural(s.Wins, "win", "wins"), s.AvgMS)
+		return routes[i].count > routes[j].count
+	})
+	if selected > 0 {
+		t.Note("Route setup: %s average · %s longest · %d slow (1s+) connections", shortDur(feed.setupTotal/time.Duration(selected)), shortDur(feed.setupMax), feed.slow)
+	}
+	for i, r := range routes {
+		if i == 8 {
+			break
+		}
+		t.Note("%s · %d selected · %s average setup", r.name, r.count, shortDur(r.setup/time.Duration(r.count)))
+	}
+	if feed.dropped != nil && feed.dropped.Load() > 0 {
+		t.Line(toneWarn, "%d live events omitted under load; displayed counts are partial", feed.dropped.Load())
 	}
 	if fronter != nil {
-		for _, l := range frontHosts.problems() {
-			t.Note("%s", l)
+		if feed.fronts != nil {
+			for _, l := range feed.fronts.problems() {
+				t.Note("%s", l)
+			}
 		}
 		acc, ref := fronter.Stats()
 		if acc+ref > 0 || fronter.Disabled() != "" {
-			t.Note("domain fronting: %d accepted, %d refused by applications", acc, ref)
+			t.Note("fronting TLS (including startup checks): %d accepted, %d refused by applications", acc, ref)
 		}
 		if learned := fronter.Learned(); len(learned) > 0 {
 			t.Note("fronts that worked here: %s", strings.Join(learned, "; "))
@@ -978,7 +1054,7 @@ func plural(n int, one, many string) string {
 
 // newFronter builds the domain-fronting path when it is wanted and usable, and
 // returns a one-line explanation of its state for the result box.
-func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf func(string, ...any)) (*front.Fronter, string) {
+func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf func(string, ...any), history *hostAggregate) (*front.Fronter, string) {
 	if o.noFront {
 		return nil, "off (-no-front)"
 	}
@@ -1001,7 +1077,7 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 		CA: ca, Families: fams, Resolve: resolve, Logf: logf,
 		OnTrouble: func(msg string) { t.Line(toneWarn, "%s", msg) },
 		OnSession: func(si front.SessionInfo) {
-			if frontHosts.add(si) {
+			if history != nil && history.add(si) {
 				t.Line(toneWarn, "%-26s %s", si.Host, t.Yellow("fronted connection received nothing back")+t.Dim("  via "+si.Front))
 			}
 		},

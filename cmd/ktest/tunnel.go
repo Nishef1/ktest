@@ -62,13 +62,19 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 			logs.Write([]byte(err.Error() + "\n"))
 		}
 	}()
-	select {
-	case <-tn.done:
-		step.Finish(toneFail, trimDetail(logs.lastLine()))
-		tn.stop(t)
-		return nil
-	case <-time.After(5 * time.Second):
-	case <-ctx.Done():
+	rctx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
+	err = waitTunnelReady(rctx, tn.done, func() bool {
+		nic, err := net.InterfaceByName("ktest-tun")
+		return err == nil && nic.Flags&net.FlagUp != 0
+	})
+	readyCancel()
+	if err != nil {
+		if ctx.Err() == nil {
+			step.Finish(toneFail, "TUN adapter unavailable: "+err.Error())
+			if detail := logs.lastLine(); detail != "" {
+				t.Note("%s", trimDetail(detail))
+			}
+		}
 		tn.stop(t)
 		return nil
 	}
@@ -79,6 +85,13 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 	vctx, vcancel := context.WithTimeout(ctx, 25*time.Second)
 	results := systemRouteProbe(vctx)
 	vcancel()
+	select {
+	case <-tn.done:
+		step.Finish(toneFail, "TUN process ended during verification")
+		tn.stop(t)
+		return nil
+	default:
+	}
 	pass := 0
 	for _, r := range results {
 		if r.ok {
@@ -107,6 +120,32 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 		t.Note("%s: %s", r.url, r.detail)
 	}
 	return tn
+}
+
+// Observe readiness rather than imposing five seconds on every startup.
+// Successful adapter creation is followed by the real system-route probe.
+func waitTunnelReady(ctx context.Context, done <-chan struct{}, ready func() bool) error {
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			return fmt.Errorf("tunnel process ended")
+		default:
+		}
+		if ready() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			return fmt.Errorf("tunnel process ended")
+		case <-tick.C:
+		}
+	}
 }
 
 // stop ends the tunnel, waits for Windows to get its routes back and restores
@@ -167,20 +206,49 @@ func systemRouteProbe(ctx context.Context) []routeResult {
 			defer wg.Done()
 			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
-			b, err := exec.CommandContext(cctx, curl, "-s", "-o", "NUL", "-m", "15", "--ssl-no-revoke", "-w", "%{http_code}", u).CombinedOutput()
-			code := strings.TrimSpace(string(b))
-			r := routeResult{url: u}
-			switch {
-			case err == nil && (code == "204" || code == "200"):
-				r.ok, r.detail = true, "HTTP "+code
-			case err != nil:
-				r.detail = "failed (" + err.Error() + ") " + code
-			default:
-				r.detail = "HTTP " + code
+			for attempt := 0; attempt < 2; attempt++ {
+				b, err := exec.CommandContext(cctx, curl, "--noproxy", "*", "-s", "-o", "NUL", "-m", "9", "--ssl-no-revoke", "-w", "%{http_code}|%{local_ip}", u).CombinedOutput()
+				r := parseSystemRouteResult(u, string(b), err)
+				out[i] = r
+				if r.ok || cctx.Err() != nil {
+					return
+				}
+				if attempt == 0 {
+					select {
+					case <-cctx.Done():
+						return
+					case <-time.After(250 * time.Millisecond):
+					}
+				}
 			}
-			out[i] = r
 		}()
 	}
 	wg.Wait()
 	return out
+}
+
+// A public site answering on the physical NIC must not count as TUN proof.
+// curl reports the source address selected by Windows, which must be one of
+// the adapter's configured subnets. Ignore environment HTTP proxies above.
+func parseSystemRouteResult(url, output string, err error) routeResult {
+	r := routeResult{url: url}
+	if err != nil {
+		r.detail = "failed (" + err.Error() + ") " + strings.TrimSpace(output)
+		return r
+	}
+	parts := strings.Split(strings.TrimSpace(output), "|")
+	if len(parts) != 2 {
+		r.detail = "unrecognized route probe: " + strings.TrimSpace(output)
+		return r
+	}
+	ip := net.ParseIP(parts[1])
+	_, v4, _ := net.ParseCIDR("172.19.0.0/30")
+	_, v6, _ := net.ParseCIDR("fdfe:dcba:9876::/126")
+	tunneled := ip != nil && (v4.Contains(ip) || v6.Contains(ip))
+	r.ok = (parts[0] == "204" || parts[0] == "200") && tunneled
+	r.detail = "HTTP " + parts[0] + " · source " + parts[1]
+	if !tunneled {
+		r.detail += " (TUN route not confirmed)"
+	}
+	return r
 }

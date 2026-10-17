@@ -12,11 +12,11 @@ func TestFronterStaysOffWithoutATrustedCA(t *testing.T) {
 	t.Setenv("KTEST_CA_DIR", t.TempDir())
 	u := plainTerm(&bytes.Buffer{})
 
-	f, note := newFronter(connectOptions{noFront: true}, nil, u, nil)
+	f, note := newFronter(connectOptions{noFront: true}, nil, u, nil, nil)
 	if f != nil || !strings.Contains(note, "-no-front") {
 		t.Fatalf("noFront: %v %q", f, note)
 	}
-	f, note = newFronter(connectOptions{}, nil, u, nil)
+	f, note = newFronter(connectOptions{}, nil, u, nil, nil)
 	if f != nil || !strings.Contains(note, "ktest ca -install") {
 		t.Fatalf("no CA: %v %q", f, note)
 	}
@@ -41,11 +41,11 @@ func TestCAStatusDescribesTheNextStep(t *testing.T) {
 	if !strings.Contains(out.String(), "Not trusted") || !strings.Contains(out.String(), "44 domains") && !strings.Contains(out.String(), "domains") {
 		t.Fatalf("status:\n%s", out.String())
 	}
-	f, note := newFronter(connectOptions{}, nil, plainTerm(&out), nil)
+	f, note := newFronter(connectOptions{}, nil, plainTerm(&out), nil, nil)
 	if f != nil || !strings.Contains(note, "does not trust") {
 		t.Fatalf("untrusted CA must keep fronting off: %v %q", f, note)
 	}
-	f, _ = newFronter(connectOptions{forceFront: true}, nil, plainTerm(&out), nil)
+	f, _ = newFronter(connectOptions{forceFront: true}, nil, plainTerm(&out), nil, nil)
 	if f == nil {
 		t.Fatal("-front must force it on")
 	}

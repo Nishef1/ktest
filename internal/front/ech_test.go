@@ -89,3 +89,12 @@ func TestClientAbortIsNotARefusal(t *testing.T) {
 		}
 	}
 }
+
+func TestAcceptedSessionDoesNotEraseRefusalTotals(t *testing.T) {
+	f := New(Config{})
+	f.refusedOne()
+	f.acceptedOne()
+	if a, r := f.Stats(); a != 1 || r != 1 {
+		t.Fatalf("accepted=%d refused=%d", a, r)
+	}
+}

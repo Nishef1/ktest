@@ -141,10 +141,6 @@ func printECHDoH(ctx context.Context, u *term) {
 	u.Line(toneOK, "%-26s www.youtube.com -> %s  %s", "Encrypted DNS over ECH", ips[0], shortDur(time.Since(began)))
 }
 
-// frontHosts collects, per host, how fronted connections ended, so that a front
-// that connects and verifies but serves nothing shows up by name.
-var frontHosts = &hostAggregate{rows: map[string]*hostRow{}}
-
 type hostRow struct {
 	conns, silent int
 	up, down      int64

@@ -311,6 +311,25 @@ func TestNonTLSTrafficUsesBestPathWithoutRacing(t *testing.T) {
 	}
 }
 
+func TestNonTLSSelectionIsReportedAsTCPOnly(t *testing.T) {
+	var hits atomic.Int32
+	events := make(chan Event, 4)
+	p, _ := New(Config{Upstreams: []Upstream{{Name: "raw exit", Exit: true, Addr: fakeSocks(t, destination(t), true, &hits)}}, OnEvent: func(e Event) { events <- e }})
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Serve(ctx, l)
+	_ = viaProxy(t, l.Addr().String(), "raw.example", "443", []byte("hello"))
+	select {
+	case e := <-events:
+		if !e.TCPOnly || e.OK || e.Path != "raw exit" {
+			t.Fatalf("unexpected raw outcome: %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("raw selection missing from live/session counts")
+	}
+}
+
 func TestUpstreamValidationAndTLSDetection(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("empty upstream list accepted")

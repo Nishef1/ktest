@@ -195,6 +195,26 @@ func (p *Proxy) rememberedName(host, port string) string {
 	return p.preferredLocked(host, port)
 }
 
+// An application refusal is definitive for this connection. Prefer another
+// route on its next attempt; never replay bytes after takeover has begun.
+func (p *Proxy) rejectTakeover(host, port, path string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m := p.historyLocked(host, port)
+	s := m.score(path)
+	s.fails++
+	s.coolUntil = time.Now().Add(time.Minute)
+	if m.winner == path {
+		m.winner = ""
+	}
+	for _, u := range p.ups {
+		if u.Name == path {
+			u.fails++
+			break
+		}
+	}
+}
+
 func (p *Proxy) hasMemory(host, port string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -202,18 +222,18 @@ func (p *Proxy) hasMemory(host, port string) bool {
 	return m != nil && m.winner != ""
 }
 
-// Timing is learned for this exact destination; an unrelated slow site must
-// not give a blocked route an excessive head start here.
+// The configured stagger is a hedge budget, not a reward for a slow winner.
+// Fast learned routes get a shorter head start; slow ones never delay the
+// alternatives beyond the configured budget.
 func (p *Proxy) firstWave(first *upstreamState, host, port string) time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	wave := p.cfg.Stagger
 	if m := p.memoryLocked(host, port); m != nil {
 		if s := m.routes[first.Name]; s != nil {
-			wave = max(wave, time.Duration(1.5*s.ewmaMS*float64(time.Millisecond)))
-		}
-		if m.winner == first.Name {
-			wave = max(wave, 4*p.cfg.Stagger)
+			if s.ewmaMS > 0 {
+				wave = min(wave, max(50*time.Millisecond, time.Duration(1.5*s.ewmaMS*float64(time.Millisecond))))
+			}
 		}
 	}
 	return min(wave, 1500*time.Millisecond)

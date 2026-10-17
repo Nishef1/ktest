@@ -103,3 +103,30 @@ func TestSystemConfigRefusesToLoop(t *testing.T) {
 		t.Fatal("bad port accepted")
 	}
 }
+
+func TestUDPRejectionSignalsFailureWithoutWaitingForTimeouts(t *testing.T) {
+	a, _ := BuildConfig(10808, "Ethernet")
+	b, _ := BuildSystemConfig(Options{SocksPort: 10800, PhysicalNIC: "Ethernet", DirectProcesses: []string{"ktest.exe"}})
+	for _, buf := range [][]byte{a, b} {
+		var root struct {
+			Route struct {
+				Rules []map[string]any `json:"rules"`
+			} `json:"route"`
+		}
+		if err := json.Unmarshal(buf, &root); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, r := range root.Route.Rules {
+			if r["network"] == "udp" {
+				found = true
+				if r["action"] != "reject" || r["method"] != "default" || r["no_drop"] != true {
+					t.Fatalf("UDP must stay blocked with immediate ICMP feedback: %s", buf)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("UDP restriction missing")
+		}
+	}
+}

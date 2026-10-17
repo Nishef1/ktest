@@ -40,7 +40,7 @@ func BuildConfig(socksPort int, physicalNIC string) ([]byte, error) {
 				map[string]any{"ip_cidr": []string{"172.19.0.0/30", "fdfe:dcba:9876::/126"}, "action": "reject", "method": "drop"},
 				map[string]any{"process_name": []string{"xray.exe", "ciadpi.exe"}, "action": "route", "outbound": "physical"},
 				map[string]any{"ip_is_private": true, "action": "route", "outbound": "physical"},
-				map[string]any{"network": "udp", "action": "reject", "method": "drop"},
+				map[string]any{"network": "udp", "action": "reject", "method": "default", "no_drop": true},
 			},
 			"final": "socks",
 		},
@@ -72,7 +72,8 @@ var DefaultBlockPage = []string{"10.10.34.0/24"}
 // tunnel. Names are answered with fake addresses from a private pool and mapped
 // back when the connection arrives, so the proxy always receives the real host
 // name and the (poisoned or filtered) DNS is never consulted by applications.
-// TCP only: UDP other than DNS is dropped so that applications fall back to TCP.
+// TCP only: UDP other than DNS is rejected with ICMP port unreachable so that
+// applications can fall back to TCP without waiting for a silent timeout.
 func BuildSystemConfig(o Options) ([]byte, error) {
 	if o.SocksPort < 1 || o.SocksPort > 65535 {
 		return nil, errors.New("invalid local SOCKS port")
@@ -99,7 +100,7 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 	}
 	rules = append(rules,
 		map[string]any{"ip_is_private": true, "action": "route", "outbound": "physical"},
-		map[string]any{"network": "udp", "action": "reject", "method": "drop"},
+		map[string]any{"network": "udp", "action": "reject", "method": "default", "no_drop": true},
 	)
 	root := map[string]any{
 		"log": map[string]any{"level": "warn"},
