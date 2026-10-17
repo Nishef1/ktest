@@ -257,6 +257,7 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 	rounds := fs.Int("rounds", 2, "repetitions per fixed entry and SNI, 1..3")
 	timeout := fs.Duration("timeout", 4*time.Second, "per-attempt timeout, 1s..8s; whole comparison bounded to 60s")
 	verify := fs.Bool("verify-vpn", false, "read-only CLI + system HTTPS exit-IP check; does not reconnect")
+	expectedVPNIP := fs.String("expected-vpn-ip", "", "public VPN IP displayed in Windscribe app, for verifying system HTTPS egress")
 	cliOverride := fs.String("windscribe-cli", "", "absolute Windscribe CLI path")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -276,7 +277,7 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 		u.Line(toneFail, "-entry requires a public IPv4 address")
 		return 2
 	}
-	if (*entry != "" && strings.TrimSpace(*target) != "") || (*verify && (*entry != "" || strings.TrimSpace(*target) != "")) {
+	if (!*verify && *expectedVPNIP != "") || (*entry != "" && strings.TrimSpace(*target) != "") || (*verify && (*entry != "" || strings.TrimSpace(*target) != "")) {
 		u.Line(toneFail, "Choose one: -target, -entry, or -verify-vpn")
 		return 2
 	}
@@ -292,7 +293,7 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 		return 2
 	}
 	if *verify {
-		return verifyWindscribeVPN(ctx, cli, u)
+		return verifyWindscribeVPN(ctx, cli, u, *expectedVPNIP)
 	}
 	status := readWSStatus(ctx, cli)
 	u.Heading("Windscribe SNI test", "Fixed entries; direct TCP; no credentials, reconnects, route or certificate changes.")
