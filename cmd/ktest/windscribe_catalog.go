@@ -53,10 +53,17 @@ type wsNodeCatalog struct {
 	mu    sync.RWMutex
 	lists map[string]wsCatalogList
 	ready chan struct{}
+	readyOnce sync.Once
 }
 
 func newWSNodeCatalog() *wsNodeCatalog {
 	return &wsNodeCatalog{lists: make(map[string]wsCatalogList), ready: make(chan struct{})}
+}
+
+// A cached or newly fetched *valid* source unblocks OpenVPN carrier discovery.
+// Do not wait for a second, inaccessible source to time out before using it.
+func (c *wsNodeCatalog) signalReady() {
+	c.readyOnce.Do(func() { close(c.ready) })
 }
 
 func publicWSIP(s string) bool {
@@ -87,8 +94,13 @@ func parseWSNodes(body []byte) (map[string]wsNode, error) {
 			if node.ForceDisconnect == 1 {
 				continue
 			}
-			if !publicWSIP(node.TCP) || !publicWSIP(node.IP) || !publicWSIP(node.IP3) || !validHostname(node.Hostname) {
-				return errors.New("Windscribe node list contains an invalid address or hostname")
+			// The official wsnet InventoryParser permits null ip3. Such a
+			// node is still valid for raw OpenVPN; it simply has no Stealth
+			// endpoint. Skip isolated malformed nodes instead of discarding
+			// every valid node in a provider snapshot.
+			if !publicWSIP(node.TCP) || !publicWSIP(node.IP) ||
+				(node.IP3 != "" && !publicWSIP(node.IP3)) || !validHostname(node.Hostname) {
+				continue
 			}
 			if prev, ok := nodes[node.TCP]; ok && prev != node {
 				return fmt.Errorf("ambiguous Windscribe TCP node %s", node.TCP)
@@ -123,6 +135,7 @@ func (c *wsNodeCatalog) replace(source string, body []byte, fetched time.Time) e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lists[source] = wsCatalogList{Fetched: fetched, Body: append(json.RawMessage(nil), body...), nodes: nodes}
+	c.signalReady()
 	return nil
 }
 
@@ -154,7 +167,7 @@ func (c *wsNodeCatalog) endpoints(tcp string) []wsEndpoint {
 		}
 		hostname = node.Hostname
 		for _, alt := range []struct{ ip, field string }{{node.IP, "ip"}, {node.IP3, "ip3"}} {
-			if !seen[alt.ip] {
+			if alt.ip != "" && !seen[alt.ip] {
 				seen[alt.ip] = true
 				result = append(result, wsEndpoint{alt.ip, source.name + "/" + alt.field})
 			}
@@ -188,7 +201,7 @@ func (c *wsNodeCatalog) endpointsByField(tcp, field string) []wsEndpoint {
 			return nil
 		}
 		hostname = node.Hostname
-		if !seen[node.IP3] {
+		if node.IP3 != "" && !seen[node.IP3] {
 			seen[node.IP3] = true
 			result = append(result, wsEndpoint{node.IP3, source.name + "/ip3"})
 		}
@@ -322,7 +335,7 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 
 func (c *wsNodeCatalog) run(ctx context.Context, client *http.Client, path string, logf func(string, ...any)) {
 	refreshed := c.refresh(ctx, client, path, logf)
-	close(c.ready)
+	c.signalReady() // no source succeeded: unblock with explicit missing mapping
 	for {
 		delay := 30 * time.Minute
 		if !refreshed {
