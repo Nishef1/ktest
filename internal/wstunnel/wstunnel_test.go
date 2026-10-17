@@ -410,3 +410,38 @@ func TestReceivedWebSocketCloseDoesNotBlockReadingPeer(t *testing.T) {
 		t.Fatal("incoming close frame blocked waiting for peer to read a reply")
 	}
 }
+
+// Short successful writes are legal for io.Writer and must not truncate the
+// upgrade request before the first OpenVPN record is tunneled.
+type partialUpgradeWriter struct {
+	out bytes.Buffer
+	chunk int
+}
+func (w *partialUpgradeWriter) Write(b []byte) (int, error) {
+	if len(b) > w.chunk {
+		b = b[:w.chunk]
+	}
+	return w.out.Write(b)
+}
+func TestWebSocketUpgradeHandlesShortWrites(t *testing.T) {
+	w := &partialUpgradeWriter{chunk: 3}
+	request := "GET /tcp/127.0.0.1/1194 HTTP/1.1\r\nConnection: Upgrade\r\n\r\n"
+	if err := writeUpgradeRequest(w, request); err != nil || w.out.String() != request {
+		t.Fatalf("HTTP upgrade truncated on short Write: %q, %v", w.out.String(), err)
+	}
+}
+func TestWebSocketUpgradeRequiresConnectionHeaderToken(t *testing.T) {
+	for _, tc := range []struct{
+		values []string
+		want bool
+	}{
+		{[]string{"keep-alive, Upgrade"}, true},
+		{[]string{"upgrade"}, true},
+		{[]string{"keep-alive"}, false},
+		{nil, false},
+	} {
+		if got := headerContainsToken(tc.values, "Upgrade"); got != tc.want {
+			t.Fatalf("Connection %v accepted=%t, want %t", tc.values, got, tc.want)
+		}
+	}
+}

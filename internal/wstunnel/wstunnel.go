@@ -227,7 +227,7 @@ func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Co
 	}
 	key := base64.StdEncoding.EncodeToString(keyBytes)
 	req := "GET " + path + " HTTP/1.1\r\nHost: " + c.Host + "\r\nUser-Agent: Go-http-client/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
-	if _, err := io.WriteString(u, req); err != nil {
+	if err := writeUpgradeRequest(u, req); err != nil {
 		return nil, nil, stageError("websocket", err)
 	}
 	br := bufio.NewReaderSize(u, 32<<10)
@@ -238,10 +238,41 @@ func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Co
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		return nil, nil, stageError("websocket", fmt.Errorf("upgrade refused: HTTP %d", resp.StatusCode))
 	}
-	if !strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") || resp.Header.Get("Sec-WebSocket-Accept") != acceptKey(key) {
+	if !strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") ||
+		!headerContainsToken(resp.Header.Values("Connection"), "Upgrade") ||
+		resp.Header.Get("Sec-WebSocket-Accept") != acceptKey(key) {
 		return nil, nil, stageError("websocket", errors.New("upgrade: not a WebSocket server"))
 	}
 	return u, br, nil
+}
+
+// writeUpgradeRequest preserves all HTTP upgrade bytes even when the
+// underlying connection completes only part of a Write without an error.
+func writeUpgradeRequest(w io.Writer, request string) error {
+	for len(request) > 0 {
+		n, err := io.WriteString(w, request)
+		if n > 0 {
+			request = request[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrNoProgress
+		}
+	}
+	return nil
+}
+
+func headerContainsToken(lines []string, wanted string) bool {
+	for _, line := range lines {
+		for _, part := range strings.Split(line, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), wanted) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // onlyHTTP11 offers exactly http/1.1: a WebSocket upgrade cannot use h2.
