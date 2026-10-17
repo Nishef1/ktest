@@ -1,5 +1,9 @@
 package com.nishef.ktest
 
+import android.app.Activity
+import android.net.VpnService
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -107,6 +111,7 @@ private fun ConnectionApp() {
     var modeId by rememberSaveable { mutableStateOf(prefs.getString("mode", "balanced") ?: "balanced") }
     var upstream by remember { mutableStateOf(prefs.getString("upstream_$modeId", "") ?: "") }
     var status by remember { mutableStateOf(JSONObject(Mobilebridge.proxyStatus())) }
+    var vpnCapability by remember { mutableStateOf(JSONObject(Mobilebridge.vpnCapability())) }
     var connecting by remember { mutableStateOf(false) }
     var checkingRoute by remember { mutableStateOf(false) }
     var routeReport by remember { mutableStateOf<JSONObject?>(null) }
@@ -126,9 +131,28 @@ private fun ConnectionApp() {
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
     val scope = rememberCoroutineScope()
     val running = status.optBoolean("running")
+    val startVpn: () -> Unit = {
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(
+                context, Intent(context, KTestVpnService::class.java).apply {
+                    action = KTestVpnService.ACTION_START
+                }
+            )
+        } catch (e: Exception) {
+            error = e.message ?: "Unable to start the Android VPN adapter"
+        }
+    }
+    val vpnConsent = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) startVpn()
+        else error = "Android VPN permission was not granted"
+    }
     LaunchedEffect(Unit) {
         while (isActive) {
             status = runCatching { JSONObject(Mobilebridge.proxyStatus()) }
+                .getOrElse { JSONObject() }
+            vpnCapability = runCatching { JSONObject(Mobilebridge.vpnCapability()) }
                 .getOrElse { JSONObject() }
             if (status.optBoolean("running") || ProxyService.lastError != null) connecting = false
             if (ProxyService.lastError != null) error = ProxyService.lastError
@@ -272,6 +296,18 @@ private fun ConnectionApp() {
                 )
                 else -> SettingsScreen(
                     checking = checkingUpdates, update = update,
+                    vpn = vpnCapability, vpnServiceState = KTestVpnService.state,
+                    vpnError = KTestVpnService.lastError,
+                    onVpnAction = {
+                        if (KTestVpnService.state == "tun_running_unverified") {
+                            context.startService(Intent(context, KTestVpnService::class.java).apply {
+                                action = KTestVpnService.ACTION_STOP
+                            })
+                        } else if (vpnCapability.optBoolean("available")) {
+                            val consent = VpnService.prepare(context)
+                            if (consent == null) startVpn() else vpnConsent.launch(consent)
+                        }
+                    },
                     check = {
                         checkingUpdates = true
                         scope.launch {
@@ -667,7 +703,9 @@ private fun ToolsScreen(
 @Composable
 private fun SettingsScreen(
     checking: Boolean, update: UpdateInfo?, check: () -> Unit,
-    openDownload: (String) -> Unit
+    openDownload: (String) -> Unit,
+    vpn: JSONObject, vpnServiceState: String, vpnError: String?,
+    onVpnAction: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Text("Settings", fontSize = 25.sp, color = white, fontWeight = FontWeight.SemiBold)
@@ -701,8 +739,21 @@ private fun SettingsScreen(
                     color = muted, fontSize = 12.sp)
                 HorizontalDivider(color = edge)
                 Text("System-wide coverage", color = white, fontWeight = FontWeight.SemiBold)
-                Text("The existing CLI is proxy-first. Android VPN coverage needs a platform adapter once the Go core can drive it safely.",
-                    color = muted, fontSize = 12.sp)
+                Text(
+                    if (vpn.optBoolean("available"))
+                        "Go packet forwarding prerequisites are available. Android consent is required."
+                    else vpn.optString("reason", "Waiting for Go packet routing support."),
+                    color = muted, fontSize = 12.sp
+                )
+                Text("Adapter: $vpnServiceState", color = muted, fontSize = 11.sp)
+                if (vpnError != null) Text(vpnError, color = red, fontSize = 11.sp)
+                Button(
+                    onClick = onVpnAction,
+                    enabled = vpn.optBoolean("available") || vpnServiceState == "tun_running_unverified",
+                    colors = ButtonDefaults.buttonColors(containerColor = edge, contentColor = white)
+                ) {
+                    Text(if (vpnServiceState == "tun_running_unverified") "Stop VPN" else "Start system VPN")
+                }
                 HorizontalDivider(color = edge)
                 Text("MITM and certificates", color = white, fontWeight = FontWeight.SemiBold)
                 Text("The optional domain-fronting CA code is preserved in the Go repository. No certificate is installed by this app.",

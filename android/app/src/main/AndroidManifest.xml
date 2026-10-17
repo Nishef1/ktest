@@ -17,6 +17,18 @@
             </intent-filter>
         </activity>
         <service
+            android:name=".KTestVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="true"
+            android:foregroundServiceType="specialUse">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-initiated Android VPN TUN adapter controlled by the existing KTest Go core" />
+        </service>
+        <service
             android:name=".ProxyService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
