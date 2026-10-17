@@ -1,21 +1,9 @@
-name: Android connection preview
+# Intentional release gate: Android APK/AAR builds are not triggered by pushes or PRs.
+# Use a manual dispatch only after the Android implementation is feature-complete
+# and the full device-validation checklist has been satisfied.
+name: Android APK (manual release gate)
 on:
-  push:
-    paths:
-      - "android/**"
-      - "mobilebridge/**"
-      - "internal/pathdiag/**"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/android-build.yml"
-  pull_request:
-    paths:
-      - "android/**"
-      - "mobilebridge/**"
-      - "internal/pathdiag/**"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/android-build.yml"
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
