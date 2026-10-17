@@ -139,9 +139,11 @@ type wsCarrier struct {
 // local dialer; OpenVPN is raced over every carrier and the first one whose
 // server returns data carries the stream, including later client writes.
 type wsActiveCarrier struct {
-	key       string
-	name      string
-	confirmed bool // an observed CLI Connected transition while this was the only active OpenVPN stream
+	key         string
+	name        string
+	started     time.Time
+	confirmed   bool // correlated with unique CLI TCP Connected transition, not cryptographic identity
+	upstreamEnd bool // upstream read terminated before ktest locally closed the stream
 }
 
 type wsBridge struct {
@@ -162,7 +164,8 @@ type wsBridge struct {
 	good    map[string]string               // destination -> carrier that carried a working VPN
 	bad     map[string]map[string]time.Time // destination -> carrier -> demoted until
 	retries map[string]uint64               // attempt index for choosing independent alternatives
-	active  map[*wsActiveCarrier]bool       // streams awaiting real VPN confirmation
+	active  map[*wsActiveCarrier]bool       // streams awaiting CLI state correlation
+	shortEnds map[string]int                // consecutive short unexpected ends of correlated sessions
 }
 
 // CLI authentication is attributed only if a single OpenVPN stream is
@@ -175,6 +178,12 @@ func (b *wsBridge) observeCLIConnected() {
 		return
 	}
 	for active := range b.active {
+		// A long-lived leftover socket from an earlier connection attempt
+		// must not be credited when an unrelated CLI session changes state.
+		// CLI state has no authoritative link to the carrier socket.
+		if active.started.IsZero() || time.Since(active.started) > 90*time.Second {
+			return
+		}
 		active.confirmed = true
 		// A real Windscribe TCP Connected transition is stronger evidence
 		// than an arbitrary 60-second/64-KiB threshold. This session is
@@ -209,7 +218,7 @@ func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.C
 		path = wstunnel.DefaultPath
 	}
 	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 250 * time.Millisecond,
-		good: map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}}
+		good: map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}, shortEnds: map[string]int{}}
 	for _, e := range splitList(o.cdnEdges) {
 		if _, _, err := net.SplitHostPort(e); err != nil {
 			e = net.JoinHostPort(e, "443")
@@ -406,6 +415,43 @@ func wsCarrierFamily(name string) int {
 	}
 }
 
+// wsSpreadSNIs avoids spending the per-CONNECT candidate budget on only
+// the first SNI, whose many IP/transport variants appear consecutively.
+func wsSpreadSNIs(cs []wsCarrier, attempt uint64) []wsCarrier {
+	if len(cs) <= 1 {
+		return cs
+	}
+	buckets := make(map[string][]wsCarrier)
+	var keys []string
+	for _, candidate := range cs {
+		label := "default"
+		for _, field := range strings.Fields(candidate.name) {
+			if strings.HasPrefix(field, "sni=") {
+				label = field
+				break
+			}
+		}
+		if _, ok := buckets[label]; !ok {
+			keys = append(keys, label)
+		}
+		buckets[label] = append(buckets[label], candidate)
+	}
+	rotation := int(attempt % uint64(len(keys)))
+	keys = append(append([]string{}, keys[rotation:]...), keys[:rotation]...)
+	var result []wsCarrier
+	for len(result) < len(cs) {
+		for _, key := range keys {
+			bucket := buckets[key]
+			if len(bucket) == 0 {
+				continue
+			}
+			result = append(result, bucket[0])
+			buckets[key] = bucket[1:]
+		}
+	}
+	return result
+}
+
 func wsDiversify(candidates []wsCarrier, attempt uint64) []wsCarrier {
 	var groups [4][]wsCarrier
 	for _, candidate := range candidates {
@@ -413,11 +459,7 @@ func wsDiversify(candidates []wsCarrier, attempt uint64) []wsCarrier {
 		groups[group] = append(groups[group], candidate)
 	}
 	for i := range groups {
-		if len(groups[i]) > 1 {
-			shift := int(attempt % uint64(len(groups[i])))
-			g := groups[i]
-			groups[i] = append(append([]wsCarrier{}, g[shift:]...), g[:shift]...)
-		}
+		groups[i] = wsSpreadSNIs(groups[i], attempt)
 	}
 	result := make([]wsCarrier, 0, len(candidates))
 	for len(result) < len(candidates) {
@@ -677,7 +719,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		return nil, nil, fmt.Errorf("no Windscribe carrier answered (%s): %w", summary, err)
 	}
 	b.logf("Windscribe %s carried by %s source=%s; tunneled data returned in %s (authentication remains with Windscribe)", key, r.c.name, r.c.source, shortDur(r.took))
-	session := &wsActiveCarrier{key: key, name: r.c.name}
+	session := &wsActiveCarrier{key: key, name: r.c.name, started: time.Now()}
 	b.mu.Lock()
 	if b.active == nil {
 		b.active = make(map[*wsActiveCarrier]bool)
@@ -692,9 +734,30 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		defer b.mu.Unlock()
 		confirmed := session.confirmed
 		delete(b.active, session)
-		// A confirmed VPN is never demoted for an intentional short session.
-		// An unanswered connection which dies during the common 20-30s
-		// handshake failure window should not immediately be retried first.
+		streakKey := key + "|" + r.c.name
+		if confirmed {
+			// One short EOF can be a deliberate location switch. Only two
+			// consecutive *unexpected upstream read ends* on short
+			// CLI-correlated sessions justify a temporary cooldown.
+			if session.upstreamEnd && lived < 15*time.Second && received < 64<<10 {
+				b.shortEnds[streakKey]++
+				if b.shortEnds[streakKey] >= 2 {
+					if b.good[key] == r.c.name {
+						delete(b.good, key)
+					}
+					if b.bad[key] == nil {
+						b.bad[key] = make(map[string]time.Time)
+					}
+					b.bad[key][r.c.name] = time.Now().Add(90 * time.Second)
+					b.shortEnds[streakKey] = 0
+				}
+			} else {
+				b.shortEnds[streakKey] = 0
+			}
+		}
+		// Unverified streams that die during the handshake failure window
+		// receive a temporary penalty; a short intentional VPN session
+		// is not automatically classified as a failure.
 		if !confirmed && lived < 50*time.Second && received < 64<<10 {
 			if b.good[key] == r.c.name {
 				delete(b.good, key)
@@ -708,10 +771,14 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 			b.bad[key][r.c.name] = time.Now().Add(ttl)
 		}
-		b.logf("Windscribe %s carrier=%s session ended after %s, returned=%d bytes, CLI-authenticated=%v", key, r.c.name, shortDur(lived), received, confirmed)
+		b.logf("Windscribe %s carrier=%s session ended after %s, returned=%d bytes, CLI-correlated=%v, upstream-ended=%v (not proof of DPI or per-carrier authentication)", key, r.c.name, shortDur(lived), received, confirmed, session.upstreamEnd)
 	}
 	stopClose := context.AfterFunc(live, func() { _ = r.conn.Close() })
-	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose, logf: b.logf, name: r.c.name, destination: key, started: time.Now()}, done, nil
+	return &carrierConn{Conn: &prefixConn{Conn: r.conn, pending: r.reply}, cancel: stopLive, stopClose: stopClose, logf: b.logf, name: r.c.name, destination: key, started: time.Now(), onUpstreamEnd: func() {
+		b.mu.Lock()
+		session.upstreamEnd = true
+		b.mu.Unlock()
+	}}, done, nil
 }
 
 // carrierConn exposes only observed stream failures. EOF may be the
@@ -727,13 +794,19 @@ type carrierConn struct {
 	started     time.Time
 	ended       sync.Once
 	closed      atomic.Bool
+	onUpstreamEnd func()
 }
 
 func (c *carrierConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
-	if err != nil && !c.closed.Load() && c.logf != nil {
+	if err != nil && !c.closed.Load() {
 		c.ended.Do(func() {
-			c.logf("Windscribe %s carrier=%s upstream read ended after %s: %v (source of closure unverified)", c.destination, c.name, shortDur(time.Since(c.started)), err)
+			if c.onUpstreamEnd != nil {
+				c.onUpstreamEnd()
+			}
+			if c.logf != nil {
+				c.logf("Windscribe %s carrier=%s upstream read ended after %s: %v (source of closure unverified)", c.destination, c.name, shortDur(time.Since(c.started)), err)
+			}
 		})
 	}
 	return n, err

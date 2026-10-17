@@ -822,3 +822,63 @@ func TestWindscribeCarrierOffersUpstreamHelloWithoutReplacingChrome(t *testing.T
 		}
 	}
 }
+
+func TestWindscribeSNIFairnessUnderCandidateBudget(t *testing.T) {
+	var candidates []wsCarrier
+	for _, sni := range []string{"one.test", "two.test", "three.test"} {
+		for i := 0; i < 30; i++ {
+			candidates = append(candidates, wsCarrier{name: fmt.Sprintf("WStunnel sni=%s entry=%d hello=chrome", sni, i)})
+		}
+	}
+	for attempt := uint64(0); attempt < 4; attempt++ {
+		ordered := wsDiversify(candidates, attempt)
+		seen := make(map[string]int)
+		for _, candidate := range ordered[:24] {
+			for _, sni := range []string{"one.test", "two.test", "three.test"} {
+				if strings.Contains(candidate.name, "sni="+sni) {
+					seen[sni]++
+				}
+			}
+		}
+		for _, sni := range []string{"one.test", "two.test", "three.test"} {
+			if seen[sni] != 8 {
+				t.Fatalf("attempt %d starved SNI %s with %d/24 entries: %+v", attempt, sni, seen[sni], seen)
+			}
+		}
+	}
+}
+
+func TestShortCLIConnectedSessionNeedsRepeatedUnexpectedUpstreamEndForCooldown(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "WStunnel selected"})
+	key := "68.67.118.163:443"
+	for i := 0; i < 2; i++ {
+		conn, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.observeCLIConnected()
+		b.mu.Lock()
+		for session := range b.active {
+			session.upstreamEnd = true
+		}
+		b.mu.Unlock()
+		done(3*time.Second, 1024)
+		_ = conn.Close()
+		if i == 0 && b.good[key] != "WStunnel selected" {
+			t.Fatal("single short EOF incorrectly erased successful carrier")
+		}
+	}
+	if b.good[key] != "" || time.Until(b.bad[key]["WStunnel selected"]) < 60*time.Second {
+		t.Fatal("repeated unexpected upstream ends did not temporarily demote the unstable carrier")
+	}
+}
+
+func TestStaleCarrierCannotBeCreditedWithNewCLIConnection(t *testing.T) {
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	s := &wsActiveCarrier{key: "test:443", name: "old", started: time.Now().Add(-3 * time.Minute)}
+	b.active[s] = true
+	b.observeCLIConnected()
+	if s.confirmed || b.good[s.key] != "" {
+		t.Fatal("old unrelated carrier falsely credited with newer CLI Connected state")
+	}
+}
