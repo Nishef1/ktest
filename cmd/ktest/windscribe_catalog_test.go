@@ -223,3 +223,38 @@ func TestWindscribeCatalogParsesCurrentMobV2NestedGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestWindscribeMobV2ProviderURLAndLegacyFallback(t *testing.T) {
+	base := "https://assets.windscribe.com/serverlist/mob-v2/1/"
+	got := wsCatalogRequestURL(base, time.Unix(1760700000, 0))
+	if got != base+"1760700000" {
+		t.Fatalf("mob-v2 timestamp URL %q", got)
+	}
+	var v2, legacy int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mob-v2":
+			v2++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"groups":[{"city":"Empty"}]}]}`))
+		case "/legacy":
+			legacy++
+			_, _ = w.Write([]byte(globalNodeFixture))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := newWSNodeCatalog()
+	if err := c.updateFromSource(context.Background(), srv.Client(), wsCatalogSource{
+		name: "global", url: srv.URL + "/mob-v2", fallback: srv.URL + "/legacy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if v2 != 1 || legacy != 1 {
+		t.Fatalf("legacy API fallback not reached after invalid mob-v2 list: v2=%d legacy=%d", v2, legacy)
+	}
+	if len(c.endpoints("203.0.113.100")) != 2 {
+		t.Fatal("usable legacy catalog was not retained")
+	}
+}

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,11 +19,17 @@ import (
 const wsCatalogMaxAge = 24 * time.Hour
 const wsCatalogLimit = 4 << 20
 
-// These are public provider lists, not account/session APIs. The regional
-// response can contain anti-censorship addresses absent from the global list.
-var wsCatalogURLs = []struct{ name, url string }{
-	{"global", "https://assets.windscribe.com/serverlist/openvpn/1/ktest?country_override=ZZ"},
-	{"regional", "https://assets.windscribe.com/serverlist/openvpn/1/ktest"},
+// Windscribe desktop switched to the mob-v2 server list in 2026.
+// The older openvpn URL is a fallback for censored networks that can reach
+// only a cached/legacy API entry. Timestamp suffixes match the official
+// public mob-v2 endpoint format, and neither requires account credentials.
+type wsCatalogSource struct {
+	name, url, fallback string
+}
+
+var wsCatalogURLs = []wsCatalogSource{
+	{"global", "https://assets.windscribe.com/serverlist/mob-v2/1/", "https://assets.windscribe.com/serverlist/openvpn/1/ktest?country_override=ZZ"},
+	{"regional", "https://assets.windscribe.com/serverlist/mob-v2/0/", "https://assets.windscribe.com/serverlist/openvpn/1/ktest"},
 }
 
 type wsNode struct {
@@ -249,6 +257,40 @@ func fetchWSNodeList(ctx context.Context, client *http.Client, url string) ([]by
 	return body, nil
 }
 
+// mob-v2 uses a Unix-time URL component. A source without trailing slash
+// stays unchanged, allowing local regression servers to exercise fallbacks.
+func wsCatalogRequestURL(base string, now time.Time) string {
+	if strings.HasSuffix(base, "/") {
+		return base + strconv.FormatInt(now.Unix(), 10)
+	}
+	return base
+}
+
+func (c *wsNodeCatalog) updateFromSource(ctx context.Context, client *http.Client, source wsCatalogSource) error {
+	urls := []string{wsCatalogRequestURL(source.url, time.Now()), source.fallback}
+	var lastErr error
+	for _, url := range urls {
+		if url == "" {
+			continue
+		}
+		body, err := fetchWSNodeList(ctx, client, url)
+		if err == nil {
+			err = c.replace(source.name, body, time.Now())
+		}
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	if lastErr == nil {
+		return errors.New("Windscribe catalog has no usable endpoints")
+	}
+	return lastErr
+}
+
 func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path string, logf func(string, ...any)) bool {
 	var wg sync.WaitGroup
 	updated := make(chan struct{}, len(wsCatalogURLs))
@@ -256,10 +298,7 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			body, err := fetchWSNodeList(ctx, client, source.url)
-			if err == nil {
-				err = c.replace(source.name, body, time.Now())
-			}
+			err := c.updateFromSource(ctx, client, source)
 			if err != nil {
 				logf("Windscribe node list %s unavailable: %v; retaining fresh cache", source.name, err)
 			} else {
