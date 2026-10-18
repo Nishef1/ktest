@@ -92,10 +92,11 @@ internal fun ConnectScreen(
         if (state == LinkState.Active) {
             EndpointsPanel(status, routeReport, checkingRoute, onCheckRoute, onCopy)
         }
-        if (activeMode.id == "balanced" || activeMode.id == "fast") {
+        if (activeMode.id == "balanced") {
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 status.optBoolean("frozen"), canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
+        if (activeMode.id == "fast") Note("Fast connects without route calibration and adaptively compares the existing methods during use. Protected services still require a verified exit.")
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
         if (activeMode.id in nativeModes) {
