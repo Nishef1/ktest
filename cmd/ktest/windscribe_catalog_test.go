@@ -409,3 +409,58 @@ func TestCatalogConflictingSnapshotsKeepNewerValidatedNodeIsolated(t *testing.T)
 		t.Fatalf("provider conflict mixed endpoints or discarded valid newer node: %+v", got)
 	}
 }
+
+func TestCatalogMissingTargetDiagnosedAndRetriedWithoutInventedIPs(t *testing.T) {
+	c := newWSNodeCatalog()
+	target := "203.0.113.200"
+	c.beginFetch()
+	if err := c.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.finishFetch()
+	c.mu.Lock()
+	c.sourceErrors["regional"] = "HTTP 503"
+	c.mu.Unlock()
+	c.finishFetch()
+	if c.waitForTarget(context.Background(), target, time.Millisecond) {
+		t.Fatal("unrelated fresh list was accepted for missing target")
+	}
+	if !c.hasUnresolvedTargets() {
+		t.Fatal("unresolved requested target was not remembered for retry")
+	}
+	detail := c.diagnostic(target)
+	if !strings.Contains(detail, "node not found in 1 fresh provider source") || !strings.Contains(detail, "regional: HTTP 503") {
+		t.Fatalf("missing-node diagnostic not actionable: %q", detail)
+	}
+	if got := c.endpoints(target); len(got) != 0 {
+		t.Fatalf("unsafe inferred endpoint: %+v", got)
+	}
+	const recovered = `{"data":[{"nodes":[{"ip":"198.51.100.20","ip2":"203.0.113.200","ip3":"192.0.2.20","hostname":"example.windscribe.com"}]}]}`
+	if err := c.replace("regional", []byte(recovered), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if c.hasUnresolvedTargets() || len(c.endpoints(target)) != 2 {
+		t.Fatal("fresh provider mapping did not resolve the pending target")
+	}
+	if strings.Contains(c.diagnostic(target), "HTTP 503") {
+		t.Fatal("stale fetch failure was kept after successful replacement")
+	}
+}
+
+func TestCatalogRefreshDelayDistinguishesMissingNodeFromSuccessfulFetch(t *testing.T) {
+	for _, tc := range []struct {
+		refreshed, missing bool
+		retries int
+		want time.Duration
+	}{
+		{true, false, 0, 30 * time.Minute},
+		{false, false, 0, 30 * time.Second},
+		{true, true, 0, 45 * time.Second},
+		{true, true, 1, 5 * time.Minute},
+		{true, true, 100, 5 * time.Minute},
+	} {
+		if got := wsCatalogRefreshDelay(tc.refreshed, tc.missing, tc.retries); got != tc.want {
+			t.Fatalf("refresh=%t missing=%t retries=%d: got %s want %s", tc.refreshed, tc.missing, tc.retries, got, tc.want)
+		}
+	}
+}
