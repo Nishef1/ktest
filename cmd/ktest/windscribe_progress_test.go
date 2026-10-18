@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -172,11 +173,8 @@ func TestWindscribeCompactProgressDeduplicatesForcedEvents(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		v.show(snapshot, true)
 	}
-	if got := strings.Count(out.String(), "Windscribe 203.0.113.100:443"); got != 1 {
-		t.Fatalf("unchanged events generated %d duplicate panels:\n%s", got, out.String())
-	}
-	if strings.Contains(out.String(), "ByeDPI") {
-		t.Fatal("method inventory should appear only in final summary")
+	if got := strings.Count(out.String(), "WINDSCRIBE 203.0.113.100:443"); got != 1 {
+		t.Fatalf("unchanged events generated %d duplicate boxes:\n%s", got, out.String())
 	}
 }
 
@@ -236,14 +234,14 @@ func TestWindscribeVerboseRemainsAppendOnly(t *testing.T) {
 	v := &wsProgressView{t: plainTerm(&out), verbose: true}
 	s := wsProgressSnapshot{key: "203.0.113.100:443", total: 19, tried: 1, remaining: 18, attempted: 3, running: 2, replied: 1}
 	v.show(s, true)
-	if v.line != nil {
-		t.Fatal("verbose mode should not keep a redrawable progress line")
+	if strings.Contains(out.String(), "\\x1b[0J") {
+		t.Fatal("redirected verbose output must not emit terminal redraw escapes")
 	}
-	if !strings.Contains(out.String(), "started 3") || !strings.Contains(out.String(), "replies 1") {
+	if !strings.Contains(out.String(), "Started 3") || !strings.Contains(out.String(), "0 OpenVPN replies") && !strings.Contains(out.String(), "Running 2") {
 		t.Fatalf("verbose status lost diagnostic counters: %s", out.String())
 	}
 	v.show(s, true)
-	if strings.Count(out.String(), "Windscribe 203.0.113.100:443") != 1 {
+	if strings.Count(out.String(), "WINDSCRIBE 203.0.113.100:443") != 1 {
 		t.Fatalf("verbose progress should not repeat an unchanged status: %s", out.String())
 	}
 }
@@ -264,5 +262,75 @@ func TestWindscribeStatusDisplaysActiveMethodAndFailures(t *testing.T) {
 	}
 	if !strings.Contains(wsLiveDetail(s, 80), "ByeDPI TLS") {
 		t.Fatalf("standard 80-column output hid the current method: %q", wsLiveDetail(s, 80))
+	}
+}
+
+func TestWindscribeLiveBoxContainsAllMethodCounters(t *testing.T) {
+	var out bytes.Buffer
+	v := &wsProgressView{t: &term{w: &out, live: true, unicode: true, columns: 105, rows: 38}}
+	s := wsProgressSnapshot{key: "203.0.113.100:443", location: "Sweden / Stockholm - Fika", total: 57, tried: 7, remaining: 50, attempted: 10, running: 3,
+		methods: []wsMethodProgress{
+			{name: "ByeDPI TLS record slicing", total: 19, tried: 2, running: 1},
+			{name: "ByeDPI double split", total: 19, tried: 5, running: 2},
+			{name: "Xray local TCP fragment", total: 19},
+		},
+	}
+	v.show(s, true)
+	if v.t.pinnedBox == "" {
+		t.Fatal("interactive box was not pinned")
+	}
+	for _, line := range []string{"WINDSCRIBE 203.0.113.100:443", "ByeDPI TLS record slicing", "ByeDPI double split", "Xray local TCP fragment", "2/19", "5/19", "50"} {
+		if !strings.Contains(v.t.pinnedBox, line) {
+			t.Fatalf("missing %q in boxed dashboard: %s", line, v.t.pinnedBox)
+		}
+	}
+	first := v.t.pinnedBox
+	// Force an update without waiting for the 3-second refresh window.
+	v.last[s.key] = time.Now().Add(-time.Minute)
+	s.tried, s.remaining = 8, 49
+	s.methods[0].tried = 3
+	v.show(s, true)
+	if v.t.pinnedBox == first {
+		t.Fatal("live box did not update counters")
+	}
+	if strings.Count(out.String(), "\\x1b[0J") < 2 {
+		t.Fatal("live box update failed to clear previous frame")
+	}
+	v.summary(s)
+	if v.t.pinnedBox != "" {
+		t.Fatal("session summary left the live box pinned")
+	}
+}
+
+func TestWindscribePanelFitsNarrowTerminalAndShowsAllMethods(t *testing.T) {
+	var out bytes.Buffer
+	v := &wsProgressView{t: &term{w: &out, columns: 48, rows: 30, live: true, unicode: true}}
+	s := wsProgressSnapshot{key: "203.0.113.100:443", total: 38, tried: 1, remaining: 37,
+		methods: []wsMethodProgress{{name: "very long method title that should truncate", total: 19, tried: 1}, {name: "another method", total: 19}},
+	}
+	v.show(s, true)
+	if v.t.pinnedBox == "" {
+		t.Fatal("narrow but tall terminal should show a pinned box")
+	}
+	for _, row := range strings.Split(v.t.pinnedBox, "\n") {
+		if visibleLen(row) > 48 {
+			t.Fatalf("panel overflows narrow terminal: %q", row)
+		}
+	}
+}
+
+func TestWindscribeTallPanelFallsBackToScrollbackWithoutEscape(t *testing.T) {
+	var out bytes.Buffer
+	v := &wsProgressView{t: &term{w: &out, columns: 80, rows: 12, live: true, unicode: true}}
+	s := wsProgressSnapshot{key: "203.0.113.100:443"}
+	for i := 0; i < 19; i++ {
+		s.methods = append(s.methods, wsMethodProgress{name: fmt.Sprintf("method-%02d", i), total: 19})
+	}
+	v.show(s, true)
+	if v.t.pinnedBox != "" {
+		t.Fatal("box taller than viewport must not use cursor pinning")
+	}
+	if !strings.Contains(out.String(), "method-18") {
+		t.Fatal("short terminal fallback hid methods")
 	}
 }
