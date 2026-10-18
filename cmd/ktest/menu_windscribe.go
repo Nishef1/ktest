@@ -16,7 +16,8 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 		}
 		t.ui.menuOption("1", "Local anti-DPI bridge", "No Aether / WARP / Psiphon")
 		t.ui.menuOption("2", "Windscribe through Aether", "WARP carries OpenVPN TCP; keep Aether running")
-		t.ui.menuOption("3", "Diagnostics and tests", "")
+		t.ui.menuOption("3", "Zapret2 (Windows experimental test)", "Compare the same Windscribe WStunnel with/without packet shaping; not VPN login")
+		t.ui.menuOption("4", "Diagnostics and tests", "")
 		t.ui.menuOption("0", "Back", backHint)
 		t.ui.Printf("\n  Windscribe > ")
 		answer, ok := in.read()
@@ -40,6 +41,14 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 				return false
 			}
 		case "3":
+			if !t.windscribeZapretMenu(base, in) {
+				if in.interrupted {
+					in.interrupted = false
+					continue
+				}
+				return false
+			}
+		case "4":
 			if !t.windscribeToolsMenu(base, in) {
 				if in.interrupted {
 					in.interrupted = false
@@ -48,7 +57,7 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 				return false
 			}
 		default:
-			message = "Select 1-3, or 0"
+			message = "Select 1-4, or 0"
 		}
 	}
 }
