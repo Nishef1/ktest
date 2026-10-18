@@ -281,6 +281,21 @@ func better(a, b Result) bool {
 	return a.MedianMS < b.MedianMS
 }
 
+// Usable means either an independently tested generic route or at least
+// one exact target with repeated HTTPS success. A target-only plan has
+// intentionally limited coverage: unknown hosts still fail closed.
+func (p *Profile) Usable() bool {
+	if p == nil { return false }
+	if p.Default != "" { return true }
+	for _, selection := range p.Selections {
+		if selection.Method != "" && selection.Assessment == "https_verified" &&
+			selection.Attempts >= 3 && selection.Successes == selection.Attempts {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Profile) Fresh(now time.Time) bool {
 	return p != nil && p.Version == 1 && !p.CompletedAt.IsZero() && !now.Before(p.CompletedAt) && now.Sub(p.CompletedAt) < Lifetime
 }
@@ -372,7 +387,7 @@ func LoadOrTestWithRevision(ctx context.Context, dir, key, targetRevision string
 				return nil, false, errors.New("device clock precedes the cached test; run an explicit manual test")
 			}
 			if cached.Fresh(now) {
-				if cached.TargetsKey == key && cached.Default != "" {
+				if cached.TargetsKey == key && cached.Usable() {
 					return cached, true, nil
 				}
 				if targetRevision == "" || cached.TargetsRevision == "" || cached.TargetsRevision != targetRevision {
@@ -394,8 +409,8 @@ func LoadOrTestWithRevision(ctx context.Context, dir, key, targetRevision string
 	if p == nil {
 		return nil, false, errors.New("calibration returned no complete profile")
 	}
-	if p.Default == "" {
-		return nil, false, errors.New("no generic route returned repeated verified HTTPS; unsuccessful observations were not cached")
+	if !p.Usable() {
+		return nil, false, errors.New("no target or generic route returned repeated verified HTTPS; unsuccessful observations were not cached")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
