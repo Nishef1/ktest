@@ -313,7 +313,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	if changed {
 		switch state {
 		case windscribeConnected:
-			m.t.Line(toneOK, "Windscribe connected (CLI): standby; leaving VPN routing, IP and firewall to Windscribe")
+			m.t.Line(toneOK, "Windscribe Connected (CLI); ktest carrier attribution is separate. VPN routing, IP and firewall belong to Windscribe.")
 		case windscribeDisconnected:
 			if m.aetherCarrier {
 				m.t.Line(toneWarn, "Windscribe disconnected (CLI): waiting for the selected Aether WARP carrier")
