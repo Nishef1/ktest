@@ -102,3 +102,20 @@ func TestAcceptedSessionDoesNotEraseRefusalTotals(t *testing.T) {
 		t.Fatalf("accepted=%d refused=%d", a, r)
 	}
 }
+
+func TestHTTPStatusPrefixDoesNotMisclassifyCDNFailures(t *testing.T) {
+	for _, tc := range []struct{ input string; want int }{
+		{"HTTP/1.1 200 OK\r\n", 200},
+		{"HTTP/1.1 403 Forbidden\r\n", 403},
+		{"HTTP/1.1 421 Misdirected Request\r\n", 421},
+		{"HTTP/2 binary response", 0},
+		{"", 0},
+	} {
+		var prefix httpStatusPrefix
+		_, _ = prefix.Write([]byte(tc.input[:min(len(tc.input), 4)]))
+		_, _ = prefix.Write([]byte(tc.input[min(len(tc.input), 4):]))
+		if got := prefix.status(); got != tc.want {
+			t.Fatalf("prefix %q produced %d, want %d", tc.input, got, tc.want)
+		}
+	}
+}
