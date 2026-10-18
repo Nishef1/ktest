@@ -11,8 +11,8 @@ import (
 
 	"github.com/Nishef1/ktest/internal/connectiondns"
 	"github.com/Nishef1/ktest/internal/connectionpolicy"
-	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/connectionsession"
+	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
