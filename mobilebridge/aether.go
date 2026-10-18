@@ -40,6 +40,12 @@ func AetherProfileCatalog(mode, method string) (string, error) {
 		}
 		for _, choice := range aether.Methods() {
 			if compatible[choice.ID] {
+				if choice.ID == "auto" {
+					// Android currently launches the first compatible
+					// profile; Aether then measures gateways *within* it.
+					// Do not imply ktest races different native methods.
+					choice.Title = "Automatic (first compatible profile)"
+				}
 				methods = append(methods, choice)
 			}
 		}
@@ -62,7 +68,7 @@ func AetherProfileCatalog(mode, method string) (string, error) {
 		Methods  []aether.Method `json:"methods"`
 		Profiles []entry         `json:"profiles"`
 		Note     string          `json:"note"`
-	}{methods, entries, "Shared CLI definitions without ECH-dependent variants; native availability and live egress require separate checks."})
+	}{methods, entries, "Shared CLI profiles without ECH-dependent variants. Android Auto starts the first compatible profile; Aether selects gateways within that method. Native availability and live egress require separate checks."})
 	return string(raw), err
 }
 
