@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -55,6 +56,7 @@ type Profile struct {
 	Version     int         `json:"version"`
 	CompletedAt time.Time   `json:"completed_at"`
 	TargetsKey  string      `json:"targets_key"`
+	TargetsRevision string `json:"targets_revision,omitempty"`
 	Default     string      `json:"default"`
 	Selections  []Selection `json:"selections"`
 	Rows        []Result    `json:"rows"`
@@ -67,58 +69,107 @@ type Probe func(context.Context, Target, Method) Sample
 
 const Lifetime = 24 * time.Hour
 
-// Calibrate first isolates every eligible method/target pair. Up to three
-// responsive finalists per destination receive two further independent trials.
-// Only those repeated measurements can elect a stable route.
+// Calibrate preserves the serial API used by earlier callers and tests.
+// Android Balanced uses CalibrateWithWorkers for bounded preconnection work.
 func Calibrate(ctx context.Context, targets []Target, methods []Method, probe Probe, progress func(Progress)) (*Profile, error) {
+	return CalibrateWithWorkers(ctx, targets, methods, probe, progress, 1)
+}
+
+// CalibrateWithWorkers isolates each method/target sample and bounds concurrency.
+// Cancellation prevents publishing an incomplete profile; no fallback method is
+// silently invented when every HTTP probe is refused.
+func CalibrateWithWorkers(ctx context.Context, targets []Target, methods []Method, probe Probe, progress func(Progress), workers int) (*Profile, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if len(targets) == 0 || len(methods) == 0 || probe == nil {
-		return nil, errors.New("targets, methods and a probe are required")
+	if len(targets) == 0 || len(methods) == 0 || probe == nil || workers < 1 || workers > 8 {
+		return nil, errors.New("targets, methods, a probe, and 1..8 workers are required")
 	}
 	p := &Profile{Version: 1}
 	samples := make(map[int][]Sample)
+	var mu sync.Mutex
 	completed, total := 0, len(targets)*len(methods)
 	report := func(target, method, phase string) {
+		mu.Lock()
+		defer mu.Unlock()
 		if progress != nil {
 			progress(Progress{completed, total, target, method, phase})
 		}
 	}
-	run := func(row int, target Target, method Method) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		report(target.Name, method.Name, "testing")
-		s := probe(ctx, target, method)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		samples[row] = append(samples[row], s)
-		p.Rows[row] = summarize(p.Rows[row], samples[row])
-		completed++
-		report(target.Name, method.Name, "testing")
-		return nil
+	type task struct {
+		row int
+		target Target
+		method Method
+		repeats int
 	}
+	execute := func(tasks []task) error {
+		if len(tasks) == 0 {
+			return ctx.Err()
+		}
+		queue := make(chan task)
+		var wg sync.WaitGroup
+		for w := 0; w < min(workers, len(tasks)); w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for work := range queue {
+					for round := 0; round < work.repeats; round++ {
+						if ctx.Err() != nil {
+							return
+						}
+						report(work.target.Name, work.method.Name, "testing")
+						s := probe(ctx, work.target, work.method)
+						if ctx.Err() != nil {
+							return
+						}
+						mu.Lock()
+						samples[work.row] = append(samples[work.row], s)
+						p.Rows[work.row] = summarize(p.Rows[work.row], samples[work.row])
+						completed++
+						if progress != nil {
+							progress(Progress{completed, total, work.target.Name, work.method.Name, "testing"})
+						}
+						mu.Unlock()
+					}
+				}
+			}()
+		}
+		for _, work := range tasks {
+			select {
+			case queue <- work:
+			case <-ctx.Done():
+				close(queue)
+				wg.Wait()
+				return ctx.Err()
+			}
+		}
+		close(queue)
+		wg.Wait()
+		return ctx.Err()
+	}
+
+	var first []task
 	for _, method := range methods {
 		for _, target := range targets {
-			row := Result{TargetID: target.ID, Target: target.Name, URL: target.URL, Method: method.Name, Assessment: "not_applicable"}
-			p.Rows = append(p.Rows, row)
+			row := len(p.Rows)
+			p.Rows = append(p.Rows, Result{TargetID: target.ID, Target: target.Name, URL: target.URL, Method: method.Name, Assessment: "not_applicable"})
 			if method.Eligible != nil && !method.Eligible(target) {
 				completed++
 				report(target.Name, method.Name, "testing")
 				continue
 			}
-			if err := run(len(p.Rows)-1, target, method); err != nil {
-				return nil, err
-			}
+			first = append(first, task{row: row, target: target, method: method, repeats: 1})
 		}
+	}
+	if err := execute(first); err != nil {
+		return nil, err
 	}
 	finalists := make(map[string][]int)
 	for _, target := range targets {
 		var rows []int
 		for i, row := range p.Rows {
-			if row.TargetID == target.ID && row.Responses > 0 {
+			// An HTTP refusal is evidence of a reachable service, not a viable route.
+			if row.TargetID == target.ID && row.Successes > 0 {
 				rows = append(rows, i)
 			}
 		}
@@ -131,27 +182,31 @@ func Calibrate(ctx context.Context, targets []Target, methods []Method, probe Pr
 	for _, method := range methods {
 		methodsByName[method.Name] = method
 	}
+	var repeats []task
+	for _, target := range targets {
+		for _, row := range finalists[target.ID] {
+			repeats = append(repeats, task{row: row, target: target, method: methodsByName[p.Rows[row].Method], repeats: 2})
+		}
+	}
+	if err := execute(repeats); err != nil {
+		return nil, err
+	}
 	for _, target := range targets {
 		rows := finalists[target.ID]
-		for _, row := range rows {
-			for round := 0; round < 2; round++ {
-				if err := run(row, target, methodsByName[p.Rows[row].Method]); err != nil {
-					return nil, err
-				}
-			}
-		}
 		sort.SliceStable(rows, func(i, j int) bool { return better(p.Rows[rows[i]], p.Rows[rows[j]]) })
 		selection := Selection{TargetID: target.ID, URL: target.URL, Assessment: "unreachable"}
 		if len(rows) > 0 {
 			best := p.Rows[rows[0]]
-			if best.Responses > 0 {
+			if best.Assessment == "https_verified" && best.Successes == best.Attempts && best.Attempts >= 3 {
 				selection = Selection{target.ID, target.URL, best.Method, best.Assessment, best.MedianMS, best.JitterMS, best.Successes, best.Attempts}
+			} else {
+				selection.Assessment = "no_stable_route"
 			}
 		}
 		p.Selections = append(p.Selections, selection)
 	}
-	// An unknown destination gets one generic, non-takeover method selected
-	// by observed coverage/reliability. It never launches a discovery race.
+	// Unknown sites receive a generic, non-takeover method only when that
+	// method demonstrated at least one repeatedly successful HTTPS endpoint.
 	bestScore := -1.0
 	for _, method := range methods {
 		if !method.General {
@@ -300,6 +355,13 @@ func Load(dir string) (*Profile, error) {
 }
 
 func LoadOrTest(ctx context.Context, dir, key string, force bool, now time.Time, run func() (*Profile, error)) (*Profile, bool, error) {
+	return LoadOrTestWithRevision(ctx, dir, key, "", force, now, run)
+}
+
+// An unchanged user target list allows automatic recalibration when a native
+// method disappears or returns. Target edits and legacy profiles still require
+// an explicit manual test, never silently changing the configured destinations.
+func LoadOrTestWithRevision(ctx context.Context, dir, key, targetRevision string, force bool, now time.Time, run func() (*Profile, error)) (*Profile, bool, error) {
 	if !force {
 		cached, err := Load(dir)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -310,10 +372,15 @@ func LoadOrTest(ctx context.Context, dir, key string, force bool, now time.Time,
 				return nil, false, errors.New("device clock precedes the cached test; run an explicit manual test")
 			}
 			if cached.Fresh(now) {
-				if cached.TargetsKey != key {
-					return nil, false, errors.New("targets or methods changed; disconnect and run the Test button explicitly")
+				if cached.TargetsKey == key {
+					return cached, true, nil
 				}
-				return cached, true, nil
+				if targetRevision == "" || cached.TargetsRevision == "" || cached.TargetsRevision != targetRevision {
+					return nil, false, errors.New("targets changed; disconnect and run the Test button explicitly")
+				}
+				// Same targets, different available native methods or network:
+				// recalibrate with the caller's bounded context instead of deadlocking
+				// a connection on a now-missing optional route.
 			}
 		}
 	}
@@ -331,6 +398,7 @@ func LoadOrTest(ctx context.Context, dir, key string, force bool, now time.Time,
 		return nil, false, err
 	}
 	p.TargetsKey = key
+	p.TargetsRevision = targetRevision
 	if err = Save(dir, p); err != nil {
 		return nil, false, err
 	}
