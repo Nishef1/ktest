@@ -334,3 +334,31 @@ func TestWindscribeTallPanelFallsBackToScrollbackWithoutEscape(t *testing.T) {
 		t.Fatal("short terminal fallback hid methods")
 	}
 }
+
+func TestWindscribeTwoColumnPanelPinsNineteenMethodsInShortTerminal(t *testing.T) {
+	var out bytes.Buffer
+	v := &wsProgressView{t: &term{w: &out, columns: 88, rows: 24, live: true, unicode: true}}
+	s := wsProgressSnapshot{key: "203.0.113.100:443", total: 19 * 19, remaining: 19 * 19}
+	for i := 0; i < 19; i++ {
+		s.methods = append(s.methods, wsMethodProgress{name: fmt.Sprintf("ByeDPI method %02d", i), total: 19})
+	}
+	v.show(s, true)
+	if v.t.pinnedBox == "" {
+		t.Fatal("nineteen methods should fit in a two-column pinned box")
+	}
+	for i := 0; i < 19; i++ {
+		if !strings.Contains(v.t.pinnedBox, fmt.Sprintf("method %02d", i)) {
+			t.Fatalf("method %d absent from two-column dashboard: %s", i, v.t.pinnedBox)
+		}
+	}
+	for _, row := range strings.Split(v.t.pinnedBox, "\n") {
+		if visibleLen(row) > 88 {
+			t.Fatalf("two-column panel overflows terminal: %q", row)
+		}
+	}
+	// Log lines are inserted above the pinned panel instead of erasing it.
+	v.t.Line(toneWarn, "sample verbose carrier failure")
+	if !strings.Contains(out.String(), "sample verbose carrier failure") || v.t.pinnedBox == "" {
+		t.Fatal("logging did not retain the live panel")
+	}
+}
