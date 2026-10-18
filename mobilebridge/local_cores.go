@@ -33,6 +33,18 @@ func StartAndroidProxy(mode, upstream, nativeLibraryDir string) (string, error) 
 	return startProxy(mode, upstream, nil, nativeLibraryDir)
 }
 
+// StartAndroidProxyWithXray keeps HEV and Go routing unchanged, while offering
+// the one official pinned Xray TLS-fragment path next to ByeDPI and Go cuts.
+func StartAndroidProxyWithXray(mode, upstream, nativeLibraryDir, privateFilesDir string) (string, error) {
+	if mode != "balanced" && mode != "fast" {
+		return "", errors.New("Android Xray local strategies require Balanced or Fast")
+	}
+	if nativeLibraryDir == "" || privateFilesDir == "" {
+		return "", errors.New("packaged core and app-private paths are required")
+	}
+	return startProxyWithNativeCores(mode, upstream, nil, nativeLibraryDir, "", privateFilesDir)
+}
+
 // StartAndroidProxyWithFronting is opt-in. Kotlin verifies that the exact
 // app-created certificate is in Android's user CA store and asks the user to
 // enable fronting before calling this API. The Go side validates CA files
@@ -47,7 +59,7 @@ func StartAndroidProxyWithFronting(mode, upstream, nativeLibraryDir, privateFile
 	if privateFilesDir == "" {
 		return "", errors.New("private files directory is required for fronting")
 	}
-	return startProxyWithFronting(mode, upstream, nil, nativeLibraryDir, privateFilesDir)
+	return startProxyWithNativeCores(mode, upstream, nil, nativeLibraryDir, privateFilesDir, privateFilesDir)
 }
 
 func launchAndroidLocalCores(ctx context.Context, nativeDir string) (*localCoreSet, error) {
