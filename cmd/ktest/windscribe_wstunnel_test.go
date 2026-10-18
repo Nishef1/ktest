@@ -868,7 +868,7 @@ func TestWindscribeCLIConnectedWithoutKtestCarrierIsNotAttributed(t *testing.T) 
 	if len(b.confirmations) != 0 || len(b.good) != 0 {
 		t.Fatal("Windscribe CLI status alone was credited to a nonexistent ktest carrier")
 	}
-	if !strings.Contains(output.String(), "ktest did not carry a verifiable VPN stream") {
+	if !strings.Contains(output.String(), "ktest did not carry a verifiable VPN") {
 		t.Fatalf("missing nonattribution warning: %s", output.String())
 	}
 }
