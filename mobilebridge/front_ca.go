@@ -36,13 +36,13 @@ func frontCAPath(privateFilesDir string) (string, error) {
 }
 
 type androidFrontCAReport struct {
-	State           string `json:"state"`
-	Detail          string `json:"detail"`
-	Fingerprint     string `json:"fingerprint,omitempty"`
-	Expires         string `json:"expires,omitempty"`
-	PermittedCount  int    `json:"permitted_count,omitempty"`
+	State          string `json:"state"`
+	Detail         string `json:"detail"`
+	Fingerprint    string `json:"fingerprint,omitempty"`
+	Expires        string `json:"expires,omitempty"`
+	PermittedCount int    `json:"permitted_count,omitempty"`
 	// Android's trust store cannot be inferred from a generated PEM file.
-	Trust           string `json:"trust"`
+	Trust string `json:"trust"`
 }
 
 func inspectAndroidFrontCA(dir string) androidFrontCAReport {
