@@ -52,11 +52,11 @@ class ProxyService : Service() {
             val network = cm.activeNetwork ?: error("No underlying Android network available for Balanced calibration")
             val caps = cm.getNetworkCapabilities(network)
                 ?: error("Android network capabilities are unavailable for Balanced calibration")
-            // This runs before activating our VPN and identifies the underlying network.
-            if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
-                error("Disconnect the existing VPN before testing Balanced routes")
-            }
+            // Before starting KTest VPN, an existing third-party VPN can be
+            // the active network in proxy-only mode. Treat it as a distinct
+            // transport instead of forbidding safe layered usage.
             val kind = when {
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
                 caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
                 caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
                 caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
