@@ -30,6 +30,7 @@ type proxySession struct {
 	diagnostics  *proxyDiagnostics
 	native       *nativeCore
 	localCores   *localCoreSet
+	fronter      *front.Fronter
 }
 
 type proxyDiagnostics struct {
@@ -53,6 +54,10 @@ type proxyReport struct {
 	DNSError     string `json:"dns_error,omitempty"`
 	Native       bool   `json:"native"`
 	Method       string `json:"method,omitempty"`
+	Fronting     bool   `json:"fronting"`
+	FrontAccepted int   `json:"front_accepted,omitempty"`
+	FrontRefused int    `json:"front_refused,omitempty"`
+	FrontDisabled string `json:"front_disabled,omitempty"`
 }
 
 type proxyStartup struct {
@@ -94,6 +99,11 @@ func currentReportLocked() proxyReport {
 	activeProxy.diagnostics.mu.Unlock()
 	if activeProxy.native != nil {
 		report.Native, report.Method = true, activeProxy.native.method
+	}
+	if activeProxy.fronter != nil {
+		report.Fronting = true
+		report.FrontAccepted, report.FrontRefused = activeProxy.fronter.Stats()
+		report.FrontDisabled = activeProxy.fronter.Disabled()
 	}
 	return report
 }
@@ -264,6 +274,7 @@ func startProxyWithFronting(mode, upstream string, native *nativeOptions, localD
 		return "", err
 	}
 	config.ExchangeDNS = exchange
+	var fronter *front.Fronter
 	if frontDir != "" {
 		if mode != "balanced" && mode != "fast" {
 			return "", errors.New("local CA fronting is only offered for Balanced and Fast")
@@ -275,7 +286,7 @@ func startProxyWithFronting(mode, upstream string, native *nativeOptions, localD
 		// The same desktop domain-family matcher, hedged front scoring,
 		// TLS upstream verification and reject-after-app-CA-failure are reused.
 		// A public HTTPS status is not proof of reachability for other services.
-		fronter := front.New(front.Config{CA: ca, Families: front.DefaultFamilies(), Resolve: config.Resolve})
+		fronter = front.New(front.Config{CA: ca, Families: front.DefaultFamilies(), Resolve: config.Resolve})
 		config.Upstreams = append(config.Upstreams, fronter.Upstream())
 	}
 	keepDNS := false
@@ -322,7 +333,7 @@ func startProxyWithFronting(mode, upstream string, native *nativeOptions, localD
 		return "", fmt.Errorf("HTTP listener: %w", err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, localCores: localCores}
+	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, localCores: localCores, fronter: fronter}
 	activeProxy = session
 	keepDNS = true
 	keepManaged = true
