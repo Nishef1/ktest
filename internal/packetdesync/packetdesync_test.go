@@ -63,3 +63,13 @@ func TestVerifyBundleMissingAndModifiedFiles(t *testing.T) {
 		t.Fatal("tampered Zapret2 executable or scripts accepted")
 	}
 }
+
+func TestPinnedZapret2Bundle(t *testing.T) {
+	dir := os.Getenv("KTEST_ZAPRET_DIR")
+	if dir == "" {
+		t.Skip("requires checksum-pinned Windows bundle prepared by GitHub Actions")
+	}
+	if err := VerifyBundle(dir); err != nil {
+		t.Fatal(err)
+	}
+}
