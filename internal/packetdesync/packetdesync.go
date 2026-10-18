@@ -149,6 +149,14 @@ func (t *Trial) Stop() error {
 	if t == nil {
 		return nil
 	}
+	// A driver error after the startup settle must not be counted as a
+	// packet-shaped trial merely because the outbound probe continued.
+	select {
+	case err := <-t.done:
+		t.cancel()
+		return fmt.Errorf("Zapret2 stopped before trial cleanup: %v", err)
+	default:
+	}
 	t.cancel()
 	timer := time.NewTimer(6 * time.Second)
 	defer timer.Stop()
