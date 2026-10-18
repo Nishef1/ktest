@@ -8,7 +8,7 @@ import (
 )
 
 func TestZapretModeOptions(t *testing.T) {
-	for _, option := range []string{"off", "fake", "split"} {
+	for _, option := range []string{"off", "fake", "split", "combo"} {
 		if !zapretOptionValid(option) {
 			t.Errorf("official Zapret2 option rejected: %q", option)
 		}
