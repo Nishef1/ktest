@@ -98,6 +98,7 @@ jobs:
           if ($driver.Status -ne "Valid") { throw "WinDivert64.sys driver signature is not valid: $($driver.Status)" }
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/bol-van/zapret2/v1.0.5.2/docs/LICENSE.txt" -OutFile "portable/ktest/THIRD_PARTY/Zapret2-MIT.txt"
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/basil00/WinDivert/v2.2.2/LICENSE" -OutFile "portable/ktest/THIRD_PARTY/WinDivert-LICENSE.txt"
+          Invoke-WebRequest -Uri "https://www.gnu.org/licenses/gpl-3.0.txt" -OutFile "portable/ktest/THIRD_PARTY/Cygwin-GPL-3.0.txt"
           # Preview the complete filter without opening a WinDivert handle:
           Push-Location $destination
           try {
