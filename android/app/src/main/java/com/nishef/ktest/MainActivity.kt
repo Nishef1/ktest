@@ -174,7 +174,7 @@ private fun KTestApp() {
             vpnCapability = runCatching { withContext(Dispatchers.IO) { JSONObject(Mobilebridge.vpnCapability()) } }
                 .getOrElse { JSONObject() }
             try {
-                val routeMode = if (modeId in listOf("balanced", "fast")) modeId else "balanced"
+                val routeMode = "balanced"
                 routePlan.report = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.routeTestStatus(privateDir, routeMode)) }
                 routePlan.readError = null
             } catch (e: CancellationException) {
@@ -244,6 +244,7 @@ private fun KTestApp() {
                                         try {
                                             routePlan.report = withContext(Dispatchers.IO) {
                                                 val fronting = ProxyService.checkedFrontingOptIn(context, privateDir)
+                                                ProxyService.prepareBalancedNetwork(context)
                                                 Mobilebridge.startRouteTest(mode, testUpstream,
                                                     context.applicationInfo.nativeLibraryDir, privateDir, fronting)
                                                 JSONObject(Mobilebridge.routeTestStatus(privateDir, mode))
