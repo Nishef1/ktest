@@ -11,6 +11,7 @@ import (
 
 	"github.com/Nishef1/ktest/internal/connectiondns"
 	"github.com/Nishef1/ktest/internal/connectionpolicy"
+	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -126,6 +127,10 @@ func StartProxyWithUpstream(mode, upstream string) (report string, startErr erro
 }
 
 func startProxy(mode, upstream string, native *nativeOptions, localDir string) (report string, startErr error) {
+	return startProxyWithFronting(mode, upstream, native, localDir, "")
+}
+
+func startProxyWithFronting(mode, upstream string, native *nativeOptions, localDir, frontDir string) (report string, startErr error) {
 	// Long upstream validation must never hold proxyMu: Android status polling
 	// calls ProxyStatus on the UI thread. Serialize only start calls here.
 	proxyStartMu.Lock()
@@ -259,6 +264,20 @@ func startProxy(mode, upstream string, native *nativeOptions, localDir string) (
 		return "", err
 	}
 	config.ExchangeDNS = exchange
+	if frontDir != "" {
+		if mode != "balanced" && mode != "fast" {
+			return "", errors.New("local CA fronting is only offered for Balanced and Fast")
+		}
+		ca, err := loadAndroidFrontCA(frontDir)
+		if err != nil {
+			return "", fmt.Errorf("Android CA cannot enable fronting: %w", err)
+		}
+		// The same desktop domain-family matcher, hedged front scoring,
+		// TLS upstream verification and reject-after-app-CA-failure are reused.
+		// A public HTTPS status is not proof of reachability for other services.
+		fronter := front.New(front.Config{CA: ca, Families: front.DefaultFamilies(), Resolve: config.Resolve})
+		config.Upstreams = append(config.Upstreams, fronter.Upstream())
+	}
 	keepDNS := false
 	defer func() {
 		if !keepDNS {
