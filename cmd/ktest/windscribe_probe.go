@@ -10,12 +10,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/packetdesync"
+	"github.com/Nishef1/ktest/internal/systemtun"
 	"github.com/Nishef1/ktest/internal/wstunnel"
 )
 
@@ -232,6 +235,7 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 	entry := fs.String("entry", "", "explicit public Windscribe carrier IPv4 (optional, no guessed neighbours)")
 	snis := fs.String("sni", defaultProbeSNIs, "1..12 comma-separated hostnames; none tests an empty SNI")
 	transport := fs.String("transport", "wstunnel", "wstunnel, stealth, or both (Stealth proves TLS only)")
+	zapret := fs.String("zapret", "off", "Windows-only controlled winws2 packet experiment: off, fake, split; one node and SNI")
 	rounds := fs.Int("rounds", 2, "repetitions per fixed entry and SNI, 1..3")
 	timeout := fs.Duration("timeout", 4*time.Second, "per-attempt timeout, 1s..8s; whole comparison bounded to 60s")
 	verify := fs.Bool("verify-vpn", false, "read-only CLI + system HTTPS exit-IP check; does not reconnect")
@@ -250,6 +254,24 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 			u.Note("%v", err)
 		}
 		return 2
+	}
+	if !zapretOptionValid(*zapret) {
+		u.Line(toneFail, "Invalid -zapret; choose off, fake or split")
+		return 2
+	}
+	if *zapret != "off" {
+		if runtime.GOOS != "windows" || !systemtun.IsAdmin() {
+			u.Line(toneFail, "Zapret2 requires Windows and an explicitly Administrator-run terminal; no automatic elevation")
+			return 2
+		}
+		if *entry != "" || *verify || strings.TrimSpace(*target) == "" || len(names) != 1 || *transport != "wstunnel" {
+			u.Line(toneFail, "Zapret2 needs -target with one provider node, exactly one -sni, and -transport wstunnel; no -entry or -verify-vpn")
+			return 2
+		}
+		if active := activeKtestTUNs(); len(active) != 0 {
+			u.Line(toneFail, "Stop ktest TUN before testing Zapret2: %s", strings.Join(active, ", "))
+			return 2
+		}
 	}
 	if *entry != "" && !publicWSIP(*entry) {
 		u.Line(toneFail, "-entry requires a public IPv4 address")
@@ -274,6 +296,10 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 		return verifyWindscribeVPN(ctx, cli, u, *expectedVPNIP)
 	}
 	status := readWSStatus(ctx, cli)
+	if *zapret != "off" && (cliErr != nil || status.err != nil || status.state != windscribeDisconnected) {
+		u.Line(toneFail, "Zapret2 trial needs Windscribe CLI positively reporting Disconnected; unknown/connected VPN state is unsafe")
+		return 1
+	}
 	u.Heading("Windscribe SNI test", "Fixed entries; direct TCP; no credentials, reconnects, route or certificate changes.")
 	if cliErr != nil || status.err != nil {
 		u.Note("CLI unavailable: network/VPN state unknown; these results cannot establish the ISP's direct path")
@@ -323,6 +349,9 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 		}
 		endpoints = eps
 		u.Note("Location %s; fixed requested=%s; entries are provider-advertised for this node", n.Group, n.TCP)
+	}
+	if *zapret != "off" {
+		return runWindscribeZapretCompare(ctx, u, *base, endpoints, names[0], *rounds, *timeout, packetdesync.Strategy(*zapret))
 	}
 	var cases []wsProbeCase
 	for _, ep := range endpoints {
