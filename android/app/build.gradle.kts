@@ -34,8 +34,8 @@ android {
         minSdk = 29
         targetSdk = 35
         // Monotonic Android package revision; not a CPU architecture version.
-        versionCode = 12
-        versionName = "0.4.0-preview"
+        versionCode = 13
+        versionName = "0.4.1-preview"
         // The default device build remains ARM. Explicit x86_64 selection is
         // for emulator validation against the same packaged upstream cores.
         ndk { abiFilters += (providers.gradleProperty("ktestAbis").orNull
