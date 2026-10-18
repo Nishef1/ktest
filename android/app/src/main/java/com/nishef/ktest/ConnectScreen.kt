@@ -434,6 +434,11 @@ private fun EndpointsPanel(
             val address = status.optString(key)
             if (address.isNotBlank()) EndpointRow(label, address, onCopy)
         }
+        if (status.optBoolean("xray_ready")) {
+            Note("Official Xray TLS fragmentation path is running alongside ByeDPI and Go. This is not a separate VPN.", Tone.Info)
+        } else if (status.optString("xray_error").isNotBlank()) {
+            Note("Xray skipped: ${status.optString("xray_error")}. Existing local strategies remain available.", Tone.Warn)
+        }
         if (status.optBoolean("fronting")) {
             val accepted = status.optInt("front_accepted")
             val refused = status.optInt("front_refused")
