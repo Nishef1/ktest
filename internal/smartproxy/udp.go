@@ -162,7 +162,10 @@ func (p *Proxy) udpCandidates(host string) []*upstreamState {
 	defer p.mu.Unlock()
 	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
 	selected := p.aiPinned
-	if pins := p.cfg.Frozen; pins != nil && protected && pins.Protected != "" {
+	if pins := p.cfg.Frozen; pins != nil && protected {
+		if pins.Protected == "" {
+			return nil
+		}
 		selected = pins.Protected
 	}
 	var out []*upstreamState
