@@ -215,13 +215,6 @@ func (p *Proxy) rejectTakeover(host, port, path string) {
 	}
 }
 
-func (p *Proxy) hasMemory(host, port string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	m := p.memoryLocked(host, port)
-	return m != nil && m.winner != ""
-}
-
 // The configured stagger is a hedge budget, not a reward for a slow winner.
 // Fast learned routes get a shorter head start; slow ones never delay the
 // alternatives beyond the configured budget.

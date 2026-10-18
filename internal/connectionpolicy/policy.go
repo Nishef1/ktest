@@ -22,18 +22,18 @@ type Mode struct {
 // equivalence with the full Windows orchestration or device VPN coverage.
 func AndroidModes() []Mode {
 	return []Mode{
-		{"balanced", "Balanced", "Adaptive Go routes; AI needs verified exit", true,
-			"The Windows Xray/ByeDPI/fronting strategy bundle is not fully ported."},
-		{"fast", "Fast", "Faster Go route selection; AI exit still required", true,
-			"Not equivalent to all Windows desktop strategies."},
-		{"aether", "Aether", "Bring a local Aether SOCKS5 exit", true,
-			"Only the CLI's optional -exit-socks path is supported on Android; no managed WARP/MASQUE core."},
-		{"tor", "Aether to Tor", "Managed Tor route", false,
-			"The original managed Tor route is not available through the Android Go adapter yet."},
+		{"balanced", "Balanced", "Adaptive routes; protected AI traffic", true,
+			"Some desktop strategies are not yet available on Android."},
+		{"fast", "Fast", "Faster routes; protected AI traffic", true,
+			"Some desktop strategies are not yet available on Android."},
+		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
+			"Aether handles enrollment, scans and reconnect. A verified foreign exit is required."},
+		{"tor", "Aether to Tor", "Aether's built-in Tor backend", true,
+			"Requires a verified Tor circuit and foreign exit. First connection can take several minutes."},
 		{"windscribe", "Windscribe", "Local-only anti-DPI bridge", false,
 			"The desktop WStunnel, Xray and ByeDPI orchestration is not ported."},
-		{"psiphon", "Aether to Psiphon", "Managed Psiphon profiles only", false,
-			"CLI forbids external -exit-socks here. Android needs the managed Aether Psiphon core."},
+		{"psiphon", "Aether to Psiphon", "Psiphon with optional CDN fronting", true,
+			"Uses Aether's bundled Psiphon backend, including CDN mode; no external SOCKS substitution."},
 		{"windscribe-aether", "Windscribe through Aether", "WARP carrier for Windscribe", false,
 			"Requires the genuine Aether carrier and Windscribe bridge; no Android port yet."},
 	}

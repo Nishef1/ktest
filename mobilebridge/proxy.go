@@ -27,6 +27,7 @@ type proxySession struct {
 	core         *connectionsession.Session
 	closeDNS     func()
 	diagnostics  *proxyDiagnostics
+	native       *nativeCore
 }
 
 type proxyDiagnostics struct {
@@ -48,6 +49,8 @@ type proxyReport struct {
 	Error        string `json:"error,omitempty"`
 	DNSFailures  int    `json:"dns_failures"`
 	DNSError     string `json:"dns_error,omitempty"`
+	Native       bool   `json:"native"`
+	Method       string `json:"method,omitempty"`
 }
 
 type proxyStartup struct {
@@ -67,7 +70,7 @@ func currentReportLocked() proxyReport {
 	if activeProxy == nil {
 		report := proxyReport{Running: false, Phase: "stopped", Coverage: "proxy", Detail: "Stopped", Error: proxyFailure}
 		if pendingProxy != nil {
-			report.Phase, report.Mode, report.Detail = pendingProxy.phase, pendingProxy.mode, "Preparing Go connection"
+			report.Phase, report.Mode, report.Detail = pendingProxy.phase, pendingProxy.mode, "Preparing connection"
 		}
 		if proxyFailure != "" {
 			report.Phase, report.Detail = "failed", proxyFailure
@@ -87,6 +90,9 @@ func currentReportLocked() proxyReport {
 	activeProxy.diagnostics.mu.Lock()
 	report.DNSFailures, report.DNSError = activeProxy.diagnostics.dnsFailures, activeProxy.diagnostics.dnsError
 	activeProxy.diagnostics.mu.Unlock()
+	if activeProxy.native != nil {
+		report.Native, report.Method = true, activeProxy.native.method
+	}
 	return report
 }
 
@@ -116,6 +122,10 @@ func StartProxy(mode string) (string, error) {
 // StartProxyWithUpstream adds a separately started local SOCKS5 transport.
 // This adapts the existing CLI -exit-socks route; it does not create another core.
 func StartProxyWithUpstream(mode, upstream string) (report string, startErr error) {
+	return startProxy(mode, upstream, nil)
+}
+
+func startProxy(mode, upstream string, native *nativeOptions) (report string, startErr error) {
 	// Long upstream validation must never hold proxyMu: Android status polling
 	// calls ProxyStatus on the UI thread. Serialize only start calls here.
 	proxyStartMu.Lock()
@@ -126,7 +136,14 @@ func StartProxyWithUpstream(mode, upstream string) (report string, startErr erro
 		return "", errors.New("proxy already running; disconnect before switching modes")
 	}
 	generation := proxyGeneration
-	startContext, startCancel := context.WithTimeout(context.Background(), 25*time.Second)
+	budget := 25 * time.Second
+	if native != nil {
+		budget = 4 * time.Minute
+		if mode == "tor" {
+			budget = 7 * time.Minute
+		}
+	}
+	startContext, startCancel := context.WithTimeout(context.Background(), budget)
 	startup := &proxyStartup{mode: mode, phase: "preparing", cancel: startCancel}
 	pendingProxy, proxyFailure = startup, ""
 	proxyMu.Unlock()
@@ -143,8 +160,32 @@ func StartProxyWithUpstream(mode, upstream string) (report string, startErr erro
 	}()
 	switch mode {
 	case "balanced", "fast", "aether":
+	case "psiphon", "tor":
+		if native == nil {
+			return "", errors.New("this mode requires its managed Aether backend")
+		}
 	default:
 		return "", fmt.Errorf("mode %q is not available in this Android build", mode)
+	}
+	var managed *nativeCore
+	keepManaged := false
+	if native != nil {
+		proxyMu.Lock()
+		startup.phase = "starting_core"
+		proxyMu.Unlock()
+		var err error
+		managed, err = launchNative(startContext, mode, *native)
+		if err != nil {
+			return "", err
+		}
+		cancelNative := context.AfterFunc(startContext, managed.cancel)
+		defer func() {
+			cancelNative()
+			if !keepManaged {
+				managed.stop()
+			}
+		}()
+		upstream = managed.address
 	}
 	if mode != "balanced" && mode != "fast" && upstream == "" {
 		return "", errors.New("a local SOCKS5 upstream is required for this mode")
@@ -164,7 +205,13 @@ func StartProxyWithUpstream(mode, upstream string) (report string, startErr erro
 			startup.phase = "verifying_upstream"
 		}
 		proxyMu.Unlock()
-		checked, err := verifyLocalUpstream(startContext, upstream)
+		var checked observedExit
+		var err error
+		if managed != nil {
+			checked, err = waitNative(startContext, mode, managed)
+		} else {
+			checked, err = verifyLocalUpstream(startContext, upstream)
+		}
 		if err != nil {
 			return "", fmt.Errorf("upstream not verified: %w", err)
 		}
@@ -206,7 +253,7 @@ func StartProxyWithUpstream(mode, upstream string) (report string, startErr erro
 	}()
 	if upstream != "" {
 		config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {
-			_, err := verifyLocalUpstream(ctx, upstream)
+			_, err := verifyModeUpstream(ctx, mode, upstream)
 			return err
 		}
 	}
@@ -222,6 +269,13 @@ func StartProxyWithUpstream(mode, upstream string) (report string, startErr erro
 	if err := startContext.Err(); err != nil {
 		return "", err
 	}
+	if managed != nil {
+		select {
+		case <-managed.done:
+			return "", errors.New("native core exited during connection startup")
+		default:
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	core, err := connectionsession.Start(ctx, proxy, "127.0.0.1:0")
 	if err != nil {
@@ -235,9 +289,29 @@ func StartProxyWithUpstream(mode, upstream string) (report string, startErr erro
 		return "", fmt.Errorf("HTTP listener: %w", err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics}
+	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed}
 	activeProxy = session
 	keepDNS = true
+	keepManaged = true
+	if managed != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-managed.done:
+			}
+			proxyMu.Lock()
+			stopped := activeProxy == session
+			if stopped {
+				proxyFailure = "Native core stopped; reconnect to start a new session"
+				stopLocked()
+			}
+			proxyMu.Unlock()
+			if stopped {
+				StopVpnTun()
+			}
+		}()
+	}
 	go func() {
 		<-core.Done()
 		if ctx.Err() == nil {
@@ -269,6 +343,20 @@ func stopLocked() {
 	s.cancel()
 	s.core.Stop()
 	s.closeDNS()
+	if s.native != nil {
+		s.native.stop()
+	}
+}
+
+// CancelProxyStart is non-blocking so Android can cancel a blocking JNI startup
+// from its main thread; the worker then calls StopProxy to finish cleanup.
+func CancelProxyStart() {
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	proxyGeneration++
+	if pendingProxy != nil {
+		pendingProxy.cancel()
+	}
 }
 
 // StopProxy terminates listeners and active proxied streams.

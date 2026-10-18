@@ -2,7 +2,6 @@ package mobilebridge
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -13,9 +12,8 @@ func TestUpstreamStrictValidation(t *testing.T) {
 			t.Errorf("bad upstream accepted: %s", x)
 		}
 	}
-	if _, err := StartProxyWithUpstream("tor", ""); err == nil ||
-		!strings.Contains(err.Error(), "not available") {
-		t.Fatal("An unported Tor mode must not start a second transport")
+	if _, err := StartProxyWithUpstream("tor", ""); err == nil {
+		t.Fatal("Tor must not start without its managed native backend")
 	}
 	if _, err := TestFront("https://example.com", "example.com", "example.com", "bad-ip"); err == nil {
 		t.Fatal("accepted invalid edge IP")

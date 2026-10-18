@@ -1202,15 +1202,6 @@ func isTLSFlight(b []byte) bool {
 	return len(b) >= 6 && b[0] == 0x16 && b[1] == 3 && b[5] == 0x01 // handshake, ClientHello
 }
 
-// socksRequest performs the server side of SOCKS5 (no authentication, CONNECT).
-func socksRequest(c net.Conn) (host, port string, err error) {
-	command, host, port, err := socksCommand(c)
-	if err == nil && command != 1 {
-		return "", "", errors.New("CONNECT required")
-	}
-	return host, port, err
-}
-
 func socksCommand(c net.Conn) (command byte, host, port string, err error) {
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	defer c.SetDeadline(time.Time{})

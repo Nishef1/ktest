@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Called solely by manually dispatched Android verification/release workflow.
+# Reuse the pinned upstream AAR for manifest/source checks or authorized builds.
 VERSION="2.19.0"
 EXPECTED="fbbf014c1c4c6d1e0922db88542abd9dc726600473bdfdc8039ed157b4ba02b0"
 BASE="https://github.com/heiher/hev-socks5-tunnel/releases/download"

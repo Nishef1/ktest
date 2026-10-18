@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import android.os.SystemClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,10 +16,14 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import mobilebridge.Mobilebridge
+import org.json.JSONObject
+import java.io.File
 
 /**
  * Android lifecycle adapter for the existing Go proxy.
@@ -30,15 +35,20 @@ class ProxyService : Service() {
         const val ACTION_STOP = "com.nishef.ktest.DISCONNECT"
         const val EXTRA_MODE = "mode"
         const val EXTRA_UPSTREAM = "upstream"
+        const val EXTRA_METHOD = "method"
+        const val EXTRA_TITLE = "title"
         private const val CHANNEL = "ktest_proxy"
         private const val NOTIFICATION_ID = 42
         @Volatile var lastError: String? = null
+        /** SystemClock.elapsedRealtime() when the current session became active; 0 otherwise. */
+        @Volatile var connectedAt: Long = 0
     }
 
     private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
     private var startup: Job? = null
     @Volatile private var wanted = false
+    @Volatile private var stopping = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -52,24 +62,51 @@ class ProxyService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
-                if (wanted) return START_NOT_STICKY
+                if (wanted || stopping) return START_NOT_STICKY
                 val mode = intent.getStringExtra(EXTRA_MODE) ?: "balanced"
                 val upstream = intent.getStringExtra(EXTRA_UPSTREAM).orEmpty()
+                val method = intent.getStringExtra(EXTRA_METHOD) ?: "auto"
+                val title = intent.getStringExtra(EXTRA_TITLE) ?: mode.replaceFirstChar { it.uppercase() }
                 wanted = true
                 lastError = null
-                startForeground(NOTIFICATION_ID, notification(mode))
+                connectedAt = 0
+                startForeground(NOTIFICATION_ID, notification(title))
                 startup = worker.launch {
                     try {
                         mutex.withLock {
-                            if (wanted) Mobilebridge.startProxyWithUpstream(mode, upstream)
+                            if (wanted) {
+                                if (mode in listOf("aether", "tor", "psiphon") &&
+                                    (mode != "aether" || upstream.isBlank())) {
+                                    Mobilebridge.startNativeProxy(mode, method,
+                                        applicationInfo.nativeLibraryDir,
+                                        File(filesDir, "aether").absolutePath)
+                                } else {
+                                    Mobilebridge.startProxyWithUpstream(mode, upstream)
+                                }
+                            }
+                        }
+                        if (wanted) {
+                            connectedAt = SystemClock.elapsedRealtime()
+                            getSystemService(NotificationManager::class.java)
+                                .notify(NOTIFICATION_ID, notification(title, true))
+                        }
+                        while (wanted && isActive) {
+                            val status = JSONObject(Mobilebridge.proxyStatus())
+                            if (!status.optBoolean("running")) {
+                                lastError = status.optString("error", "Connection stopped")
+                                wanted = false
+                                break
+                            }
+                            delay(1000)
                         }
                     } catch (_: CancellationException) {
                         // A user-initiated stop is not a connection failure.
                     } catch (e: Exception) {
-                        if (wanted) lastError = e.message ?: "Could not start Go proxy"
+                        if (wanted) lastError = e.message ?: "Could not start connection"
                         wanted = false
                     } finally {
                         if (!wanted) {
+                            connectedAt = 0
                             withContext(NonCancellable + Dispatchers.IO) {
                                 mutex.withLock { Mobilebridge.stopProxy() }
                                 withContext(Dispatchers.Main) {
@@ -83,14 +120,17 @@ class ProxyService : Service() {
             }
             ACTION_STOP -> {
                 wanted = false
+                connectedAt = 0
+                stopping = true
                 startup?.cancel()
                 // Invalidate a blocked/slow Go startup immediately.
-                Mobilebridge.stopProxy()
+                Mobilebridge.cancelProxyStart()
                 worker.launch {
                     mutex.withLock { Mobilebridge.stopProxy() }
                     withContext(Dispatchers.Main) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
+                        stopping = false
+                        stopSelfResult(startId)
                     }
                 }
             }
@@ -101,15 +141,20 @@ class ProxyService : Service() {
 
     override fun onDestroy() {
         wanted = false
+        connectedAt = 0
         startup?.cancel()
-        Mobilebridge.stopProxy()
+        Mobilebridge.cancelProxyStart()
+        worker.launch(NonCancellable) {
+            mutex.withLock { Mobilebridge.stopProxy() }
+        }
         worker.cancel()
         super.onDestroy()
     }
 
-    private fun notification(mode: String): Notification {
+    private fun notification(title: String, active: Boolean = false): Notification {
         val open = PendingIntent.getActivity(
-            this, 1, Intent(this, MainActivity::class.java),
+            this, 1, Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val stop = PendingIntent.getService(
@@ -117,12 +162,17 @@ class ProxyService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("KTest · Local proxy")
-            .setContentText("${mode.replaceFirstChar { it.uppercase() }} · Proxy mode")
+            .setSmallIcon(R.drawable.ic_stat_ktest)
+            .setColor(0xFF5EF2C4.toInt())
+            .setContentTitle(if (active) "Connected · $title" else "Connecting · $title")
+            .setContentText(if (active) "Local proxy active for apps you configure" else "Starting and verifying the route…")
+            .setShowWhen(active)
+            .setUsesChronometer(active)
+            .setWhen(System.currentTimeMillis())
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Disconnect", stop).build())
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .addAction(Notification.Action.Builder(null, if (active) "Disconnect" else "Cancel", stop).build())
             .build()
     }
 }

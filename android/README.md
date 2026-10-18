@@ -25,10 +25,10 @@ The Go policy catalog has all seven desktop modes, but **not every launcher is a
 | --- | --- |
 | Balanced | Go in-process plain and ClientHello-splitting proxy subset |
 | Fast | Same Go subset with shared Fast policy |
-| Aether | Optional existing CLI-style external loopback SOCKS5 exit only |
-| Aether to Tor | Disabled pending Android lifecycle integration of Aether's existing Tor backend |
+| Aether | Managed packaged core with native method selection; optional existing loopback SOCKS path |
+| Aether to Tor | Managed Aether Tor-only backend; Tor Project and foreign-exit checks required before connection is active |
 | Windscribe | Disabled pending portable original WStunnel / Xray / ByeDPI orchestration |
-| Aether to Psiphon | Disabled pending Android lifecycle integration of Aether's bundled Psiphon backend |
+| Aether to Psiphon | Managed Aether Psiphon / CDN profiles; bundled shirokhorshid helper, no external SOCKS substitution |
 | Windscribe through Aether | Disabled until the original two-core carrier is portable |
 
 This is *not yet feature parity* with `connectSession`. Android must implement the required lifecycle and OS integration of the existing binaries and helpers; it need not copy all desktop orchestration. Do not report a mode as connected until its selected native backend actually runs and its traffic is verified.
@@ -53,11 +53,11 @@ The app UID is excluded from the TUN if a future supported Go packet dataplane i
 - Shared Go proxy mode routing, bounded foreign-exit checking and app-facing SOCKS5/HTTP proxy.
 - Network DNS/TCP/TLS diagnostics, CDN fronting and ECH tests provided by existing Go packages.
 - MITM/CA source remains intact in Go; it is not installed on Android.
-- English UI with animated Connect/Disconnect, Tools, Settings and manual update checks.
+- English dark UI: animated power control with phase steps (prepare / start core / verify exit), session uptime, copyable SOCKS5/HTTP endpoints and per-target HTTPS verification; Tools as collapsible cards; Settings with manual update checks, packaged-core hash verification (`InspectAndroidBundle`), privacy notes and open-source notices for the shipped AGPL/GPL/BSD/MIT executables. Adaptive launcher icon, monochrome notification icon with a session chronometer.
 - Diagnose can select automatic TCP, IPv4 or IPv6; connection startup exposes its verification phase and supports cancellation/reconnect.
 - CDN scan uses the CLI's Cloudflare/Akamai/Fastly/Google candidate policy and HTTPS scanner, with a 1..300 budget, 90-second ceiling, progress and cancellation. Some providers have a small seed inventory or depend on DNS bootstrap; this is not an unrestricted scan or proof of arbitrary fronting.
 - Windscribe carrier testing uses the shared Go WStunnel/Stealth probe for one explicit entry and certificate-valid hostname. This does not implement the desktop node catalog/SNI comparison, OpenVPN authentication, official app integration or an operational Windscribe VPN.
-- `TestFronts` exposes the original bounded multi-edge comparison and controlled-origin proof API; the existing GUI retains its one-edge form.
+- The fronting tool uses `TestFronts`: 1..12 edges, 1..3 rounds and optional controlled-origin proof, with per-edge TCP/TLS/HTTP/origin counts. Verified CDN-scan edges can be handed to it directly.
 
 ## DNS is an observed path, not an availability guarantee
 
@@ -67,7 +67,7 @@ Packet DNS failures appear separately in proxy status and the connection screen.
 
 ## Source verification without APK/AAR output
 
-`bash android/scripts/check-sources.sh` generates the actual gomobile Java API and compiles it with the pinned HEV 2.19.0 Java declarations, then runs `:app:compileDebugKotlin` in a temporary copy. It requires Linux, Go, JDK 17+, Android platform 36 and Gradle 9.5.0. It leaves `go.mod`/`go.sum` unchanged and builds **no native libraries, AARs or APKs**. Go CI includes this source check and formatting of `mobilebridge`.
+`bash android/scripts/check-sources.sh` generates the actual gomobile Java API, then compiles Kotlin against the unchanged checksum-pinned HEV 2.19.0 AAR and merges its actual manifest in a temporary copy. It requires Linux, Go, JDK 17+, Android platform 36 and Gradle 9.5.0. It leaves `go.mod`/`go.sum` unchanged and builds **no native libraries, AARs or APKs**; the existing HEV AAR is downloaded and verified, not rebuilt. Go CI includes this source check and formatting of `mobilebridge`.
 
 Passing it establishes Java/Kotlin source compatibility, including callback signatures. It does not establish native linkage, JNI loading, rendered UI, device traffic, leaks, battery use or reconnect on a phone. The native-release workflow remains manual and separate.
 
@@ -106,35 +106,53 @@ target. The pinned arm64 executables meet at least 16 KiB ELF load alignment.
 The x86_64 helper executables have 4 KiB alignment and are not a claim of 16 KiB
 emulator/device support.
 
-Observed native evidence: the pinned x86_64 Aether and Psiphon executables ran
-their help/version commands on `emulator-5554`, outside the app sandbox, without
-starting a tunnel or registering credentials. This proves base executable
-compatibility on that emulator, **not** execution under the app UID, managed
-network connectivity, a Tor circuit, whole-device routing or leak protection.
+Native help/version commands initially ran in the emulator shell. Later
+validation builds launched Aether and its Psiphon helper under the app UID on
+`emulator-5554`. UI Cancel removed the native parent and helper in about 0.14s;
+a forced parent exit also removed the helper and surfaced an error without
+publishing a connection. These are lifecycle observations on one emulator,
+not proof of native Internet egress or a full-device VPN.
 
-The source API now exposes `AetherProfileCatalog` and `InspectAndroidBundle`.
-Connecting the existing native cores to Android's connection service through
-the shared process runner, private paths and required policy checks is still
-required. Aether owns its gateway scans and native reconnect. Profile
-definitions or packaged files alone are not an active Aether/Psiphon/Tor connection.
+The service now calls `StartNativeProxy` with `ApplicationInfo.nativeLibraryDir` and app-private state. Aether owns initial enrollment, gateway scans and native reconnect; Android does not invoke a second Go enrollment/scanning supervisor. Startup, cancellation and native exit are tied to the shared process runner. The existing Go policy proxy remains to enforce verified-exit leases and protected routing. Aether/Psiphon native execution under the app UID has been observed on emulator-5554; verified foreign egress and sustained native traffic remain separate acceptance requirements.
 
 ## Release gate
 
-**Do not run the APK/AAR workflow without approval.** `.github/workflows/android-build.yml` remains **manual-only**. Go CI runs formatting, vet, Linux/Windows tests and race tests without creating Android APKs or feature-branch distributable artifacts.
+**Final release remains gated.** The user has now requested the final app after audit/debugging, including UI/UX and documentation; local validation builds are authorized for that work. A validation APK is not a release-ready app. `.github/workflows/android-build.yml` remains **manual-only**. Go CI runs formatting, vet, Linux/Windows tests and race tests without creating Android APKs or feature-branch distributable artifacts.
 
 Before calling this an Android port complete: wire the smallest required native-core lifecycle and mode adapters, use Aether's existing Tor/Psiphon support, complete the remaining Xray/ByeDPI/Windscribe integration, and validate the complete native HEV/JNI packet path on physical phones and real networks. Evaluate HEV directly against a compatible selected core before expanding the Go packet relay; preserve all mode/egress policy and validate each backend's actual UDP/DNS/IPv6 support. An Aether release supporting Termux is not automatically an app integration: Android 10+ restricts executing downloaded files from a writable app home. Native packaging must meet [Android's executable-code rules](https://developer.android.com/about/versions/10/behavior-changes-10#execute-permission), rather than adding a download-and-exec workaround.
 
-### Implementation status, 2026-10-17
+### Implementation status, 2026-10-18
 
 | Area | Implemented in source | Still required |
 | --- | --- | --- |
-| Shared Go connection | SOCKS/HTTP/probe lifetime; Aether profiles, identity/enrollment contracts and scoped native process execution | Thin Android native-core lifecycle and policy integration; no wholesale supervisor port |
+| Shared Go connection | Shared SOCKS/HTTP lifecycle and managed native launch/cancel/exit handling | Full lifecycle/reconnect device evidence; no wholesale supervisor port |
 | Balanced / Fast | Existing Go TCP routes, packet DNS and verified-exit UDP | Xray/ByeDPI/native strategy bundle and device evidence |
-| Aether | External SOCKS path; shared profile/enrollment adapters; pinned Android packaging and runtime verification | Wire the packaged core to Android and validate actual native sessions; reuse core scans/reconnect |
-| Tor / Psiphon | Existing Aether backends, including bundled shirokhorshid Psiphon | Android lifecycle/configuration and live verification through those same backends |
+| Aether | Packaged core launch, method selection and optional external SOCKS; native scans/reconnect reused | Verified native egress and sustained traffic |
+| Tor / Psiphon | Existing Aether backends connected to Android, shared Tor verification and foreign-exit checks | Real egress and sustained traffic; process launch alone is insufficient |
 | Windscribe / through Aether | Shared carrier probe exposed to Android | Operational native bridge, catalog/profile integration and authenticated data |
 | UDP / DNS | Real SOCKS UDP, wire DoH, DNS over UDP/TCP, no direct UDP fallback | Evaluate native-core packet support before extending Go; public-exit data-plane tests and HEV/TUN validation |
 | IPv6 / whole-device VPN | IPv6 packet encoding and platform wiring | Dual-stack public egress, leak tests and device approval gates |
 | CDN / ECH tools | Shared four-provider scanner, one-route front/ECH UI, multi-edge Go API | Full CLI tool parity and rendered/device verification |
 | MITM / CA | Go implementation preserved, no automatic trust changes | Explicit Android consent/trust flow and optional activation |
-| Verification / release | Go checks, ARM bridge package compilation, source checks, official native payload verification and limited x86_64 executable checks | App-UID native execution, JNI/TUN/device/network/battery/reconnect/signing validation; APK/AAR release remains gated |
+| Verification / release | Go checks, ARM bridge package compilation, source checks, official native payload verification and limited x86_64 executable checks | App-UID native execution, JNI/TUN/device/network/battery/reconnect/signing validation; final release remains gated |
+
+### Actual build boundary
+
+The app requires **Android 10 / API 29 or later**, matching HEV 2.19.0. The first real manifest merge rejected the old API 26 setting; no manifest override is used. Local validation produced the real Go bridge for ARMv7, arm64 and x86_64, and built both ARMv7/arm64 and x86_64 debug APKs; the x86_64 candidate was installed on emulator-5554. `-PktestAbis=x86_64` selects emulator packaging; the default ABI set remains ARMv7/arm64. Gradle adds native extraction to the merged manifest through `jniLibs.useLegacyPackaging`. Final native hashes, signatures, device behavior and actual traffic must be verified per candidate.
+
+### Device observations, 2026-10-18
+
+| Check | Observed result | Boundary |
+| --- | --- | --- |
+| Native Aether/Psiphon launch | Parent and helper ran under the app UID | Process startup, not an authenticated/verified exit |
+| User cancellation | Native parent/helper disappeared in about 0.14s; UI returned to Disconnected | One x86_64 emulator |
+| Unexpected native exit | Helper reaped, startup error visible, no false connected state | Forced app-owned parent termination before verification |
+| Mode change after failure | Previous mode's error no longer reappears | Reproduced before the fix and checked again after it |
+| Actual HTTP proxy data | Certificate-verified HTTPS to example.com returned HTTP 200 through the Android HTTP listener | Balanced route through the current system network, not a foreign exit/VPN proof |
+| Native Tor verification | Seven-minute budget expired during the neutral HTTPS exit check; no connection was advertised | Does not prove all Tor paths or endpoints are blocked |
+| UI | Mode picker, method choice persistence, cancel/error states, navigation, 1.3 font scale and long text input inspected | Emulator input panel observed; full phone keyboard/TalkBack/physical-device acceptance remains open |
+| Native ELF preparation | arm64 Go JNI and HEV PT_LOAD alignment both 16 KiB; packaged core hashes verified for ARM and x86_64 APKs | Physical 16 KiB device execution not tested |
+
+No TUN or global network routing was enabled during these checks. Windscribe
+modes, remaining desktop strategy/tool parity, live native egress, full packet
+routing and final production signing/release remain incomplete.

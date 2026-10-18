@@ -65,12 +65,6 @@ type measurements struct {
 	tlsVersion, tlsALPN              string
 }
 
-func (m *measurements) record(phase string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.phase = phase
-}
-
 func (m *measurements) trace() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
 		DNSStart: func(httptrace.DNSStartInfo) {

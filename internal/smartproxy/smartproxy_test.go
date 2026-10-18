@@ -3,6 +3,7 @@ package smartproxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -731,4 +732,21 @@ func TestNonTLSFirstFlightIsOfferedToTheExitWhenTheDirectRouteOpensButStaysSilen
 	if w := p.Winners()[net.JoinHostPort(host, port)]; w != "exit" {
 		t.Fatalf("remembered %q for %s, want exit", w, host)
 	}
+}
+
+// Loopback test peers use these helpers; production does not.
+func (p *Proxy) hasMemory(host, port string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m := p.memoryLocked(host, port)
+	return m != nil && m.winner != ""
+}
+
+// socksRequest performs the server side of SOCKS5 (no authentication, CONNECT).
+func socksRequest(c net.Conn) (host, port string, err error) {
+	command, host, port, err := socksCommand(c)
+	if err == nil && command != 1 {
+		return "", "", errors.New("CONNECT required")
+	}
+	return host, port, err
 }

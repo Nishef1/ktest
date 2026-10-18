@@ -164,7 +164,7 @@ class KTestVpnService : VpnService() {
             Intent(this, KTestVpnService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setSmallIcon(R.drawable.ic_stat_ktest)
             .setContentTitle("KTest · Go VPN adapter")
             .setContentText(detail)
             .setContentIntent(open)

@@ -9,11 +9,15 @@ android {
 
     defaultConfig {
         applicationId = "com.nishef.ktest"
-        minSdk = 26
+        // Pinned HEV 2.19.0 requires Android 10; do not override its manifest.
+        minSdk = 29
         targetSdk = 35
         versionCode = 4
         versionName = "0.3.0"
-        ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }
+        // The default device build remains ARM. Explicit x86_64 selection is
+        // for emulator validation against the same packaged upstream cores.
+        ndk { abiFilters += (providers.gradleProperty("ktestAbis").orNull
+            ?.split(",") ?: listOf("armeabi-v7a", "arm64-v8a")) }
     }
 
     buildFeatures {

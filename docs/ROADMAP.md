@@ -1,4 +1,4 @@
-# Engineering roadmap (reviewed 2026-10-17)
+# Engineering roadmap (reviewed 2026-10-18)
 
 Current target: finish Android integration of the existing KTest modes and tools by reusing upstream cores. The Android port is **incomplete**. Source compilation, packaged executables and a listening proxy are separate milestones from an authenticated connection or a working device-wide VPN.
 
@@ -26,17 +26,17 @@ The pinned Aether v2.3.0 release already builds Tor support with `--features tor
 
 | Area | Checked implementation | Required to finish |
 | --- | --- | --- |
-| Shared lifecycle | CLI/mobile SOCKS/HTTP session lifecycle, scoped child-process cleanup | Thin Android native-core start/stop integration; do not port the whole CLI supervisor |
-| Native bundle | Pinned Android Aether/Psiphon/Lyrebird payloads, archive/file verification and packaging script | Execution under the app UID, correct private state/helper paths, distribution notices |
+| Shared lifecycle | Shared SOCKS/HTTP lifecycle plus managed Android native-core launch/cancel/exit handling | Complete device lifecycle/reconnect evidence; no wholesale CLI supervisor port |
+| Native bundle | Pinned payloads, runtime verification and observed Aether/Psiphon execution under the app UID on emulator-5554 | Validate each backend and ARM devices; distribution notices |
 | Balanced / Fast | Existing Go direct/splitting subset and shared routing policy | Wire existing native local strategies and validate mode behavior on a device |
-| Aether | External loopback SOCKS works at the API level; shared method catalog and native argument construction | Launch the packaged Aether binary from the Android service and validate a real session |
-| Tor / Psiphon | Aether already supplies these backends; desktop modes select them | Android lifecycle/configuration and mode-specific live verification; no new Tor/Psiphon engine |
+| Aether | Packaged core launch and method selection wired to Android; external SOCKS retained as an optional Aether path | Verified live foreign egress and sustained traffic for selected native methods |
+| Tor / Psiphon | Android selects existing Aether backends; shared Tor identity check and foreign-exit verification; Psiphon child launch observed | Real Tor/Psiphon egress and sustained traffic; process startup is not a successful connection |
 | Windscribe / through Aether | Local-only / WARP-carrier policies and a shared carrier probe exist | Android bootstrap and supported Windscribe integration; authenticated end-to-end data |
 | UDP / DNS / IPv6 | Shared Go UDP relay, wire DoH, TCP DNS and IPv6 address encoding have loopback coverage | Prefer native packet support when the selected backend supports it; prove public egress, DNS behavior and HEV/TUN forwarding per mode |
 | Whole-device VPN | VpnService and HEV adapter source exists | Device packet-path, feedback-loop, leak and reconnect validation; readiness gates remain false |
-| GUI / tools | Connection, Tools and Settings; bounded CDN scan and selected diagnostics | Connect method controls to native launch; complete required CLI tool/settings parity and interaction checks |
+| GUI / tools | Redesigned UI: phase steps, uptime, per-target route checks, multi-edge fronting with origin proof, CDN-scan hand-off, packaged-core verification, open-source notices, launcher/notification icons; rendered on emulator | Physical-device/TalkBack checks and remaining CLI tool parity (Windscribe node catalog, Aether comparison) |
 | MITM / CA | Existing optional Go implementation retained | Review equivalent Xray functionality before extending it; preserve explicit consent and domain/trust restrictions |
-| Verification / release | Go CI, Android source compilation, pinned payload verification; limited emulator shell help/version checks | App-UID/JNI/device/network/battery/signing evidence; APK/AAR production remains on hold |
+| Verification / release | Go checks; real three-ABI Go AAR and ARM/x86_64 debug APKs built locally; native hashes, manifest and install checked | Sustained traffic, HEV/TUN, ARM/physical-device/network/battery/signing validation; final release incomplete |
 
 An `Aether to Tor` / `Aether to Psiphon` label selects an Aether backend; it does not authorize adding a WARP hop to the current Tor-only/Psiphon-only policies. Aether does not replace Windscribe, Xray or ByeDPI merely by having Tor/Psiphon support. See [mode contracts](CONNECTION_MODES.md).
 
@@ -46,14 +46,16 @@ An `Aether to Tor` / `Aether to Psiphon` label selects an Aether backend; it doe
 2. **Validate the simplest packet path.** For a compatible single-core mode, evaluate HEV directly against that core's SOCKS endpoint before extending the Go relay. A direct path is acceptable only with equivalent mode enforcement, verification expiry and fail-closed behavior. Aether SOCKS UDP support does not establish UDP support in every Tor/Psiphon backend. Mixed modes may still require KTest routing. Validate DNS/UDP/IPv6, feedback prevention, disconnect and network changes before enabling VPN readiness gates.
 3. **Remove superseded management.** For each proposed deletion, identify live callers and the upstream replacement, then verify the same behavior through that replacement. Review CLI profile racing, periodic health retirement, staged enrollment and the Go proxy in pure-core modes. Keep explicit comparison tools separate from native gateway scanning. Do not kill a reconnecting core solely because a diagnostic destination is blocked.
 4. **Finish the interface and mode adapters.** Expose existing core options and existing Go diagnostic functions. Complete the supported Windscribe path separately. Verify progress, cancellation, errors, settings and reconnect through real interaction; avoid new networking engines in Kotlin.
-5. **Validate and release only when authorized.** Run source checks first, then app/native/JNI/HEV tests on physical phones and relevant networks, leak and battery tests, licensing/notices and stable signing. The standing hold on producing a fresh APK/AAR remains in effect; do not dispatch the manual release workflow as part of source work.
+5. **Validate and release only when authorized.** Run source checks first, then app/native/JNI/HEV tests on physical phones and relevant networks, leak and battery tests, licensing/notices and stable signing. The user now requests a final app after audit/debugging, including UI/UX and documentation. Local validation builds are authorized for that work. Do not label a debug validation APK as final or publish a release before the required evidence exists.
 
-## Code reuse audit (2026-10-17)
+## Code reuse audit (updated 2026-10-18)
 
 | Code / responsibility | Decision | Evidence / remaining condition |
 | --- | --- | --- |
 | Unused `warpManager.waitWhileConnected` / `waitRetry` | Removed | No callers; the active manager loop already handles those states |
 | `aetherLauncher` and manager DNS-result plumbing | Removed | Launcher ignored the DNS result; both native launch sites now call the shared `aether.Run` directly |
+| Legacy CLI HTTP bridge, process-kill/log helpers and unused probe measurement setter | Removed | No callers remained; the shared connection session owns the HTTP bridge |
+| Test-only SOCKS peer / route-memory helpers | Moved out of production | Existing regression tests keep these helpers; runtime builds do not need them |
 | `internal/coreprocess` | Retain | OS process groups / Job Objects own child cleanup; upstream tunnel reconnect does not replace app-owned process lifetime |
 | `internal/aether` profile, identity and bundle contracts | Retain, keep narrow | Consumed by CLI/mobile; no MASQUE/WireGuard/Tor/Psiphon protocol implementation was added here |
 | Staged identity enrollment | Retain pending equivalent native lifecycle proof | Native core performs registration; KTest staging currently protects saved identities from replacement and suppresses credential output |
@@ -68,3 +70,9 @@ An `Aether to Tor` / `Aether to Psiphon` label selects an Aether backend; it doe
 - Preserve certificate verification for application/diagnostic HTTPS. Pinned Aether v2.3.0 has upstream TLS/API/reconnect limitations; reusing its core does not erase them. See [network diagnosis](NETWORK_DIAGNOSIS.md).
 - Never silently install a CA or enable global proxy, routes, DNS or TUN. Keep credentials, identities, personal IP logs and raw field measurements out of this public repository. Bound scans and use permitted targets.
 - Passing CI, `--help`, a SOCKS listener or HTTP CONNECT 200 is not proof of a working VPN. Report tested, failed, untested and not validated separately.
+
+## Build findings (2026-10-18)
+
+The first actual APK build exposed a missed dependency contract: pinned HEV 2.19.0 declares minSdk 29 while the app declared 26. The app now requires **Android 10+**, without overriding the upstream manifest. Source CI now uses the real pinned HEV AAR and merges its manifest, rather than substituting Java declarations alone. Go mobile tooling is pinned to the same version as source CI. Gradle owns native extraction through `useLegacyPackaging`; the merged APK manifest and native hashes must be checked.
+
+Device checks observed native Aether/Psiphon parent/helper ownership, user cancellation (about 0.14s), cleanup after a forced native parent exit, mode changes after errors and actual certificate-verified HTTPS through the Android HTTP proxy (Balanced, example.com HTTP 200). Native Tor did not obtain a verified exit within its seven-minute budget; that result is not proof of universal blocking. UI checks covered the mode/method controls, errors, navigation, font scale 1.3 and long text input. The full verification boundary is recorded in [Android device observations](../android/README.md#device-observations-2026-10-18). Final app delivery remains open, including native egress, packet VPN, Windscribe, remaining tools and physical-device evidence.

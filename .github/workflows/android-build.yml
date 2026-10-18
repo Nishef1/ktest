@@ -35,8 +35,9 @@ jobs:
       - name: Build Go mobile AAR
         run: |
           export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/28.2.13676358"
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go get -tool golang.org/x/mobile/cmd/gobind
+          MOBILE_VERSION=v0.0.0-20261011034528-197770444867
+          go install golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION
+          go get -tool golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION
           gomobile init
           mkdir -p android/app/libs
           gomobile bind -target=android/arm,android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
