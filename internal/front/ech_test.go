@@ -104,7 +104,10 @@ func TestAcceptedSessionDoesNotEraseRefusalTotals(t *testing.T) {
 }
 
 func TestHTTPStatusPrefixDoesNotMisclassifyCDNFailures(t *testing.T) {
-	for _, tc := range []struct{ input string; want int }{
+	for _, tc := range []struct {
+		input string
+		want  int
+	}{
 		{"HTTP/1.1 200 OK\r\n", 200},
 		{"HTTP/1.1 403 Forbidden\r\n", 403},
 		{"HTTP/1.1 421 Misdirected Request\r\n", 421},
