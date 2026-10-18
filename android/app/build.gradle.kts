@@ -13,8 +13,8 @@ android {
         minSdk = 29
         targetSdk = 35
         // Monotonic Android package revision; not a CPU architecture version.
-        versionCode = 10
-        versionName = "0.3.2-preview"
+        versionCode = 11
+        versionName = "0.3.3-preview"
         // The default device build remains ARM. Explicit x86_64 selection is
         // for emulator validation against the same packaged upstream cores.
         ndk { abiFilters += (providers.gradleProperty("ktestAbis").orNull
@@ -37,7 +37,7 @@ android {
         jniLibs.useLegacyPackaging = true
         // Runtime hashes refer to the unmodified upstream executables.
         jniLibs.keepDebugSymbols += setOf(
-            "**/libaether.so", "**/libpsiphon-tunnel-core.so", "**/liblyrebird.so", "**/libciadpi.so"
+            "**/libaether.so", "**/libpsiphon-tunnel-core.so", "**/liblyrebird.so", "**/libciadpi.so", "**/libxray.so"
         )
     }
 
