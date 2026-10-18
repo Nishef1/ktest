@@ -107,3 +107,30 @@ func TestAndroidFrontCARejectsBrokenOrUnsafeState(t *testing.T) {
 		t.Fatal("exported broken CA")
 	}
 }
+
+func TestAndroidFrontingOnlyUsesExistingValidatedPrivateCA(t *testing.T) {
+	root := t.TempDir()
+	if _, err := loadAndroidFrontCA(root); err == nil {
+		t.Fatal("accepted missing local CA for fronting")
+	}
+	if _, err := GenerateFrontCA(root); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := loadAndroidFrontCA(root)
+	if err != nil || !ca.Permits("www.youtube.com") || ca.Permits("bank.example") {
+		t.Fatalf("did not restrict fronting to approved domain families: %v", err)
+	}
+	if _, err := StartAndroidProxyWithFronting("tor", "", "missing", root); err == nil {
+		t.Fatal("fronting must not attach to Tor foreign exit")
+	}
+	if _, err := StartAndroidProxyWithFronting("balanced", "", "", root); err == nil {
+		t.Fatal("fronting must require packaged local ByeDPI core")
+	}
+	dir := filepath.Join(root, androidFrontCADirectory)
+	if err := os.Remove(filepath.Join(dir, front.KeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadAndroidFrontCA(root); err == nil {
+		t.Fatal("accepted incomplete CA after key removal")
+	}
+}
