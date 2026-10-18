@@ -51,6 +51,8 @@ jobs:
           gomobile bind -target=android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
       - name: Fetch pinned HEV Android tun2socks adapter
         run: bash android/scripts/fetch-hev-aar.sh
+      - name: Inspect official Xray ARMv8 candidate
+        run: python3 android/scripts/inspect-xray.py
       - name: Prepare pinned official native cores
         run: python3 android/scripts/prepare-native-cores.py --abis arm64-v8a
       - name: Build Android preview APK (debug-signed, internal testing only)
