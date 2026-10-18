@@ -50,6 +50,7 @@ type wsProgressSnapshot struct {
 	failStages                                             map[string]int
 	methods                                                []wsMethodProgress
 	incomplete                                             bool
+	mappingReason                                          string
 	inapplicable                                           []string
 }
 
@@ -241,7 +242,10 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		}
 	}
 	// Missing provider mapping is incomplete discovery, not exhausted coverage.
-	s.incomplete = b.opts.direct && b.opts.serverIP == "" && len(b.catalog.endpoints(wsProgressHost(key))) == 0
+	s.incomplete = b.opts.direct && b.opts.serverIP == "" && b.catalog != nil && len(b.catalog.endpoints(wsProgressHost(key))) == 0
+	if s.incomplete {
+		s.mappingReason = b.catalog.diagnostic(wsProgressHost(key))
+	}
 	return s
 }
 
@@ -388,7 +392,12 @@ func wsPanelLines(s wsProgressSnapshot, width int) []string {
 		"VPN: " + wsShortStatus(s),
 	}
 	if s.incomplete {
-		lines = append(lines, "Provider mapping incomplete; more variants may be discovered.")
+		if s.total == 0 {
+			lines = append(lines, "NO WRAPPED CARRIERS: zero tests were run (not 0 failed).")
+		}
+		lines = append(lines, "Provider mapping: "+s.mappingReason)
+		lines = append(lines, "Exact Windscribe node mapping required; no IP guessing.")
+		lines = append(lines, "Retry discovery is automatic; reconnect Windscribe manually after mapping recovers.")
 	}
 	if s.connected > 0 && s.carrier != "" {
 		lines = append(lines, "Confirmed carrier: "+s.carrier)
@@ -513,7 +522,10 @@ func (v *wsProgressView) summary(s wsProgressSnapshot) {
 			row.name, row.tried, row.total, row.running, row.failed, row.replied, row.last))
 	}
 	if s.incomplete {
-		lines = append(lines, "Discovery incomplete; the carrier inventory is not exhaustive.")
+		lines = append(lines, "Discovery incomplete: "+s.mappingReason)
+		if s.total == 0 {
+			lines = append(lines, "No carrier variants were generated or tested; do not treat this as a failed anti-DPI scan.")
+		}
 	} else if s.remaining > 0 {
 		lines = append(lines, fmt.Sprintf("%d untried variants remain for Windscribe's next connection.", s.remaining))
 	} else if s.cooling > 0 {
