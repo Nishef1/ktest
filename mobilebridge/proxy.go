@@ -37,9 +37,18 @@ type proxySession struct {
 }
 
 type proxyDiagnostics struct {
-	mu          sync.Mutex
-	dnsFailures int
-	dnsError    string
+	mu             sync.Mutex
+	dnsFailures    int
+	dnsError       string
+	tcpAttempts    int
+	tcpFailures    int
+	tlsResponses   int
+	udpAssociations int
+	udpFailures    int
+	udp443Failures int
+	lastPath       string // method label only; no destination, credentials, or payloads
+	lastRouteMS    int64
+	lastConnectMS  int64
 }
 
 type proxyReport struct {
@@ -55,6 +64,15 @@ type proxyReport struct {
 	Error           string `json:"error,omitempty"`
 	DNSFailures     int    `json:"dns_failures"`
 	DNSError        string `json:"dns_error,omitempty"`
+	TCPAttempts     int    `json:"tcp_attempts"`
+	TCPFailures     int    `json:"tcp_failures"`
+	TLSResponses    int    `json:"tls_responses"`
+	UDPAssociations int    `json:"udp_associations"`
+	UDPFailures     int    `json:"udp_failures"`
+	UDP443Failures  int    `json:"udp_443_failures"`
+	LastRoute       string `json:"last_route,omitempty"`
+	LastRouteMS     int64  `json:"last_route_ms"`
+	LastConnectMS   int64  `json:"last_connect_ms"`
 	Native          bool   `json:"native"`
 	Method          string `json:"method,omitempty"`
 	Fronting        bool   `json:"fronting"`
@@ -103,6 +121,9 @@ func currentReportLocked() proxyReport {
 	}
 	activeProxy.diagnostics.mu.Lock()
 	report.DNSFailures, report.DNSError = activeProxy.diagnostics.dnsFailures, activeProxy.diagnostics.dnsError
+	report.TCPAttempts, report.TCPFailures, report.TLSResponses = activeProxy.diagnostics.tcpAttempts, activeProxy.diagnostics.tcpFailures, activeProxy.diagnostics.tlsResponses
+	report.UDPAssociations, report.UDPFailures, report.UDP443Failures = activeProxy.diagnostics.udpAssociations, activeProxy.diagnostics.udpFailures, activeProxy.diagnostics.udp443Failures
+	report.LastRoute, report.LastRouteMS, report.LastConnectMS = activeProxy.diagnostics.lastPath, activeProxy.diagnostics.lastRouteMS, activeProxy.diagnostics.lastConnectMS
 	activeProxy.diagnostics.mu.Unlock()
 	if activeProxy.native != nil {
 		report.Native, report.Method = true, activeProxy.native.method
@@ -321,11 +342,29 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	config := smartproxy.Config{Upstreams: upstreams, RecoverIPHostSNI: localDir != ""}
 	diagnostics := &proxyDiagnostics{}
 	config.OnEvent = func(e smartproxy.Event) {
+		if e.Probe { return }
+		diagnostics.mu.Lock()
+		defer diagnostics.mu.Unlock()
 		if e.Port == "53" && e.Err != "" {
-			diagnostics.mu.Lock()
 			diagnostics.dnsFailures++
-			diagnostics.dnsError = e.Err
-			diagnostics.mu.Unlock()
+			diagnostics.dnsError = "DNS exchange failed"
+		}
+		if e.UDP {
+			if e.OK { diagnostics.udpAssociations++ } else if e.Err != "" {
+				diagnostics.udpFailures++
+				if e.Port == "443" { diagnostics.udp443Failures++ }
+			}
+			return
+		}
+		if e.Port != "53" {
+			diagnostics.tcpAttempts++
+			if e.Err != "" { diagnostics.tcpFailures++ }
+			if e.TLSResponse { diagnostics.tlsResponses++ }
+			if e.OK && e.Path != "" {
+				diagnostics.lastPath = e.Path
+				diagnostics.lastRouteMS = e.Took.Milliseconds()
+				diagnostics.lastConnectMS = e.ConnectMS
+			}
 		}
 	}
 	connectionpolicy.Configure(mode, &config, rules.Match)
