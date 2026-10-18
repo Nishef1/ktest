@@ -102,11 +102,24 @@ jobs:
           Push-Location $destination
           try {
             $f = "ip and tcp and !loopback and !impostor and ((outbound and ip.DstAddr == 8.8.8.8 and tcp.DstPort == 443) or (inbound and ip.SrcAddr == 8.8.8.8 and tcp.SrcPort == 443))"
-            & ./winws2.exe "--wf-raw=$f" "--wf-save=preview-filter.txt"
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path preview-filter.txt)) {
-              throw "Zapret2 could not validate the exact single-target filter"
+            $version = & ./winws2.exe --version
+            if ($LASTEXITCODE -ne 0 -or -not ($version -join "`n").Trim()) {
+              throw "Pinned Zapret2 executable did not report its version"
             }
-            Remove-Item preview-filter.txt
+            Write-Host "Pinned winws2: $($version -join ' ')"
+            $common = @("--wf-raw=$f", "--lua-init=@lua/zapret-lib.lua", "--lua-init=@lua/zapret-antidpi.lua", "--filter-tcp=443", "--filter-l7=tls", "--payload=tls_client_hello")
+            $presets = @(
+              @("--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,rndsni,dupsid"),
+              @("--lua-desync=multisplit:pos=1,midsld"),
+              @("--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,rndsni,dupsid", "--lua-desync=multisplit:pos=1,midsld:seqovl=5:seqovl_pattern=0x1603030000")
+            )
+            foreach ($preset in $presets) {
+              & ./winws2.exe @common @preset "--wf-save=preview-filter.txt"
+              if ($LASTEXITCODE -ne 0 -or -not (Test-Path preview-filter.txt)) {
+                throw "Zapret2 did not accept a pinned single-IP packet preset"
+              }
+              Remove-Item preview-filter.txt
+            }
           } finally {
             Pop-Location
           }
