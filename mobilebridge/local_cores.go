@@ -33,6 +33,23 @@ func StartAndroidProxy(mode, upstream, nativeLibraryDir string) (string, error) 
 	return startProxy(mode, upstream, nil, nativeLibraryDir)
 }
 
+// StartAndroidProxyWithFronting is opt-in. Kotlin verifies that the exact
+// app-created certificate is in Android's user CA store and asks the user to
+// enable fronting before calling this API. The Go side validates CA files
+// again and reuses the desktop Fronter's per-family learned fallback.
+func StartAndroidProxyWithFronting(mode, upstream, nativeLibraryDir, privateFilesDir string) (string, error) {
+	if mode != "balanced" && mode != "fast" {
+		return "", errors.New("fronting is available only for Balanced or Fast")
+	}
+	if nativeLibraryDir == "" {
+		return "", errors.New("packaged ByeDPI directory is required")
+	}
+	if privateFilesDir == "" {
+		return "", errors.New("private files directory is required for fronting")
+	}
+	return startProxyWithFronting(mode, upstream, nil, nativeLibraryDir, privateFilesDir)
+}
+
 func launchAndroidLocalCores(ctx context.Context, nativeDir string) (*localCoreSet, error) {
 	bin, err := byedpi.AndroidBinary(nativeDir, runtime.GOARCH)
 	if err != nil {
