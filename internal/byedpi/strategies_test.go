@@ -65,3 +65,22 @@ func TestParseStrategiesPreservesExistingCatalogue(t *testing.T) {
 		t.Fatalf("built-in ByeDPI strategies changed unexpectedly: %d", len(items))
 	}
 }
+
+func TestParseStrategiesDoesNotInterpretQuotedFakeDataAsFlags(t *testing.T) {
+	input := "fake | --fake-data '--ip=not-a-listener' --fake-sni example.com"
+	got, err := ParseStrategies(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--fake-data", "--ip=not-a-listener", "--fake-sni", "example.com"}
+	if len(got) != 1 || !reflect.DeepEqual(got[0].Args, want) {
+		t.Fatalf("quoted argument was reinterpreted as an option: %+v", got)
+	}
+	for _, bad := range []string{
+		"bad | --fake-data", "bad | --fake-data :payload --port 1234",
+	} {
+		if _, err := ParseStrategies(strings.NewReader(bad)); err == nil {
+			t.Fatalf("malformed or unsafe command accepted: %q", bad)
+		}
+	}
+}
