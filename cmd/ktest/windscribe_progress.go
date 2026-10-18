@@ -34,7 +34,7 @@ type wsTargetProgress struct {
 type wsMethodProgress struct {
 	name                          string
 	total, tried, running, failed int
-	replied                       int
+	started, replied              int
 	last                          string
 	seq                           uint64
 	updated                       time.Time
@@ -192,6 +192,9 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		}
 		row.total++
 		row.running += p.running
+		if p.starts > 0 {
+			row.started++
+		}
 		if p.failures > 0 {
 			row.failed++
 		}
@@ -523,17 +526,81 @@ func (v *wsProgressView) summary(s wsProgressSnapshot) {
 	v.t.Box(title, k, lines)
 }
 
+// reportProgress runs once at session shutdown, so it preserves past
+// CLI-confirmed outcomes even after Windscribe disconnects and active is empty.
 func (b *wsBridge) reportProgress() {
 	b.mu.Lock()
-	var keys []string
+	keys := make([]string, 0, len(b.targets))
 	for key := range b.targets {
 		keys = append(keys, key)
 	}
+	successes := append([]wsConfirmation(nil), b.confirmations...)
 	b.mu.Unlock()
 	sort.Strings(keys)
+
+	record := wsHistoryRecord{
+		Version: 1, StartedAt: b.startedAt, EndedAt: time.Now().UTC(),
+		Confirmations: successes,
+	}
 	for _, key := range keys {
+		s := b.progressSnapshot(key)
 		if b.view != nil {
-			b.view.summary(b.progressSnapshot(key))
+			b.view.summary(s)
+		}
+		target := wsHistoryTarget{Target: key, Location: s.location}
+		for _, method := range s.methods {
+			m := wsHistoryMethod{
+				Name: method.name, VariantsStarted: method.started,
+				VariantsChecked: method.tried, VariantsFailed: method.failed,
+				OpenVPNReplies: method.replied,
+			}
+			for _, success := range successes {
+				if success.Target == key && success.Method == method.name {
+					m.CLIConfirmations++
+				}
+			}
+			target.Methods = append(target.Methods, m)
+		}
+		record.Targets = append(record.Targets, target)
+	}
+	if b.view != nil {
+		t := b.view.t
+		t.Println("")
+		if len(successes) == 0 {
+			t.Line(toneWarn, "Windscribe: no CLI-correlated VPN connection recorded this session.")
+		} else {
+			t.Line(toneOK, "Windscribe: %d CLI-correlated VPN %s this session", len(successes), plural(len(successes), "connection", "connections"))
+			for i, success := range successes {
+				transport, sni, entry, hello := wsCarrierDetails(success.Carrier)
+				t.Line(toneOK, "%d. Method: %s | Transport: %s", i+1, success.Method, transport)
+				detail := "Target: " + success.Target
+				if success.Location != "" {
+					detail += " (" + success.Location + ")"
+				}
+				if sni != "" {
+					detail += " | SNI: " + sni
+				}
+				if entry != "" {
+					detail += " | Entry: " + entry
+				}
+				if hello != "" {
+					detail += " | Hello: " + hello
+				}
+				t.Note("%s", detail)
+				t.Note("Carrier: %s", success.Carrier)
+			}
+		}
+		t.Note("Evidence: unique active carrier when Windscribe CLI changed to Connected; socket identity not cryptographically verified.")
+	}
+	// Persist sessions without successes too: later comparison needs exposure
+	// counts, not only a list of apparent winners.
+	if b.historyPath != "" {
+		if err := appendWSHistory(b.historyPath, record); err != nil {
+			if b.view != nil {
+				b.view.t.Line(toneWarn, "Windscribe method history not saved: %v", err)
+			}
+		} else if b.view != nil {
+			b.view.t.Note("Method history saved locally: %s", b.historyPath)
 		}
 	}
 }
