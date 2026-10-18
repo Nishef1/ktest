@@ -186,6 +186,76 @@ internal fun SettingsScreen(
         }
 
         Panel {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconTile(KIcons.Key, K.cyan)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Local certificate generator", color = K.text, fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold)
+                    Text("Optional limited-domain CA · manual install", color = K.muted, fontSize = 12.sp)
+                }
+            }
+            Text(
+                "Generate the same name-constrained CA as Windows. The private key stays in " +
+                    "KTest's app-private storage. Only the public .crt can be saved.",
+                color = K.muted, fontSize = 12.sp, lineHeight = 17.sp
+            )
+            val caState = s.caReport?.optString("state") ?: "loading"
+            KeyValue("Certificate", when (caState) {
+                "ready" -> "Generated; Android trust not checked"
+                "outdated" -> "Outdated; do not install"
+                "invalid" -> "Invalid or incomplete files"
+                "missing" -> "Not generated"
+                else -> "Checking…"
+            })
+            s.caReport?.optString("fingerprint")?.takeIf { it.isNotBlank() }?.let {
+                KeyValue("SHA-1 fingerprint", it, mono = true)
+            }
+            s.caReport?.optString("expires")?.takeIf { it.isNotBlank() }?.let {
+                KeyValue("Valid until", it, mono = true)
+            }
+            s.caReport?.optString("detail")?.takeIf { it.isNotBlank() }?.let {
+                Note(it, if (caState == "invalid" || caState == "outdated") Tone.Danger else Tone.Info)
+            }
+            if (caState == "missing") {
+                SecondaryButton(if (s.caBusy) "Generating…" else "Generate local CA", {
+                    s.caBusy = true
+                    s.caError = null
+                    s.caMessage = null
+                    scope.launch {
+                        try {
+                            s.caReport = withContext(Dispatchers.IO) {
+                                JSONObject(Mobilebridge.generateFrontCA(privateDir))
+                            }
+                            s.caMessage = "CA generated on this phone. Export the public certificate to install it manually."
+                        } catch (e: Exception) {
+                            s.caError = e.message ?: "CA generation failed"
+                        } finally {
+                            s.caBusy = false
+                        }
+                    }
+                }, Modifier.fillMaxWidth(), busy = s.caBusy, icon = KIcons.Key)
+            }
+            if (caState == "ready") {
+                SecondaryButton("Save public certificate (.crt)", {
+                    exportCert.launch("ktest-ca.crt")
+                }, Modifier.fillMaxWidth(), busy = s.caBusy, icon = KIcons.Download)
+            }
+            s.caError?.let { Note(it, Tone.Danger) }
+            s.caMessage?.let { Note(it, Tone.Good) }
+            Text(
+                "After saving: Android Settings → Security & privacy → More security settings → " +
+                    "Encryption & credentials → Install a certificate → CA certificate. " +
+                    "Menu names depend on device. Android asks for confirmation. " +
+                    "Only apps that trust user-installed CAs may accept it; certificate pinning still applies. " +
+                    "Installing this CA alone does not activate domain fronting in KTest.",
+                color = K.muted, fontSize = 12.sp, lineHeight = 17.sp
+            )
+            Note("If you uninstall KTest, its private key is deleted. " +
+                "Remove the user CA manually from Android's trusted credentials too.")
+        }
+
+        Panel {
             SectionLabel("Privacy")
             PrivacyRow(KIcons.Lock, "No logs leave the device", "Native core output can contain identifiers, so it is discarded rather than shown or written to logcat.")
             Hairline()
