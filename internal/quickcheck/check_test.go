@@ -129,3 +129,27 @@ func TestCancelledProbeProducesNoSuccess(t *testing.T) {
 		}
 	}
 }
+
+func TestTikTokAndTelegramWebAreDistinctOptInTargets(t *testing.T) {
+	seen := make(map[string]Target)
+	for _, target := range Targets() {
+		if _, duplicate := seen[target.Name]; duplicate {
+			t.Fatalf("duplicate quickcheck target: %s", target.Name)
+		}
+		seen[target.Name] = target
+	}
+	for name, site := range map[string]string{
+		"TikTok": "www.tiktok.com",
+		"Telegram": "telegram.org",
+		"Telegram Web": "web.telegram.org",
+	} {
+		target, ok := seen[name]
+		if !ok {
+			t.Fatalf("missing opt-in target %s", name)
+		}
+		u, err := url.Parse(target.URL)
+		if err != nil || u.Scheme != "https" || u.Hostname() != site || target.Method != http.MethodHead {
+			t.Fatalf("unexpected test target %s: %+v", name, target)
+		}
+	}
+}
