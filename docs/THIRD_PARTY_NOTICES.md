@@ -17,7 +17,7 @@ The ktest menu and scanner are an independent Go orchestration project. The pack
 
 TUN may temporarily change system routes or DNS behavior. Windows requires Administrator approval; it is never silently enabled. An unexpected crash may require manual network adapter recovery.
 
-## Android native preparation
+- **Zapret2 winws2 v1.0.5.2** (bol-van), https://github.com/bol-van/zapret2 — MIT. The optional Windows-only packet engine, two Lua scripts, Cygwin runtime and WinDivert 2.2.2-A files are copied from the public `bol-van/zapret-win-bundle` repository at immutable revision `6eb463a6758fb48cd101bc55dfd057e6e9d98af1`. The portable workflow verifies every file against its pinned Git blob ID and checks the Windows driver's Authenticode signature. Zapret2 and WinDivert license files are shipped as `THIRD_PARTY/Zapret2-MIT.txt` and `THIRD_PARTY/WinDivert-LICENSE.txt`. The executable is never automatically started: only `windscribe-test -zapret fake|split` can enable its IP:443-scoped interception, from an Administrator terminal after user opt-in. Cygwin runtime redistribution obligations also apply; distributors must preserve the relevant Cygwin licensing and source availability terms. No driver is permanently installed by ktest.\n\n## Android native preparation
 
 Android uses the unmodified Android executables in the official Aether v2.3.0
 release, not the Windows or generic Linux Aether binary. Archive and per-file
