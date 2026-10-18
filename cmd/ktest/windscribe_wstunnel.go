@@ -196,6 +196,13 @@ func (b *wsBridge) observeCLIConnected() {
 		if b.logf != nil {
 			b.logf("Windscribe CLI Connected correlation ambiguous: active-carriers=%d; no carrier promoted", len(b.active))
 		}
+		if b.view != nil && b.view.t != nil {
+			if len(b.active) == 0 {
+				b.view.t.Line(toneWarn, "Windscribe CLI is Connected, but ktest did not carry a verifiable VPN stream (0 active carriers).")
+			} else {
+				b.view.t.Line(toneWarn, "Windscribe CLI is Connected; multiple ktest streams are active, so the winning method cannot be attributed.")
+			}
+		}
 		return
 	}
 	for active := range b.active {
