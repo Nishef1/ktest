@@ -13,8 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/coreprocess"
@@ -36,7 +34,7 @@ var pinned = map[string]string{
 	"WinDivert.dll":          "2c55eeb6921351a6cad292a900f4b8d7d41c4bcc",
 	"WinDivert64.sys":        "218ccaf423ef0a67696226f9ef3a09149e4441d0",
 	"lua/zapret-lib.lua":     "c954afd0718534f2eb49d67f08a291e325f68cb1",
-	"lua/zapret-antidpi.lua":"80f372a63774ca10ce85fd7dcd5d1e95c3f5bfb7",
+	"lua/zapret-antidpi.lua": "80f372a63774ca10ce85fd7dcd5d1e95c3f5bfb7",
 }
 
 func VerifyBundle(dir string) error {
@@ -162,7 +160,3 @@ func (t *Trial) Stop() error {
 	}
 }
 
-// The contract is intentionally narrow: no arbitrary WinDivert expression,
-// ports or injected Lua are accepted from the user.
-func Port() string { return strconv.Itoa(443) }
-func AvailableStrategies() string { return strings.Join([]string{string(Fake), string(Split)}, ", ") }
