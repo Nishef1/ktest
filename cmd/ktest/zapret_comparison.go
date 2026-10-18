@@ -87,7 +87,7 @@ func runWindscribeZapretCompare(ctx context.Context, u *term, base string, endpo
 
 func zapretOptionValid(option string) bool {
 	switch strings.TrimSpace(option) {
-	case "off", string(packetdesync.Fake), string(packetdesync.Split):
+	case "off", string(packetdesync.Fake), string(packetdesync.Split), string(packetdesync.Combo):
 		return true
 	}
 	return false
