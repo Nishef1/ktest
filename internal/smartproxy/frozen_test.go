@@ -2,6 +2,7 @@ package smartproxy
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,14 +65,40 @@ func TestFrozenDestinationsAndPolicyRemainIsolated(t *testing.T) {
 	}
 }
 
-func TestFrozenSessionDoesNotRunExpiredExitChecks(t *testing.T) {
+func TestFrozenSessionReverifiesSameExitAfterLeaseExpires(t *testing.T) {
 	var checks atomic.Int32
-	p, _ := New(Config{Frozen: &FrozenRoutes{Protected: "exit"}, Upstreams: []Upstream{{Name: "exit", Exit: true, AIEligible: true}},
+	p, err := New(Config{Frozen: &FrozenRoutes{Protected: "exit"}, Upstreams: []Upstream{{Name: "exit", Exit: true, AIEligible: true}},
 		VerifyExit: func(context.Context, Upstream) error { checks.Add(1); return nil },
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	p.ups[0].verifiedUntil.Store(time.Now().Add(-time.Second).UnixNano())
-	if err := p.verifyExit(context.Background(), p.ups[0]); err == nil || checks.Load() != 0 {
-		t.Fatalf("expired exit was tested or accepted during a frozen session: err=%v checks=%d", err, checks.Load())
+	if err := p.verifyExit(context.Background(), p.ups[0]); err != nil || checks.Load() != 1 {
+		t.Fatalf("fixed foreign exit did not refresh verification: err=%v checks=%d", err, checks.Load())
+	}
+	if err := p.verifyExit(context.Background(), p.ups[0]); err != nil || checks.Load() != 1 {
+		t.Fatalf("fresh verification was not cached: err=%v checks=%d", err, checks.Load())
+	}
+	if got := p.order("protected.example", "443"); len(got) != 1 || got[0].Name != "exit" {
+		t.Fatalf("verification refresh changed the frozen route: %+v", got)
+	}
+}
+
+func TestFrozenSessionRejectsFailedExitReverification(t *testing.T) {
+	var checks atomic.Int32
+	p, err := New(Config{Frozen: &FrozenRoutes{Protected: "exit"}, Upstreams: []Upstream{{Name: "exit", Exit: true, AIEligible: true}},
+		VerifyExit: func(context.Context, Upstream) error {
+			checks.Add(1)
+			return errors.New("foreign exit is unavailable")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.ups[0].verifiedUntil.Store(time.Now().Add(-time.Second).UnixNano())
+	if err := p.verifyExit(context.Background(), p.ups[0]); err == nil || checks.Load() != 1 {
+		t.Fatalf("unverified foreign exit was accepted: err=%v checks=%d", err, checks.Load())
 	}
 }
 
