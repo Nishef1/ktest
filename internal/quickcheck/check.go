@@ -134,7 +134,7 @@ func checkTarget(ctx context.Context, client *http.Client, target Target) Result
 		readBytes, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 		res.BodyBytes = readBytes
 		_ = response.Body.Close()
-		res.Success = readErr == nil && (response.StatusCode == target.Want || (target.Want == 0 && response.StatusCode >= 200 && response.StatusCode < 400))
+		res.Success = readErr == nil && (response.StatusCode == target.Want && target.Want != 0 || (target.Want == 0 && response.StatusCode >= 200 && response.StatusCode < 300))
 		if res.Success {
 			res.Detail = fmt.Sprintf("TLS verified; HTTP %d (%s connectivity probe)", res.Status, target.Method)
 		} else if readErr != nil {
