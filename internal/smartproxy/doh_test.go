@@ -194,6 +194,26 @@ func TestDoHDecoySNIIsSentButTheCertificateIsStillVerified(t *testing.T) {
 	}
 }
 
+func TestDefaultDoHIncludesGoogleDecoyEndpoints(t *testing.T) {
+	want := map[string]bool{"8.8.8.8:443": false, "8.8.4.4:443": false}
+	for _, ep := range DefaultDoH {
+		if ep.ServerName == "dns.google" && ep.FrontSNI == "www.google.com" && ep.VerifyNames != nil {
+			if _, ok := want[ep.Addr]; ok {
+				for _, name := range ep.VerifyNames {
+					if name == "dns.google" {
+						want[ep.Addr] = true
+					}
+				}
+			}
+		}
+	}
+	for addr, found := range want {
+		if !found {
+			t.Errorf("Google DoH decoy endpoint %s is missing", addr)
+		}
+	}
+}
+
 func TestDoHCanUseTheEndpointsOwnTLSDialer(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"Status":0,"Answer":[{"type":1,"TTL":60,"data":"142.250.1.1"}]}`))

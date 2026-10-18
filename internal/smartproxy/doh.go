@@ -51,6 +51,11 @@ var DefaultDoH = []DoHEndpoint{
 	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "1.1.1.1:443", ServerName: "cloudflare-dns.com"},
 	{URL: "https://dns.google/resolve", Addr: "8.8.8.8:443", ServerName: "dns.google"},
 	{URL: "https://dns.google/resolve", Addr: "8.8.4.4:443", ServerName: "dns.google"},
+	// Google Public DNS also accepts its HTTP Host on the ordinary Google
+	// front when the resolver's own SNI is filtered. Keep the certificate check
+	// on dns.google even though the wire carries www.google.com.
+	{URL: "https://dns.google/resolve", Addr: "8.8.8.8:443", ServerName: "dns.google", FrontSNI: "www.google.com", VerifyNames: []string{"dns.google"}},
+	{URL: "https://dns.google/resolve", Addr: "8.8.4.4:443", ServerName: "dns.google", FrontSNI: "www.google.com", VerifyNames: []string{"dns.google"}},
 	{URL: "https://dns.google/resolve"},
 	// The reference MITM-DomainFronting project asks 1.1.1.1 under a decoy name.
 	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "1.1.1.1:443", ServerName: "cloudflare-dns.com", FrontSNI: "www.microsoft.com", VerifyNames: []string{"one.one.one.one"}},
