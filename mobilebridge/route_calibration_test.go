@@ -261,3 +261,34 @@ func TestRouteProfileKeyChangesWithExistingPublicCA(t *testing.T) {
 		t.Fatal("public CA change invalidated an unrelated ordinary-route profile")
 	}
 }
+
+
+func TestBalancedProfileKeyChangesWhenUnderlyingAndroidNetworkChanges(t *testing.T) {
+	routeNetworkMu.Lock()
+	previous := routeNetworkToken
+	routeNetworkMu.Unlock()
+	t.Cleanup(func() {
+		routeNetworkMu.Lock()
+		routeNetworkToken = previous
+		routeNetworkMu.Unlock()
+	})
+	targets := []routeTarget{{ID: "x", Name: "X", URL: "https://x.com/"}}
+	config := smartproxy.Config{Upstreams: []smartproxy.Upstream{{Name: "Go direct"}}}
+	if err := SetRouteNetworkToken("wifi:123456"); err != nil {
+		t.Fatal(err)
+	}
+	first := routeProfileKey(targets, config, "")
+	if err := SetRouteNetworkToken("cellular:456789"); err != nil {
+		t.Fatal(err)
+	}
+	second := routeProfileKey(targets, config, "")
+	if first == second {
+		t.Fatal("cellular and Wi-Fi reused one cached route plan")
+	}
+	if err := SetRouteNetworkToken("wifi:123456"); err != nil || routeProfileKey(targets, config, "") != first {
+		t.Fatal("same underlying network should preserve plan identity")
+	}
+	if err := SetRouteNetworkToken(""); err == nil {
+		t.Fatal("empty network identity was accepted")
+	}
+}
