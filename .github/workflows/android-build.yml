@@ -76,6 +76,6 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: KTest-Connection-v8-preview-arm64-v8a
-          path: android/dist/KTest-Connection-v0.3.0-preview-arm64-v8a.apk
+          path: android/dist/KTest-Connection-v8-preview-arm64-v8a.apk
           retention-days: 14
           if-no-files-found: error
