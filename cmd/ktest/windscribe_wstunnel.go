@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,8 +262,9 @@ func directDial(ctx context.Context, addr string) (net.Conn, error) {
 }
 
 // carriersFor lists every way to reach the Windscribe node behind host, in
-// launch order: CDN, WStunnel and Stealth per SNI (each straight and through
-// local anti-DPI), then the raw OpenVPN stream through local anti-DPI.
+// candidates: CDN, WStunnel and Stealth per SNI (each straight and through
+// local anti-DPI). Raw OpenVPN-to-node paths are intentionally excluded from
+// this wrapped-bootstrap search: Windscribe can already attempt raw OpenVPN.
 func (b *wsBridge) carriersFor(host string) []wsCarrier {
 	if b.candidates != nil {
 		return b.candidates(host)
@@ -377,13 +379,6 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 			}
 		}
 	}
-	for _, leg := range legs[1:] {
-		if !leg.tlsOnly {
-			out = append(out, wsCarrier{name: "raw OpenVPN" + leg.suffix, method: leg.method, source: "client CONNECT", open: func(ctx context.Context, host, port string) (net.Conn, error) {
-				return leg.dial(ctx, net.JoinHostPort(host, port))
-			}})
-		}
-	}
 	return out
 }
 
@@ -455,7 +450,7 @@ func looksTLSorHTTP(b []byte) bool {
 
 // Families rotate on repeated attempts so that one blocked IP/SNI or
 // wrapper does not consume every early time slot. Only provider-advertised
-// endpoints remain eligible; raw anti-DPI traffic is a final alternative.
+// endpoints remain eligible; no raw OpenVPN candidate is generated.
 func wsCarrierFamily(name string) int {
 	switch {
 	case strings.HasPrefix(name, "CDN "):
@@ -549,10 +544,60 @@ func wsSpreadTransports(cs []wsCarrier, attempt uint64) []wsCarrier {
 	return out
 }
 
+// wsMethodPriority describes a *heuristic* for high-censorship networks,
+// not an experimentally proven probability of success or security property.
+// A multi-mechanism desync gets earlier time slots, but every eligible
+// method still receives one turn before any method receives its second.
+// Windscribe-CLI-confirmed carriers always take precedence in ordered().
+func wsMethodPriority(method string) int {
+	m := strings.ToLower(method)
+	switch {
+	case m == "direct" || strings.HasPrefix(m, "direct "):
+		return 5 // Wrapped WStunnel/Stealth baseline, not raw OpenVPN.
+	case strings.Contains(m, "adaptive (plain first"):
+		return 4
+	case strings.Contains(m, "tls record slicing"), strings.Contains(m, "sni split over 2 tls records"),
+		strings.Contains(m, "sni split over 2 tcp segments"):
+		return 3
+	case strings.Contains(m, "disordered out-of-band"),
+		strings.Contains(m, "disorder") && (strings.Contains(m, "fake") || strings.Contains(m, "adaptive") || strings.Contains(m, "split")):
+		return 0 // Combined mechanisms are first, not proven best.
+	case strings.Contains(m, "fake packet"), strings.Contains(m, "xray local tcp fragment b"),
+		strings.Contains(m, "tls records and tcp segments"):
+		return 1
+	case strings.Contains(m, "xray local tcp fragment a"),
+		strings.Contains(m, "double split"), strings.Contains(m, "out-of-band"):
+		return 2
+	default:
+		return 2 // Unknown methods stay in the balanced middle, not silently dropped.
+	}
+}
+
+// Rotate *within* each priority tier, not across tiers. Otherwise a new
+// Windscribe CONNECT can put the light baseline ahead of the heavy methods.
+func wsOrderMethods(methods []string, attempt uint64) []string {
+	sort.SliceStable(methods, func(i, j int) bool {
+		return wsMethodPriority(methods[i]) < wsMethodPriority(methods[j])
+	})
+	out := make([]string, 0, len(methods))
+	for start := 0; start < len(methods); {
+		end := start + 1
+		for end < len(methods) && wsMethodPriority(methods[end]) == wsMethodPriority(methods[start]) {
+			end++
+		}
+		tier := methods[start:end]
+		rotate := int(attempt % uint64(len(tier)))
+		out = append(out, tier[rotate:]...)
+		out = append(out, tier[:rotate]...)
+		start = end
+	}
+	return out
+}
+
 // Round-robin by actual anti-DPI method, not by contiguous sets of 19
 // variants. Within each method untried candidates precede previously tried
-// ones. On the next CONNECT, rotate the first method and each method's SNI,
-// entry IP and outer transport so the 64-candidate cap does not starve them.
+// ones. The heavier method tiers start first, with round-robin fairness across
+// *all* methods; on next CONNECT rotate within tiers, SNI, IP and transport.
 func wsDiversifyTiered(untried, tried []wsCarrier, attempt uint64) []wsCarrier {
 	type methodCandidates struct {
 		untried []wsCarrier
@@ -586,8 +631,7 @@ func wsDiversifyTiered(untried, tried []wsCarrier, attempt uint64) []wsCarrier {
 		m := byMethod[name]
 		m.queue = append(wsSpreadTransports(m.untried, attempt), wsSpreadTransports(m.tried, attempt)...)
 	}
-	offset := int(attempt % uint64(len(methods)))
-	methods = append(append([]string(nil), methods[offset:]...), methods[:offset]...)
+	methods = wsOrderMethods(methods, attempt)
 	result := make([]wsCarrier, 0, len(untried)+len(tried))
 	for len(result) < cap(result) {
 		progress := false
@@ -634,8 +678,9 @@ func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
 			fresh = append(fresh, c)
 		}
 	}
-	// Prioritize each method's unexplored variant, then round-robin across
-	// methods. Do not exhaust 19 variants of one method before reaching others.
+	// Put heavier multi-mechanism methods first, while sampling every
+	// method once before returning for its second variant. A confirmed
+	// Windscribe VPN carrier overrides this heuristic above.
 	ordered := append(preferred, wsDiversifyTiered(untried, fresh, attempt)...)
 	if len(ordered) > 0 || len(cooling) == 0 {
 		// Merely launching failed handshakes later still lets their quick
