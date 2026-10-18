@@ -252,7 +252,7 @@ func startProxyWithFronting(mode, upstream string, native *nativeOptions, localD
 			Rank: 9,
 		})
 	}
-	config := smartproxy.Config{Upstreams: upstreams}
+	config := smartproxy.Config{Upstreams: upstreams, RecoverIPHostSNI: localDir != ""}
 	diagnostics := &proxyDiagnostics{}
 	config.OnEvent = func(e smartproxy.Event) {
 		if e.Port == "53" && e.Err != "" {
