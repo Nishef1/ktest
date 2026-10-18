@@ -30,6 +30,11 @@ func init() {
 	if host != "127.0.0.1" || port == "" {
 		os.Exit(2)
 	}
+	for _, arg := range os.Args {
+		if arg == "--ktest-slow-listener" {
+			time.Sleep(6 * time.Second)
+		}
+	}
 	l, err := net.Listen("tcp4", net.JoinHostPort(host, port))
 	if err != nil {
 		os.Exit(3)
@@ -101,5 +106,26 @@ func TestAndroidProxyRejectsMissingBypassBundleBeforePublishingListeners(t *test
 	}
 	if coreprocess.Count() != 0 {
 		t.Fatal("failed startup left owned native processes")
+	}
+}
+
+func TestAndroidByeDPIReadyStrategyIsNotBlockedByEarlierSlowCore(t *testing.T) {
+	t.Setenv("KTEST_LOCAL_CORE_HELPER", "1")
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	set, err := startLocalCores(ctx, bin, []byedpi.Strategy{
+		{Label: "slow", Args: []string{"--ktest-slow-listener"}},
+		{Label: "healthy"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.stop()
+	if len(set.upstreams) != 1 || set.upstreams[0].Name != "ByeDPI healthy" {
+		t.Fatalf("slow first core starved healthy second core: %+v", set.upstreams)
 	}
 }
