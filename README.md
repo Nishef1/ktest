@@ -36,6 +36,7 @@ go build -o ktest.exe ./cmd/ktest
 - [Connection modes](docs/CONNECTION_MODES.md)
 - [Aether methods and network diagnosis](docs/NETWORK_DIAGNOSIS.md)
 - [Windscribe bootstrap](docs/WINDSCRIBE_BOOTSTRAP.md)
+- [Zapret2 Windows packet experiment](docs/ZAPRET2_WINDOWS_INTEGRATION.md)
 - [Direct access](docs/ACCESS.md)
 - [Domain fronting](docs/FRONTING.md)
 - [Experiments](docs/EXPERIMENTS.md)
