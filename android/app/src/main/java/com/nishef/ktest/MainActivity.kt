@@ -100,9 +100,10 @@ private fun KTestApp() {
     val routeStatusReady = routePlan.report != null && routePlan.readError == null
     val scanBusy = tools.cdnStarting || tools.cdnStatus.optBoolean("running")
     val scanStatusReady = tools.cdnStatusLoaded && tools.cdnStatusError == null
-    val connectBlocked = routePlan.busy || routeTargets.busy || scanBusy || !routeStatusReady || !scanStatusReady
+    val connectBlocked = (activeMode.id == "balanced" && (routePlan.busy || !routeStatusReady)) ||
+        routeTargets.busy || scanBusy || !scanStatusReady
     val canTestRoutes = offline && routeStatusReady && !routeTargets.busy && !settings.caBusy &&
-        !scanBusy && scanStatusReady && activeMode.id in listOf("balanced", "fast")
+        !scanBusy && scanStatusReady && activeMode.id == "balanced"
     val linkState = when {
         running -> LinkState.Active
         (connecting || connectAfterConsent) && !manualTesting -> LinkState.Connecting
