@@ -59,8 +59,8 @@ type proxyReport struct {
 	FrontAccepted int    `json:"front_accepted,omitempty"`
 	FrontRefused  int    `json:"front_refused,omitempty"`
 	FrontDisabled string `json:"front_disabled,omitempty"`
-	XrayReady bool `json:"xray_ready"`
-	XrayError string `json:"xray_error,omitempty"`
+	XrayReady     bool   `json:"xray_ready"`
+	XrayError     string `json:"xray_error,omitempty"`
 }
 
 type proxyStartup struct {
@@ -106,7 +106,9 @@ func currentReportLocked() proxyReport {
 	report.XrayError = activeProxy.xrayError
 	if activeProxy.localCores != nil {
 		for _, c := range activeProxy.localCores.cores {
-			if c.method != "Xray TLS fragment" { continue }
+			if c.method != "Xray TLS fragment" {
+				continue
+			}
 			select {
 			case <-c.done:
 				report.XrayError = "Xray local core exited; other strategies remain available"
