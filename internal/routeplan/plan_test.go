@@ -207,3 +207,30 @@ func TestMethodChangeRecalibratesOnlyIfTargetsUnchanged(t *testing.T) {
 		t.Fatalf("optional method disappearance was not recoverable: profile=%+v, reused=%v, err=%v", p, reused, err)
 	}
 }
+
+func TestFailedCalibrationCannotOverwriteOrPoisonRouteCache(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	old := &Profile{Version: 1, CompletedAt: now.Add(-25*time.Hour), Default: "old", TargetsKey: "same"}
+	if err := Save(dir, old); err != nil { t.Fatal(err) }
+	_, _, err := LoadOrTestWithRevision(context.Background(), dir, "same", "v1", false, now, func() (*Profile,error) {
+		return &Profile{Version: 1, CompletedAt: now, Rows: []Result{{Assessment:"service_refused"}}}, nil
+	})
+	if err == nil { t.Fatal("unsuccessful calibration incorrectly became a healthy profile") }
+	cached, err := Load(dir)
+	if err != nil || cached.Default != "old" { t.Fatalf("failed test overwrote old cache: %+v %v",cached,err) }
+}
+
+func TestInvalidFreshProfileRetriesInsteadOfReusingEmptyDefault(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	if err := Save(dir, &Profile{Version:1, CompletedAt:now, TargetsKey:"key", Default:""}); err != nil { t.Fatal(err) }
+	calls := 0
+	p, reused, err := LoadOrTestWithRevision(context.Background(),dir,"key","",false,now,func()(*Profile,error){
+		calls++
+		return &Profile{Version:1,CompletedAt:now,Default:"good"},nil
+	})
+	if err != nil || reused || calls != 1 || p.Default != "good" {
+		t.Fatalf("invalid cached route got reused: %+v reused=%v err=%v",p,reused,err)
+	}
+}
