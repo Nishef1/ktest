@@ -128,6 +128,10 @@ type Config struct {
 	// ExchangeDNS forwards complete DNS messages over an encrypted transport.
 	// UDP port 53 is intercepted here and never sent to the system resolver.
 	ExchangeDNS func(context.Context, []byte) ([]byte, error)
+	// RecoverIPHostSNI: Android HEV sends the original destination as an IP,
+	// unlike Windows sing-box fake-IP DNS. Only when explicitly enabled can a
+	// valid ClientHello SNI recover the target name for routing and fronting.
+	RecoverIPHostSNI bool
 	// Logf receives one line per decision; nil is silent.
 	Logf func(format string, args ...any)
 	// OnEvent reports raced outcomes and unverified local TCP establishment;
@@ -673,8 +677,10 @@ func (p *Proxy) nameFor(host string, flight []byte) string {
 		return host
 	}
 	if sni, _, ok := ParseClientHello(flight); ok && sni != "" && net.ParseIP(sni) == nil {
-		if Bogus(ip) {
-			p.logf("%s is a block-page address; using the SNI %s instead", host, sni)
+		if Bogus(ip) || p.cfg.RecoverIPHostSNI {
+			if Bogus(ip) {
+				p.logf("%s is a block-page address; using the SNI %s instead", host, sni)
+			}
 			return sni
 		}
 	}
