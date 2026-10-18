@@ -211,26 +211,45 @@ func TestMethodChangeRecalibratesOnlyIfTargetsUnchanged(t *testing.T) {
 func TestFailedCalibrationCannotOverwriteOrPoisonRouteCache(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().UTC()
-	old := &Profile{Version: 1, CompletedAt: now.Add(-25*time.Hour), Default: "old", TargetsKey: "same"}
-	if err := Save(dir, old); err != nil { t.Fatal(err) }
-	_, _, err := LoadOrTestWithRevision(context.Background(), dir, "same", "v1", false, now, func() (*Profile,error) {
-		return &Profile{Version: 1, CompletedAt: now, Rows: []Result{{Assessment:"service_refused"}}}, nil
+	old := &Profile{Version: 1, CompletedAt: now.Add(-25 * time.Hour), Default: "old", TargetsKey: "same"}
+	if err := Save(dir, old); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := LoadOrTestWithRevision(context.Background(), dir, "same", "v1", false, now, func() (*Profile, error) {
+		return &Profile{Version: 1, CompletedAt: now, Rows: []Result{{Assessment: "service_refused"}}}, nil
 	})
-	if err == nil { t.Fatal("unsuccessful calibration incorrectly became a healthy profile") }
+	if err == nil {
+		t.Fatal("unsuccessful calibration incorrectly became a healthy profile")
+	}
 	cached, err := Load(dir)
-	if err != nil || cached.Default != "old" { t.Fatalf("failed test overwrote old cache: %+v %v",cached,err) }
+	if err != nil || cached.Default != "old" {
+		t.Fatalf("failed test overwrote old cache: %+v %v", cached, err)
+	}
 }
 
 func TestInvalidFreshProfileRetriesInsteadOfReusingEmptyDefault(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().UTC()
-	if err := Save(dir, &Profile{Version:1, CompletedAt:now, TargetsKey:"key", Default:""}); err != nil { t.Fatal(err) }
+	if err := Save(dir, &Profile{Version: 1, CompletedAt: now, TargetsKey: "key"}); err != nil {
+		t.Fatal(err)
+	}
 	calls := 0
-	p, reused, err := LoadOrTestWithRevision(context.Background(),dir,"key","",false,now,func()(*Profile,error){
+	p, reused, err := LoadOrTestWithRevision(context.Background(), dir, "key", "", false, now, func() (*Profile, error) {
 		calls++
-		return &Profile{Version:1,CompletedAt:now,Default:"good"},nil
+		return &Profile{Version: 1, CompletedAt: now, Default: "good"}, nil
 	})
 	if err != nil || reused || calls != 1 || p.Default != "good" {
-		t.Fatalf("invalid cached route got reused: %+v reused=%v err=%v",p,reused,err)
+		t.Fatalf("invalid cached route got reused: %+v reused=%v err=%v", p, reused, err)
+	}
+}
+
+func TestTargetOnlyPlanRemainsUsableWithoutExposingUnknownHosts(t *testing.T) {
+	p := &Profile{Version: 1, Selections: []Selection{{TargetID: "x", Method: "fixed", Assessment: "https_verified", Attempts: 3, Successes: 3}}}
+	if !p.Usable() || p.Default != "" {
+		t.Fatalf("valid limited-coverage profile was rejected: %+v", p)
+	}
+	p.Selections[0].Successes = 2
+	if p.Usable() {
+		t.Fatal("intermittently reachable destination was treated as a complete target-only profile")
 	}
 }
