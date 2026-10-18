@@ -40,6 +40,15 @@ var strategyLongOptions = map[string]bool{
 	"--comment": true,
 }
 
+// These long flags have no operand; every other supported long flag does.
+// Track option/value pairs so a quoted fake payload containing "--ip=..."
+// is data, not mistaken for a listener override.
+var strategyLongNoValue = map[string]bool{
+	"--no-domain": true, "--no-ipv6": true, "--no-udp": true,
+	"--tfo": true, "--md5sig": true, "--drop-sack": true,
+	"--wait-send": true,
+}
+
 // The caller owns the listener address and process lifetime. Additionally,
 // connect-to/transparent/protect-path may change the forwarding or trust
 // boundary, so these are forbidden in an IP-preserving local bypass route.
@@ -168,9 +177,26 @@ func ParseStrategies(r io.Reader) ([]Strategy, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("line %d: no arguments", n)
 		}
-		for _, a := range args {
+		for i := 0; i < len(args); i++ {
+			a := args[i]
 			if reservedStrategyOption(a) {
 				return nil, fmt.Errorf("line %d: %q cannot be used in a local ByeDPI strategy", n, a)
+			}
+			needsValue := false
+			switch {
+			case strings.HasPrefix(a, "--"):
+				flag, _, inline := strings.Cut(a, "=")
+				needsValue = !inline && !strategyLongNoValue[flag]
+			case strings.HasPrefix(a, "-") && len(a) == 2:
+				// Long option operands and one-character short option
+				// operands are separate argv tokens, not new options.
+				needsValue = !strings.ContainsRune("NXUFSYZ", rune(a[1]))
+			}
+			if needsValue {
+				if i+1 >= len(args) {
+					return nil, fmt.Errorf("line %d: %s requires a value", n, a)
+				}
+				i++
 			}
 		}
 		key := strings.Join(args, "\x00")
