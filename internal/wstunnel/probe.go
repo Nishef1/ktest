@@ -14,6 +14,9 @@ type ProbeResult struct {
 	Transport           string `json:"transport"`
 	TCP                 bool   `json:"tcp"`
 	TLS                 bool   `json:"tls_handshake"`
+	// CertificateVerified means the outer TLS chain and SNI passed standard
+	// verification. A custom VerifyPeer callback alone may only check a name
+	// hint and must not be reported as chain verification.
 	CertificateVerified bool   `json:"certificate_verified"`
 	WebSocket           bool   `json:"websocket"`
 	ElapsedMS           int64  `json:"elapsed_ms"`
@@ -41,7 +44,7 @@ func Probe(ctx context.Context, transport string, cfg Config) ProbeResult {
 	r.ElapsedMS = time.Since(started).Milliseconds()
 	if err == nil {
 		r.TCP, r.TLS, r.WebSocket = true, true, transport == "wstunnel"
-		r.CertificateVerified = cfg.Verify || cfg.VerifyPeer != nil
+		r.CertificateVerified = cfg.Verify
 		_ = conn.Close()
 		return r
 	}
@@ -52,6 +55,6 @@ func Probe(ctx context.Context, transport string, cfg Config) ProbeResult {
 	}
 	r.TCP = r.Stage == "tls" || r.Stage == "websocket"
 	r.TLS = r.Stage == "websocket"
-	r.CertificateVerified = r.TLS && (cfg.Verify || cfg.VerifyPeer != nil)
+	r.CertificateVerified = r.TLS && cfg.Verify
 	return r
 }
