@@ -46,6 +46,25 @@ class ProxyService : Service() {
         /** SystemClock.elapsedRealtime() when the current session became active; 0 otherwise. */
         @Volatile var connectedAt: Long = 0
 
+        /** Network handles change when Wi-Fi/cellular switches, without exposing SSIDs. */
+        internal fun prepareBalancedNetwork(context: Context) {
+            val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+            val network = cm.activeNetwork ?: error("No underlying Android network available for Balanced calibration")
+            val caps = cm.getNetworkCapabilities(network)
+                ?: error("Android network capabilities are unavailable for Balanced calibration")
+            // This runs before activating our VPN and identifies the underlying network.
+            if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
+                error("Disconnect the existing VPN before testing Balanced routes")
+            }
+            val kind = when {
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                else -> "other"
+            }
+            Mobilebridge.setRouteNetworkToken("$kind:${network.networkHandle}")
+        }
+
         /** Shared by normal startup and the offline test; never changes Android trust. */
         internal fun checkedFrontingOptIn(context: Context, privateDir: String): Boolean {
             val enabled = context.getSharedPreferences("ktest_android", Context.MODE_PRIVATE)
@@ -96,6 +115,7 @@ class ProxyService : Service() {
                                         File(filesDir, "aether").absolutePath)
                                 } else if (mode == "balanced" || mode == "fast") {
                                     val privateDir = filesDir.canonicalPath
+                                    if (mode == "balanced") prepareBalancedNetwork(this@ProxyService)
                                     val enabled = checkedFrontingOptIn(this@ProxyService, privateDir)
                                     if (enabled) {
                                         // The user must explicitly opt in, and the exact CA must
