@@ -17,6 +17,7 @@ type wsCarrierProgress struct {
 	starts, running      int
 	failures, selected   int
 	replies, interrupted int
+	seq                  uint64
 	updated              time.Time
 }
 
@@ -27,6 +28,7 @@ type wsTargetProgress struct {
 	inventory    []string
 	paths        map[string]*wsCarrierProgress
 	inapplicable []string
+	seq          uint64 // event ordering independent of Windows wall-clock granularity
 }
 
 type wsMethodProgress struct {
@@ -34,6 +36,7 @@ type wsMethodProgress struct {
 	total, tried, running, failed int
 	replied                       int
 	last                          string
+	seq                           uint64
 	updated                       time.Time
 }
 
@@ -105,6 +108,8 @@ func (b *wsBridge) carrierProgress(key, name, outcome string) {
 	if target := b.targets[key]; target != nil {
 		if p := target.paths[name]; p != nil {
 			if outcome != "finish" {
+				target.seq++
+				p.seq = target.seq
 				p.updated = time.Now()
 			}
 			switch outcome {
@@ -143,7 +148,7 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 	s.inapplicable = append([]string(nil), target.inapplicable...)
 	rows := make(map[string]*wsMethodProgress)
 	now := time.Now()
-	var currentUpdated, latestUpdated time.Time
+	var currentSeq, latestSeq uint64
 	for _, name := range target.inventory {
 		p := target.paths[name]
 		s.total++
@@ -168,11 +173,11 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		if p.replies > 0 {
 			s.replied++
 		}
-		if p.running > 0 && (s.currentMethod == "" || p.updated.After(currentUpdated)) {
-			s.currentMethod, currentUpdated = p.method, p.updated
+		if p.running > 0 && (s.currentMethod == "" || p.seq > currentSeq) {
+			s.currentMethod, currentSeq = p.method, p.seq
 		}
-		if p.starts > 0 && (s.recentMethod == "" || p.updated.After(latestUpdated)) {
-			s.recentMethod, s.recentOutcome, latestUpdated = p.method, p.last, p.updated
+		if p.starts > 0 && (s.recentMethod == "" || p.seq > latestSeq) {
+			s.recentMethod, s.recentOutcome, latestSeq = p.method, p.last, p.seq
 		}
 		if until := b.bad[key][name]; now.Before(until) {
 			s.cooling++
@@ -196,8 +201,8 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		if !p.needsTrial() {
 			row.tried++
 		}
-		if row.last == "" || p.updated.After(row.updated) {
-			row.last, row.updated = p.last, p.updated
+		if row.last == "" || p.seq > row.seq {
+			row.last, row.seq, row.updated = p.last, p.seq, p.updated
 			if p.starts > 0 {
 				row.last += " @ " + p.entry
 			}
