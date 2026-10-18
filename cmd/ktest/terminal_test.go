@@ -562,7 +562,6 @@ func TestEnterKeepsItsMeaningInMenus(t *testing.T) {
 	s.expectExit()
 }
 
-
 func TestWindscribeMenuOptionThreeIsExplicitlyExperimental(t *testing.T) {
 	out := menuOutput(t, "5\n3\n0\n0\n0\n")
 	for _, want := range []string{
@@ -576,4 +575,3 @@ func TestWindscribeMenuOptionThreeIsExplicitlyExperimental(t *testing.T) {
 		}
 	}
 }
-
