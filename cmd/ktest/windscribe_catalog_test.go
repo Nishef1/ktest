@@ -450,8 +450,8 @@ func TestCatalogMissingTargetDiagnosedAndRetriedWithoutInventedIPs(t *testing.T)
 func TestCatalogRefreshDelayDistinguishesMissingNodeFromSuccessfulFetch(t *testing.T) {
 	for _, tc := range []struct {
 		refreshed, missing bool
-		retries int
-		want time.Duration
+		retries            int
+		want               time.Duration
 	}{
 		{true, false, 0, 30 * time.Minute},
 		{false, false, 0, 30 * time.Second},
