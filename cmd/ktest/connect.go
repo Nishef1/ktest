@@ -893,6 +893,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				}
 				bridge := newWSBridge(o.ws, apiDial, cfg.OnEvent, logf)
 				windscribeBridge = bridge
+				bridge.historyPath = filepath.Join(o.base, "cache", "windscribe-method-history.jsonl")
 				bridge.methods = proxy.WindscribeMethods
 				bridge.view = &wsProgressView{t: t, verbose: o.verbose}
 				bridge.onProgress = func(key string, force bool) {
