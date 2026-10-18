@@ -248,14 +248,13 @@ type wsProgressEvent struct {
 }
 
 type wsProgressView struct {
-	t       *term
-	verbose bool
-	mu      sync.Mutex
-	last    map[string]time.Time
-	state   map[string]string
-	phase   map[string]string
-	line    *progress // one in-place status line for interactive non-verbose output
-	lineKey string
+	t        *term
+	verbose  bool
+	mu       sync.Mutex
+	last     map[string]time.Time
+	state    map[string]string
+	phase    map[string]string
+	panelKey string
 }
 
 func wsProgressStatus(s wsProgressSnapshot) (tone, string) {
@@ -372,9 +371,53 @@ func wsProgressPhase(s wsProgressSnapshot) string {
 		s.running > 0, s.incomplete, s.total == 0)
 }
 
-// Updates are rendered by the event loop, never by a carrier worker.
-// The normal terminal has one redrawable line; -v retains full carrier logs
-// and deliberately avoids rewriting that line through the verbose transcript.
+// The box lists every method, not every SNI/IP variant. "checked" remains
+// distinct from "started"; OpenVPN replies do not imply authenticated VPN.
+func wsPanelLines(s wsProgressSnapshot, width int) []string {
+	lines := []string{
+		fmt.Sprintf("Checked %d/%d  |  Started %d  |  Running %d  |  Left %d", s.tried, s.total, s.attempted, s.running, s.remaining),
+		"VPN: " + wsShortStatus(s),
+	}
+	if s.incomplete {
+		lines = append(lines, "Provider mapping incomplete; more variants may be discovered.")
+	}
+	if s.connected > 0 && s.carrier != "" {
+		lines = append(lines, "Confirmed carrier: "+s.carrier)
+	}
+	if stages := wsFailureStages(s); stages != "" {
+		lines = append(lines, "Failure stages: "+stages+" (not proof of DPI)")
+	}
+	if len(s.methods) > 0 {
+		lines = append(lines, "Method                                Checked  Left  Active")
+	}
+	nameWidth := 34
+	if width < 70 {
+		nameWidth = max(width-37, 10)
+	} else if width >= 115 {
+		nameWidth = 47
+	}
+	for _, method := range s.methods {
+		pending := max(method.total-method.tried, 0)
+		label := wsShortMethod(method.name, nameWidth)
+		line := fmt.Sprintf("%-*s %3d/%-3d   %3d    %2d", nameWidth, label,
+			method.tried, method.total, pending, method.running)
+		if method.replied > 0 {
+			line += "  reply"
+		} else if method.running > 0 {
+			line += "  testing"
+		}
+		lines = append(lines, line)
+	}
+	if len(s.inapplicable) > 0 {
+		lines = append(lines, fmt.Sprintf("%d IPv6-only methods excluded from this IPv4 target", len(s.inapplicable)))
+	}
+	lines = append(lines, "Checked = failed or selected; only Windscribe confirms the VPN.")
+	return lines
+}
+
+// Updates are owned by the event loop, never by a carrier worker. Interactive
+// terminals update one stable boxed panel. Verbose logs remain visible above
+// it, while redirected output falls back to occasional complete snapshots.
 func (v *wsProgressView) show(s wsProgressSnapshot, force bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -393,51 +436,31 @@ func (v *wsProgressView) show(s wsProgressSnapshot, force bool) {
 		(s.connected > 0 || s.active > 0 || s.incomplete || s.total == 0 ||
 			strings.HasPrefix(v.phase[s.key], "true/") ||
 			strings.HasPrefix(v.phase[s.key], "false/true/")))
-	if seen && !urgent && time.Since(v.last[s.key]) < 6*time.Second {
+	if seen && !urgent && time.Since(v.last[s.key]) < 3*time.Second {
 		return
 	}
 	v.last[s.key] = time.Now()
 	v.state[s.key] = signature
-	wasConnected := strings.HasPrefix(v.phase[s.key], "true/")
 	v.phase[s.key] = phase
-	title := s.key
+	k, _ := wsProgressStatus(s)
+	title := "WINDSCRIBE " + s.key
 	if s.location != "" {
-		title += " (" + s.location + ")"
+		title += " | " + s.location
 	}
-	k, verdict := wsProgressStatus(s)
-	if v.t.live && !v.verbose {
-		if v.line == nil || v.lineKey != s.key || v.line.total != max(s.total, 1) {
-			if v.line != nil {
-				v.line.Finish(toneInfo, "target changed")
-			}
-			v.t.Line(toneInfo, "Windscribe target: %s", title)
-			v.lineKey = s.key
-			v.line = v.t.Progress("WS", max(s.total, 1))
-		}
-		v.line.Set(s.tried, wsLiveDetail(s, v.t.width()))
-		if s.connected > 0 && !wasConnected {
-			v.t.Line(toneOK, "VPN confirmed by Windscribe: %s", s.carrier)
-		}
+	lines := wsPanelLines(s, v.t.width())
+	if v.t.PinBox(title, k, lines) {
+		v.panelKey = s.key
 		return
 	}
-	// On piped output / CI / verbose, preserve a readable append-only log.
-	// Do not dump the entire 19-variant inventory for every progress event.
-	detail := fmt.Sprintf("%s | Windscribe %s | checked %d/%d | started %d | live %d | replies %d",
-		verdict, title, s.tried, s.total, s.attempted, s.running, s.replied)
-	if !v.verbose && s.recentMethod != "" {
-		detail += " | latest " + s.recentMethod
-	}
-	v.t.Line(k, "%s", detail)
+	// A short or redirected terminal cannot support a persistent box. Emit
+	// full but throttled panels; never produce one box for each quick try.
+	v.t.Box(title, k, lines)
 }
 
 func (v *wsProgressView) summary(s wsProgressSnapshot) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.line != nil {
-		v.line.Finish(toneInfo, "session ended")
-		v.line = nil
-		v.lineKey = ""
-	}
+	v.t.ClearPinnedBox()
 	k, verdict := wsProgressStatus(s)
 	title := "WINDSCRIBE " + s.key
 	if s.location != "" {
