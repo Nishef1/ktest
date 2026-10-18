@@ -21,7 +21,7 @@ Balanced keeps the selected method for each target fixed. They do not launch aut
 
 Balanced-only fixed Android ByeDPI entries strip adaptive `--auto`/`--auto-mode` flags before launching and label the effective fixed flags, so a selected child cannot internally relearn or reset its strategy while connected. Plain transport is a separate tested method. This constraint applies only to Android Balanced; Fast and Windows legacy routes retain their existing adaptive behavior.
 
-The route-profile lifetime is separate from the verified foreign-exit lease. Protected traffic still requires valid exit evidence. When that lease expires, the fixed session fails closed for traffic that needs it: it does not verify the exit live, switch routes, or fall back to a direct/local path. Disconnect and run an explicit test before reusing the exit. A fresh 24-hour route profile does not extend an exit lease or prove the current location of an exit.
+The route-profile lifetime is separate from the verified foreign-exit lease. Protected traffic still requires valid exit evidence. When the lease expires, the fixed session revalidates **the same already-selected foreign exit** under the existing bounded exit-verification policy. It never switches methods or falls back to a direct/local path. A failed verification blocks protected traffic until the same exit verifies successfully or the user reconnects. A fresh 24-hour route profile does not extend an exit lease or prove the current location of an exit.
 
 ## Custom targets, CA coverage and evidence
 
