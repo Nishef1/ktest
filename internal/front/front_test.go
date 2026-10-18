@@ -158,6 +158,10 @@ type edge struct {
 }
 
 func startEdge(t *testing.T, names ...string) *edge {
+	return startEdgeALPN(t, []string{"http/1.1"}, names...)
+}
+
+func startEdgeALPN(t *testing.T, alpn []string, names ...string) *edge {
 	t.Helper()
 	pub := &testPublicCA{}
 	pub.init(t)
@@ -165,7 +169,7 @@ func startEdge(t *testing.T, names ...string) *edge {
 	e := &edge{roots: pub.pool}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		NextProtos:   []string{"http/1.1"},
+		NextProtos:   alpn,
 		GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
 			e.sniSeen.Store(h.ServerName)
 			e.alpnSeen.Store(strings.Join(h.SupportedProtos, ","))
@@ -236,11 +240,15 @@ func publicResolver(context.Context, string) ([]string, error) { return []string
 
 // socksVia opens a TLS connection to host through the proxy, trusting pool.
 func socksVia(t *testing.T, proxy, host string, pool *x509.CertPool) (*tls.Conn, error) {
+	return socksViaProtos(t, proxy, host, pool, []string{"http/1.1"})
+}
+
+func socksViaProtos(t *testing.T, proxy, host string, pool *x509.CertPool, protos []string) (*tls.Conn, error) {
 	c, err := smartproxy.DialVia(context.Background(), proxy, host, "443", 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn := tls.Client(c, &tls.Config{ServerName: host, RootCAs: pool, NextProtos: []string{"http/1.1"}})
+	conn := tls.Client(c, &tls.Config{ServerName: host, RootCAs: pool, NextProtos: protos})
 	_ = conn.SetDeadline(time.Now().Add(8 * time.Second))
 	return conn, conn.Handshake()
 }
@@ -323,6 +331,60 @@ func TestFrontServesTheSiteWithADifferentSNI(t *testing.T) {
 	}
 }
 
+// Google's video caches answer a fronted ClientHello without selecting an ALPN
+// protocol. The application's own leg is HTTP/1.1 only, so that is a working
+// connection, not a failed handshake; rejecting it tore down every YouTube
+// media connection while the page (which negotiates h2) kept working.
+func TestFrontAcceptsAnEdgeThatSelectsNoALPNForMedia(t *testing.T) {
+	ca := testCA(t)
+	e := startEdgeALPN(t, nil, "*.c.docs.google.com")
+	f := New(Config{
+		CA: ca, Roots: e.roots, Resolve: publicResolver, HedgeDelay: 30 * time.Millisecond,
+		dial: func(ctx context.Context, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", e.ln.Addr().String())
+		},
+	})
+	proxy := startProxy(t, f, make(chan smartproxy.Event, 8))
+	// A browser offers h2 and http/1.1; googlevideo is pinned to HTTP/1.1.
+	conn, err := socksViaProtos(t, proxy, "rr1---sn-x.googlevideo.com", ca.Pool(), []string{"h2", "http/1.1"})
+	if err != nil {
+		t.Fatalf("a media cache that selects no ALPN must be usable: %v", err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "GET /videoplayback HTTP/1.1\r\nHost: rr1---sn-x.googlevideo.com\r\nConnection: close\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "host=rr1---sn-x.googlevideo.com" {
+		t.Fatalf("the edge saw %q", body)
+	}
+	if alpn, _ := e.alpnSeen.Load().(string); alpn != "http/1.1" {
+		t.Fatalf("edge saw ALPN %q", alpn)
+	}
+}
+
+// The allowance is only for a connection that asked for HTTP/1.1 alone: a page
+// that negotiated h2 must still see a real h2 selection.
+func TestFrontRejectsNoALPNWhenHTTP2WasOffered(t *testing.T) {
+	ca := testCA(t)
+	e := startEdgeALPN(t, nil, "www.google.com")
+	f := New(Config{
+		CA: ca, Roots: e.roots, Resolve: publicResolver, HedgeDelay: 30 * time.Millisecond,
+		dial: func(ctx context.Context, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", e.ln.Addr().String())
+		},
+	})
+	proxy := startProxy(t, f, make(chan smartproxy.Event, 8))
+	if conn, err := socksViaProtos(t, proxy, "www.youtube.com", ca.Pool(), []string{"h2", "http/1.1"}); err == nil {
+		conn.Close()
+		t.Fatal("an edge that cannot speak h2 was accepted for a page that asked for it")
+	}
+}
+
 func TestFrontRejectsAnEdgeWithAnUntrustedCertificate(t *testing.T) {
 	ca := testCA(t)
 	e := startEdge(t, "attacker.example") // valid chain, but not for the site or its family
@@ -339,6 +401,27 @@ func TestFrontRejectsAnEdgeWithAnUntrustedCertificate(t *testing.T) {
 	}
 	if acc, ref := f.Stats(); acc != 0 || ref != 0 {
 		t.Fatalf("the application must not even be touched (accepted %d, refused %d)", acc, ref)
+	}
+}
+
+// A family whose every front dials a different machine has no route for a site
+// that only its own servers can serve. That must fail at once instead of
+// waiting for a result no front can produce.
+func TestFrontWithoutAUsableRouteFailsFast(t *testing.T) {
+	fam := &Family{
+		Name: "media", Domains: []string{"media.example"},
+		Fronts:    []Front{{SNI: "www.google.com", Dial: "www.google.com"}},
+		NoStandIn: []string{"media.example"},
+	}
+	f := New(Config{Families: []Family{*fam}})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	if _, _, err := f.connect(ctx, []*Family{fam}, "media.example", []string{"http/1.1"}); err == nil {
+		t.Fatal("a family with no usable front returned a connection")
+	}
+	if took := time.Since(started); took > time.Second {
+		t.Fatalf("a family with no usable front waited %v instead of failing at once", took)
 	}
 }
 

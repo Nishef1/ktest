@@ -96,7 +96,7 @@ func (f *Fronter) tryECH(ctx context.Context, fr Front, name string, protos []st
 			case !st.ECHAccepted:
 				_ = raw.Close()
 				return nil, errors.New("the edge did not accept Encrypted Client Hello")
-			case len(protos) == 1 && st.NegotiatedProtocol != protos[0]:
+			case len(protos) == 1 && st.NegotiatedProtocol != protos[0] && !noALPNIsHTTP1(protos, st.NegotiatedProtocol):
 				_ = raw.Close()
 				return nil, fmt.Errorf("edge chose %q instead of %q", st.NegotiatedProtocol, protos[0])
 			}

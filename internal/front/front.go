@@ -274,6 +274,12 @@ func (f *Fronter) connect(ctx context.Context, fams []*Family, name string, prot
 			routes = append(routes, route{fam, fr})
 		}
 	}
+	if len(routes) == 0 {
+		// Every front of the family dials another machine, and this site may only
+		// be served by its own. Without this the waiter below would block on a
+		// result that can never arrive until the caller's timeout.
+		return nil, route{}, fmt.Errorf("%s: no usable front for this site", name)
+	}
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan attemptResult, len(routes))
@@ -417,11 +423,22 @@ func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, p
 		_ = raw.Close()
 		return nil, context.Canceled
 	}
-	if len(protos) == 1 && u.ConnectionState().NegotiatedProtocol != protos[0] {
+	if got := u.ConnectionState().NegotiatedProtocol; len(protos) == 1 && got != protos[0] && !noALPNIsHTTP1(protos, got) {
 		_ = raw.Close()
-		return nil, fmt.Errorf("edge chose %q instead of %q", u.ConnectionState().NegotiatedProtocol, protos[0])
+		return nil, fmt.Errorf("edge chose %q instead of %q", got, protos[0])
 	}
 	return u, nil
+}
+
+// noALPNIsHTTP1 reports whether an edge that selected no ALPN is still usable.
+// When HTTP/1.1 was the only protocol offered, an empty selection means the
+// edge speaks HTTP/1.1 without ALPN: that is what the application's own leg
+// will negotiate, and it is a working connection, not a rejected handshake.
+// Google's video caches answer a fronted ClientHello (SNI www.google.com) this
+// way; rejecting it tore down every YouTube media connection while the page,
+// which negotiates h2, kept working.
+func noALPNIsHTTP1(protos []string, got string) bool {
+	return got == "" && len(protos) == 1 && protos[0] == "http/1.1"
 }
 
 // setALPN makes the ClientHello offer exactly the protocols the application
@@ -750,6 +767,15 @@ func (f *Fronter) dialAny(ctx context.Context, ips []string) (net.Conn, error) {
 				pending++
 			}
 		case <-ctx.Done():
+			// Close whatever an in-flight dial still delivers after the cancel;
+			// otherwise a timed-out front leaves a connected socket behind.
+			go func(left int) {
+				for ; left > 0; left-- {
+					if x := <-ch; x.c != nil {
+						_ = x.c.Close()
+					}
+				}
+			}(pending)
 			return nil, ctx.Err()
 		}
 	}
