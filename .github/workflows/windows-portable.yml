@@ -184,6 +184,43 @@ jobs:
           $env:KTEST_BYEDPI_BIN = (Resolve-Path portable/ktest/cores/ciadpi.exe).Path
           go test -count=1 -timeout 1m -run '^TestOfficialByeDPIStartsAllBuiltInStrategies$' ./cmd/ktest
           if ($LASTEXITCODE -ne 0) { throw "Official ByeDPI rejected a shipped strategy or failed SOCKS5 readiness" }
+      - name: Validate shared Android Xray fragment profile with official Xray
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:KTEST_XRAY_BIN = (Resolve-Path portable/ktest/cores/xray.exe).Path
+          go test -count=1 -run '^TestOfficialXrayValidatesGeneratedAndroidProfile        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $menu = "0`n" | & ./portable/ktest/ktest.exe
+          $menuText = $menu -join "`n"
+          if ($LASTEXITCODE -ne 0 -or $menuText -notmatch "(?i)Disconnected" -or $menuText -notmatch "Connect with") {
+            throw "Terminal menu did not start and exit cleanly"
+          }
+          $version = & ./portable/ktest/cores/xray.exe version
+          if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.10\.10")) {
+            throw "Bundled Xray did not start or returned unexpected version"
+          }
+          $sb = & ./portable/ktest/cores/sing-box.exe version
+          if ($LASTEXITCODE -ne 0 -or (($sb -join "`n") -notmatch "1\.14\.3")) {
+            throw "Bundled sing-box failed native Windows version check"
+          }
+          & ./portable/ktest/ktest.exe tun-preview | Set-Content -Encoding utf8 build/tun-preview.json
+          if ($LASTEXITCODE -ne 0) { throw "TUN config generator failed" }
+          & ./portable/ktest/cores/sing-box.exe check -c build/tun-preview.json
+          if ($LASTEXITCODE -ne 0) { throw "sing-box rejected generated TUN config" }
+          Compress-Archive -Path portable/ktest -DestinationPath ktest-windows-portable.zip -CompressionLevel Optimal
+          (Get-FileHash -Algorithm SHA256 ktest-windows-portable.zip).Hash.ToLowerInvariant() + "  ktest-windows-portable.zip" | Set-Content -Encoding ascii ktest-windows-portable.zip.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ktest-windows-portable
+          path: |
+            ktest-windows-portable.zip
+            ktest-windows-portable.zip.sha256
+          retention-days: 14
+          if-no-files-found: error
+ ./internal/xraycfg
+          if ($LASTEXITCODE -ne 0) { throw "Pinned Xray rejected the Android fragment profile" }
       - name: Windows smoke tests and portable ZIP
         shell: pwsh
         run: |
