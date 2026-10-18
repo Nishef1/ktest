@@ -21,6 +21,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import mobilebridge.Mobilebridge
 import org.json.JSONObject
 import java.io.File
@@ -105,10 +106,25 @@ class ProxyService : Service() {
                             }
                         }
                         if (wanted) {
+                            // A live local proxy does not prove a device-wide VPN. Wait
+                            // until VpnService actually establishes HEV and attaches its
+                            // TUN fd; fail instead of claiming whole-device coverage.
+                            if (vpn) {
+                                withContext(Dispatchers.Main) { startVpn() }
+                                withTimeout(20_000L) {
+                                    while (wanted && isActive) {
+                                        when (KTestVpnService.state) {
+                                            "tun_running_unverified" -> break
+                                            "failed", "revoked" -> error(
+                                                KTestVpnService.lastError ?: "Android VPN did not start"
+                                            )
+                                        }
+                                        delay(250)
+                                    }
+                                }
+                            }
+                            if (!wanted) error("Connection stopped during VPN startup")
                             connectedAt = SystemClock.elapsedRealtime()
-                            // Whole-device coverage: Android consent was obtained by the UI;
-                            // the VPN service attaches HEV to this verified SOCKS listener.
-                            if (vpn) withContext(Dispatchers.Main) { startVpn() }
                             getSystemService(NotificationManager::class.java)
                                 .notify(NOTIFICATION_ID, notification(title, true))
                         }
@@ -116,6 +132,11 @@ class ProxyService : Service() {
                             val status = JSONObject(Mobilebridge.proxyStatus())
                             if (!status.optBoolean("running")) {
                                 lastError = status.optString("error", "Connection stopped")
+                                wanted = false
+                                break
+                            }
+                            if (vpn && KTestVpnService.state != "tun_running_unverified") {
+                                lastError = KTestVpnService.lastError ?: "Android VPN stopped after startup"
                                 wanted = false
                                 break
                             }
@@ -177,13 +198,11 @@ class ProxyService : Service() {
     }
 
     private fun startVpn() {
-        try {
-            startForegroundService(Intent(this, KTestVpnService::class.java).apply {
-                action = KTestVpnService.ACTION_START
-            })
-        } catch (e: Exception) {
-            lastError = e.message ?: "Unable to start the Android VPN"
-        }
+        // Errors must propagate to the active connection, not leave the UI
+        // showing a functioning device VPN when only local SOCKS is live.
+        startForegroundService(Intent(this, KTestVpnService::class.java).apply {
+            action = KTestVpnService.ACTION_START
+        })
     }
 
     private fun stopVpn() {
