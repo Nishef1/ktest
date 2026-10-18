@@ -211,7 +211,13 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 	for _, row := range rows {
 		s.methods = append(s.methods, *row)
 	}
-	sort.Slice(s.methods, func(i, j int) bool { return s.methods[i].name < s.methods[j].name })
+	sort.Slice(s.methods, func(i, j int) bool {
+		a, b := wsMethodPriority(s.methods[i].name), wsMethodPriority(s.methods[j].name)
+		if a != b {
+			return a < b
+		}
+		return s.methods[i].name < s.methods[j].name
+	})
 	for active := range b.active {
 		if active.key == key && !active.upstreamEnd {
 			s.active++
