@@ -703,10 +703,11 @@ func (s *session) Serve(client net.Conn, flight []byte) error {
 	_ = client.SetDeadline(time.Time{})
 	s.f.acceptedOne()
 	began := time.Now()
-	up, down, status := relayObserved(srv, s.up)
-	if up > 0 && down > 0 && status != 0 {
+	up, down, _ := relayObserved(srv, s.up, func(status int) {
+		// This callback fires only after an HTTP/1 response prefix was
+		// transferred to the local TLS client, not on upstream TLS success.
 		s.f.note(s.fam, s.fr, status >= 200 && status < 400)
-	}
+	})
 	if s.f.cfg.OnSession != nil {
 		s.f.cfg.OnSession(SessionInfo{Host: s.name, Front: s.fr.String(), Up: up, Down: down, Took: time.Since(began)})
 	}
@@ -738,34 +739,78 @@ type closeWriter interface{ CloseWrite() error }
 // It returns the bytes that went to a (down, from b) and to b (up, from a).
 // Only a bounded HTTP/1 response prefix is observed. The contents of
 // requests, response headers and user data are never retained or logged.
-type httpStatusPrefix struct{ first []byte }
+type httpStatusPrefix struct {
+	first    []byte
+	onStatus func(int)
+	reported bool
+}
 
 func (p *httpStatusPrefix) Write(b []byte) (int, error) {
 	if remaining := 32 - len(p.first); remaining > 0 {
 		p.first = append(p.first, b[:min(len(b), remaining)]...)
 	}
+	if !p.reported {
+		if status := p.status(); status != 0 {
+			p.reported = true
+			if p.onStatus != nil {
+				p.onStatus(status)
+			}
+		}
+	}
 	return len(b), nil
 }
 
 func (p *httpStatusPrefix) status() int {
-	if !strings.HasPrefix(string(p.first), "HTTP/1.1 ") && !strings.HasPrefix(string(p.first), "HTTP/1.0 ") {
+	if len(p.first) < 13 {
 		return 0
 	}
-	var version string
-	var code int
-	if _, err := fmt.Sscanf(string(p.first), "%s %d", &version, &code); err != nil || code < 100 || code > 599 {
+	name := string(p.first[:9])
+	if name != "HTTP/1.1 " && name != "HTTP/1.0 " {
+		return 0 // HTTP/2 status is binary and is never guessed.
+	}
+	if p.first[12] != ' ' && p.first[12] != '\r' {
+		return 0
+	}
+	code := 0
+	for _, digit := range p.first[9:12] {
+		if digit < '0' || digit > '9' {
+			return 0
+		}
+		code = code*10 + int(digit-'0')
+	}
+	if code < 100 || code > 599 {
 		return 0
 	}
 	return code
 }
 
+type responseObserver struct {
+	io.WriteCloser
+	prefix *httpStatusPrefix
+}
+
+func (o responseObserver) Write(b []byte) (int, error) {
+	n, err := o.WriteCloser.Write(b)
+	if n > 0 {
+		_, _ = o.prefix.Write(b[:n])
+	}
+	return n, err
+}
+
+func (o responseObserver) CloseWrite() error {
+	if c, ok := o.WriteCloser.(closeWriter); ok {
+		return c.CloseWrite()
+	}
+	return nil
+}
+
 // Existing callers retain the original byte-counting relay interface.
 func relay(a, b io.ReadWriteCloser) (up, down int64) {
-	up, down, _ = relayObserved(a, b)
+	up, down, _ = relayObserved(a, b, nil)
 	return
 }
 
-func relayObserved(a, b io.ReadWriteCloser) (up, down int64, status int) {
+func relayObserved(a, b io.ReadWriteCloser, onStatus func(int)) (up, down int64, status int) {
 	done := make(chan struct{}, 2)
 	cp := func(dst io.WriteCloser, src io.Reader, n *int64) {
 		*n, _ = io.Copy(dst, src)
@@ -774,8 +819,8 @@ func relayObserved(a, b io.ReadWriteCloser) (up, down int64, status int) {
 		}
 		done <- struct{}{}
 	}
-	var prefix httpStatusPrefix
-	go cp(a, io.TeeReader(b, &prefix), &down)
+	prefix := &httpStatusPrefix{onStatus: onStatus}
+	go cp(responseObserver{WriteCloser: a, prefix: prefix}, b, &down)
 	go cp(b, a, &up)
 	<-done
 	<-done
