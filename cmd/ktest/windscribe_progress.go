@@ -387,26 +387,48 @@ func wsPanelLines(s wsProgressSnapshot, width int) []string {
 	if stages := wsFailureStages(s); stages != "" {
 		lines = append(lines, "Failure stages: "+stages+" (not proof of DPI)")
 	}
-	if len(s.methods) > 0 {
-		lines = append(lines, "Method                                Checked  Left  Active")
-	}
-	nameWidth := 34
-	if width < 70 {
-		nameWidth = max(width-37, 10)
-	} else if width >= 115 {
-		nameWidth = 47
-	}
-	for _, method := range s.methods {
-		pending := max(method.total-method.tried, 0)
-		label := wsShortMethod(method.name, nameWidth)
-		line := fmt.Sprintf("%-*s %3d/%-3d   %3d    %2d", nameWidth, label,
-			method.tried, method.total, pending, method.running)
-		if method.replied > 0 {
-			line += "  reply"
-		} else if method.running > 0 {
-			line += "  testing"
+	if width >= 80 && len(s.methods) > 12 {
+		// A 24-row PowerShell window cannot pin a 19-row single-column list.
+		// Two columns preserve full method coverage and leave room for logs.
+		lines = append(lines, "METHODS: checked/total  -remaining  +running")
+		cellWidth := (width - 10) / 2
+		nameWidth := max(cellWidth-15, 12)
+		half := (len(s.methods) + 1) / 2
+		cell := func(m wsMethodProgress) string {
+			return fmt.Sprintf("%-*s %2d/%-2d -%-2d +%d",
+				nameWidth, wsShortMethod(m.name, nameWidth),
+				m.tried, m.total, max(m.total-m.tried, 0), m.running)
 		}
-		lines = append(lines, line)
+		for i := 0; i < half; i++ {
+			left := cell(s.methods[i])
+			if i+half < len(s.methods) {
+				lines = append(lines, fmt.Sprintf("%-*s  %s", cellWidth, left, cell(s.methods[i+half])))
+			} else {
+				lines = append(lines, left)
+			}
+		}
+	} else {
+		if len(s.methods) > 0 {
+			lines = append(lines, "Method                                Checked  Left  Active")
+		}
+		nameWidth := 34
+		if width < 70 {
+			nameWidth = max(width-37, 10)
+		} else if width >= 115 {
+			nameWidth = 47
+		}
+		for _, method := range s.methods {
+			pending := max(method.total-method.tried, 0)
+			label := wsShortMethod(method.name, nameWidth)
+			line := fmt.Sprintf("%-*s %3d/%-3d   %3d    %2d", nameWidth, label,
+				method.tried, method.total, pending, method.running)
+			if method.replied > 0 {
+				line += "  reply"
+			} else if method.running > 0 {
+				line += "  testing"
+			}
+			lines = append(lines, line)
+		}
 	}
 	if len(s.inapplicable) > 0 {
 		lines = append(lines, fmt.Sprintf("%d IPv6-only methods excluded from this IPv4 target", len(s.inapplicable)))
