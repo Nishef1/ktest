@@ -53,7 +53,11 @@ func TestCloudflareFamilyCoversXAndKnowsItsOwnDomainsAreConstrained(t *testing.T
 	fams := DefaultFamilies()
 	for _, h := range []string{"x.com", "api.x.com", "twitter.com", "pbs.twimg.com", "t.co", "discord.com"} {
 		all := LookupAll(fams, h)
-		if len(all) == 0 || all[0].Name != "cloudflare" {
+		covered := false
+		for _, fam := range all {
+			covered = covered || fam.Name == "cloudflare"
+		}
+		if !covered {
 			t.Errorf("%s: %v", h, all)
 		}
 	}

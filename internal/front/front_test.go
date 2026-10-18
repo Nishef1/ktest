@@ -93,6 +93,7 @@ func TestFamilyMatchAndFrontsFile(t *testing.T) {
 	for host, want := range map[string]string{
 		"www.youtube.com": "google", "rr1---sn-x.googlevideo.com": "google", "i.ytimg.com": "google",
 		"www.instagram.com": "meta", "www.reddit.com": "fastly", "pypi.org": "fastly", "example.com": "",
+		"pbs.twimg.com": "twimg",
 	} {
 		got := ""
 		if f := Lookup(fams, host); f != nil {
@@ -125,7 +126,6 @@ func TestFamilyMatchAndFrontsFile(t *testing.T) {
 }
 
 func TestChooseALPN(t *testing.T) {
-	g := &DefaultFamilies()[0]
 	cases := []struct {
 		host    string
 		offered []string
@@ -135,10 +135,12 @@ func TestChooseALPN(t *testing.T) {
 		{"www.youtube.com", []string{"h2", "http/1.1"}, "h2", false},
 		{"rr1.googlevideo.com", []string{"h2", "http/1.1"}, "http/1.1", false},
 		{"www.youtube.com", []string{"http/1.1"}, "http/1.1", false},
+		{"pbs.twimg.com", []string{"h2", "http/1.1"}, "http/1.1", false},
 		{"www.youtube.com", []string{"mqtt"}, "", true},
 		{"www.youtube.com", nil, "", false},
 	}
 	for _, c := range cases {
+		g := Lookup(DefaultFamilies(), c.host)
 		got, err := chooseALPN(g, c.host, c.offered)
 		if (err != nil) != c.fail || strings.Join(got, ",") != c.want {
 			t.Errorf("%v: got %v, %v", c, got, err)

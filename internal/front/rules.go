@@ -147,14 +147,16 @@ func DefaultFamilies() []Family {
 			},
 		},
 		{
-			// X's static files and video are on Fastly, on addresses that serve only
-			// their own customer, so the site's own address (or these hints) is needed;
+			// Fastly serves X's static files, photos and video on customer-specific
+			// addresses, so the site's own address (or these hints) is needed;
 			// the edge answers with its *.twimg.com certificate whatever the SNI is.
 			Name:    "twimg",
-			Domains: []string{"abs.twimg.com", "abs-0.twimg.com", "video.twimg.com", "ton.twimg.com"},
+			Domains: []string{"abs.twimg.com", "abs-0.twimg.com", "pbs.twimg.com", "video.twimg.com", "ton.twimg.com"},
 			Fronts:  []Front{{SNI: "pypi.org"}, {SNI: "www.python.org"}},
 			Hints:   []string{"146.75.104.159", "146.75.104.158"},
 			Verify:  []string{"twimg.com", "abs.twimg.com"},
+			// Photo transfers on these edges can stall mid-body over HTTP/2.
+			H1Only: []string{"pbs.twimg.com"},
 		},
 		{
 			// Cloudflare refuses a request whose Host differs from the SNI, so plain
