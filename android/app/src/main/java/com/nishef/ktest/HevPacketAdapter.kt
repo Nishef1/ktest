@@ -64,7 +64,12 @@ internal class HevPacketAdapter(
             TProxyService.TProxyStartService(file.absolutePath, fd.toInt())
         }.getOrDefault(false)
         if (!ok) {
-            stop()
+            // The native startup may have initialized some resources before
+            // rejecting the fd/config. started is still false here, so the
+            // ordinary stop() guard would skip native teardown.
+            runCatching { TProxyService.TProxyStopService() }
+            runCatching { file.delete() }
+            sessionConfig = null
             return false
         }
         started = true
