@@ -509,6 +509,22 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 				case <-ctx.Done():
 				case <-child.done:
 					proxy.Remove(child.method)
+					// Balanced freezes its routes, so a dead selected core has no
+					// replacement and would silently drop that traffic. Fail the
+					// session visibly, as for a native core exit.
+					if routeProfile == nil {
+						return
+					}
+					proxyMu.Lock()
+					stopped := activeProxy == session
+					if stopped {
+						proxyFailure = fmt.Sprintf("Selected route %s stopped; reconnect to calibrate again", child.method)
+						stopLocked()
+					}
+					proxyMu.Unlock()
+					if stopped {
+						StopVpnTun()
+					}
 				}
 			}()
 		}

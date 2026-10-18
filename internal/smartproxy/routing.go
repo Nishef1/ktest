@@ -51,8 +51,14 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 	var list []*upstreamState
 	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
 	m := p.memoryLocked(host, port)
+	literal := net.ParseIP(host)
 	for _, u := range p.ups {
 		if u.Match != nil && !u.Match(host) {
+			continue
+		}
+		// An IP literal can only be dialed in its own family.
+		if literal != nil && u.Addr == "" &&
+			((u.Network == "tcp6" && literal.To4() != nil) || (u.Network == "tcp4" && literal.To4() == nil)) {
 			continue
 		}
 		if protected && (!u.Exit || !u.AIEligible || (p.aiPinned != "" && u.Name != p.aiPinned)) {

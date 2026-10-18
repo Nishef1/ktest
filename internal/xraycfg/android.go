@@ -69,7 +69,7 @@ func ClientConfig(port int) ([]byte, error) {
 	// Keep the generated config small: no subscription, remote proxy, DNS
 	// fallback, TUN, API, management listener or certificate/key material.
 	root := map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
+		"log": map[string]any{"loglevel": "warning", "access": "none"},
 		"inbounds": []any{map[string]any{
 			"tag": "local-socks", "listen": "127.0.0.1", "port": port,
 			"protocol": "socks",

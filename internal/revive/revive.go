@@ -190,7 +190,7 @@ func LocalTCPProfile(port int, variant string) ([]byte, error) {
 		return nil, errors.New("local TCP variant must be A or B")
 	}
 	return []byte(fmt.Sprintf(`{
-  "log":{"loglevel":"warning"},
+  "log":{"loglevel":"warning","access":"none"},
   "inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"socks","settings":{"auth":"noauth","udp":false}}],
   "outbounds":[{"protocol":"freedom","settings":{"fragment":{"packets":%q,"length":%q,"interval":%q}}}]
 }`, port, packets, length, interval)), nil

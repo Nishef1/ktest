@@ -589,7 +589,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	add := func(name string, port int, localDNS, localBypass bool, mk func(io.Writer) (launcher, error)) {
 		c := &pathCore{name: name, port: port, logs: &tailBuffer{max: 4096}, localDNS: localDNS, localBypass: localBypass}
 		if o.verbose {
-			c.logs.tee = os.Stderr
+			// Through the term so live progress and pinned boxes stay intact.
+			c.logs.tee = &termLines{t: t}
 		}
 		l, err := mk(c.logs)
 		if err != nil {

@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import mobilebridge.Mobilebridge
 import org.json.JSONObject
 import java.io.File
@@ -196,6 +197,9 @@ class ProxyService : Service() {
                             // until VpnService actually establishes HEV and attaches its
                             // TUN fd; fail instead of claiming whole-device coverage.
                             if (vpn) {
+                                // Clear a previous session's failed/revoked state first, or the
+                                // wait loop below can read it before the new start runs.
+                                KTestVpnService.markStarting()
                                 withContext(Dispatchers.Main) { startVpn() }
                                 withTimeout(20_000L) {
                                     while (wanted && isActive) {
@@ -228,6 +232,10 @@ class ProxyService : Service() {
                             }
                             delay(1000)
                         }
+                    } catch (e: TimeoutCancellationException) {
+                        // withTimeout reports expiry as a cancellation; it is a real failure.
+                        if (wanted) lastError = "Android VPN did not start within 20 seconds"
+                        wanted = false
                     } catch (_: CancellationException) {
                         // A user-initiated stop is not a connection failure.
                     } catch (e: Exception) {

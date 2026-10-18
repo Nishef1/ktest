@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -75,4 +76,37 @@ func (b *tailBuffer) lastLines(n int) []string {
 		out = out[len(out)-n:]
 	}
 	return out
+}
+
+// termLines forwards complete lines of core output through term.Printf, which
+// clears and repaints progress lines and pinned boxes around each write.
+type termLines struct {
+	t       *term
+	mu      sync.Mutex
+	partial []byte
+}
+
+func (w *termLines) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.partial = append(w.partial, p...)
+	var lines []string
+	for {
+		i := bytes.IndexByte(w.partial, '\n')
+		if i < 0 {
+			break
+		}
+		if line := strings.TrimRight(string(w.partial[:i]), "\r"); strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+		w.partial = w.partial[i+1:]
+	}
+	if len(w.partial) > 4096 {
+		lines = append(lines, string(w.partial))
+		w.partial = nil
+	}
+	w.mu.Unlock()
+	for _, line := range lines {
+		w.t.Printf("    %s\n", w.t.Dim(line))
+	}
+	return len(p), nil
 }

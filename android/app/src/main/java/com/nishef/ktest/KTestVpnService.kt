@@ -43,6 +43,12 @@ class KTestVpnService : VpnService() {
             private set
         @Volatile var lastError: String? = null
             private set
+
+        /** Called by ProxyService right before ACTION_START so stale state is never observed. */
+        fun markStarting() {
+            state = "starting"
+            lastError = null
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
