@@ -342,7 +342,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	config := smartproxy.Config{Upstreams: upstreams, RecoverIPHostSNI: localDir != ""}
 	diagnostics := &proxyDiagnostics{}
 	config.OnEvent = func(e smartproxy.Event) {
-		if e.Probe {\n\t\t\treturn\n\t\t}
+		if e.Probe {
+			return
+		}
 		diagnostics.mu.Lock()
 		defer diagnostics.mu.Unlock()
 		if e.Port == "53" && e.Err != "" {
@@ -362,8 +364,12 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 		if e.Port != "53" {
 			diagnostics.tcpAttempts++
-			if e.Err != "" {\n\t\t\t\tdiagnostics.tcpFailures++\n\t\t\t}
-			if e.TLSResponse {\n\t\t\t\tdiagnostics.tlsResponses++\n\t\t\t}
+			if e.Err != "" {
+				diagnostics.tcpFailures++
+			}
+			if e.TLSResponse {
+				diagnostics.tlsResponses++
+			}
 			if e.OK && e.Path != "" {
 				diagnostics.lastPath = e.Path
 				diagnostics.lastRouteMS = e.Took.Milliseconds()
