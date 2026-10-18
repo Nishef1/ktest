@@ -1180,13 +1180,13 @@ func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (
 				// resolves domain-name CONNECT requests using system DNS.
 				return nil, fmt.Errorf("trusted DNS failed for local bypass %s: %w", u.Name, err)
 			case u.SoftResolve && ctx.Err() == nil:
-			p.logf("%s: no trusted address (%v); %s resolves it itself", host, err, u.Name)
-		case errors.Is(err, ErrPoisoned):
-			// Connecting to a block-page address would only look like a
-			// network failure; say what it is and let other paths try.
-			return nil, err
-		case ctx.Err() != nil:
-			return nil, ctx.Err()
+				p.logf("%s: no trusted address (%v); %s resolves it itself", host, err, u.Name)
+			case errors.Is(err, ErrPoisoned):
+				// Connecting to a block-page address would only look like a
+				// network failure; say what it is and let other paths try.
+				return nil, err
+			case ctx.Err() != nil:
+				return nil, ctx.Err()
 			default:
 				p.logf("%s: no trusted address (%v); using the name as given", host, err)
 			}
