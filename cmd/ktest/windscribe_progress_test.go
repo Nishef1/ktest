@@ -255,4 +255,7 @@ func TestWindscribeStatusDisplaysActiveMethodAndFailures(t *testing.T) {
 	if strings.Contains(wsLiveDetail(s, 40), "TLS record slicing") {
 		t.Fatal("very narrow terminals should receive a compact status")
 	}
+	if !strings.Contains(wsLiveDetail(s, 80), "ByeDPI TLS") {
+		t.Fatalf("standard 80-column output hid the current method: %q", wsLiveDetail(s, 80))
+	}
 }
