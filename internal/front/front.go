@@ -750,7 +750,8 @@ func (p *httpStatusPrefix) Write(b []byte) (int, error) {
 		p.first = append(p.first, b[:min(len(b), remaining)]...)
 	}
 	if !p.reported {
-		if status := p.status(); status != 0 {
+		if status := p.status(); status >= 200 {
+			// An interim 100 Continue is not the final site response.
 			p.reported = true
 			if p.onStatus != nil {
 				p.onStatus(status)
