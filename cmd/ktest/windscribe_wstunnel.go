@@ -284,6 +284,9 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		legs = append(legs, wsLeg{suffix: " +anti-DPI", method: "local anti-DPI rotation", dial: viaLocal})
 	} else {
 		for _, method := range b.methods() {
+			if method.IPv6Only {
+				continue
+			} // provider carrier entries are IPv4
 			legs = append(legs, wsLeg{suffix: " +" + method.Name, method: method.Name, tlsOnly: method.TLSOnly, dial: func(ctx context.Context, addr string) (net.Conn, error) {
 				h, p, err := net.SplitHostPort(addr)
 				if err != nil {

@@ -12,26 +12,27 @@ import (
 // Coverage belongs to the requested TCP IP:port, not its country, entry IP or
 // API hostname. A canceled contender remains available for a real later trial.
 type wsCarrierProgress struct {
-	method, entry, last      string
-	starts, running, replies int
-	failures, selected       int
-	interrupted              int
-	updated                  time.Time
+	method, entry, last string
+	starts, running     int
+	failures, selected  int
+	interrupted         int
+	updated             time.Time
 }
 
 func (p *wsCarrierProgress) needsTrial() bool { return p.failures == 0 && p.selected == 0 }
 
 type wsTargetProgress struct {
-	location  string
-	inventory []string
-	paths     map[string]*wsCarrierProgress
+	location     string
+	inventory    []string
+	paths        map[string]*wsCarrierProgress
+	inapplicable []string
 }
 
 type wsMethodProgress struct {
-	name                  string
-	total, tried, running int
-	last                  string
-	updated               time.Time
+	name         string
+	total, tried int
+	last         string
+	updated      time.Time
 }
 
 type wsProgressSnapshot struct {
@@ -41,10 +42,19 @@ type wsProgressSnapshot struct {
 	retryAfter                                             time.Duration
 	methods                                                []wsMethodProgress
 	incomplete                                             bool
+	inapplicable                                           []string
 }
 
 func (b *wsBridge) registerCarriers(key, host string, carriers []wsCarrier) {
 	var labels []string
+	var inapplicable []string
+	if b.methods != nil {
+		for _, method := range b.methods() {
+			if method.IPv6Only {
+				inapplicable = append(inapplicable, method.Name)
+			}
+		}
+	}
 	if matches := b.catalog.matches(host); len(matches) > 0 {
 		for _, label := range []string{matches[0].node.Country, matches[0].node.Group} {
 			if label != "" {
@@ -63,6 +73,7 @@ func (b *wsBridge) registerCarriers(key, host string, carriers []wsCarrier) {
 		b.targets[key] = target
 	}
 	target.location = strings.Join(labels, " / ")
+	target.inapplicable = inapplicable
 	target.inventory = nil
 	for _, carrier := range carriers {
 		target.inventory = append(target.inventory, carrier.name)
@@ -77,6 +88,9 @@ func (b *wsBridge) registerCarriers(key, host string, carriers []wsCarrier) {
 		}
 		if p.method == "" {
 			p.method = carrier.name
+		}
+		if p.method == "direct" {
+			p.method = "Direct TLS wrapper"
 		}
 	}
 }
@@ -99,7 +113,6 @@ func (b *wsBridge) carrierProgress(key, name, outcome string) {
 				p.interrupted++
 				p.last = "interrupted; still to try"
 			case "reply":
-				p.replies++
 				p.last = "OpenVPN reply; VPN unverified"
 			default:
 				p.failures++
@@ -120,6 +133,7 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		return s
 	}
 	s.location = target.location
+	s.inapplicable = append([]string(nil), target.inapplicable...)
 	rows := make(map[string]*wsMethodProgress)
 	now := time.Now()
 	for _, name := range target.inventory {
@@ -127,10 +141,12 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		s.total++
 		if p.needsTrial() {
 			s.remaining++
+			if p.interrupted > 0 {
+				s.interrupted++
+			}
 		} else {
 			s.tried++
 		}
-		s.interrupted += p.interrupted
 		s.running += p.running
 		if until := b.bad[key][name]; now.Before(until) {
 			s.cooling++
@@ -144,7 +160,6 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 			rows[p.method] = row
 		}
 		row.total++
-		row.running += p.running
 		if !p.needsTrial() {
 			row.tried++
 		}
@@ -236,15 +251,20 @@ func (v *wsProgressView) show(s wsProgressSnapshot, force bool) {
 	switch {
 	case s.incomplete:
 		lines = append(lines, "More to try: discovery incomplete; WStunnel/Stealth inventory is not yet known.")
+	case s.total == 0:
+		lines = append(lines, "No eligible variants are available; check local methods and provider discovery.")
 	case s.remaining > 0:
 		lines = append(lines, fmt.Sprintf("More to try: %d variants. They advance on Windscribe's next connection, not during an established VPN.", s.remaining))
 	case s.cooling > 0:
-		lines = append(lines, fmt.Sprintf("This pass is exhausted. Retry becomes eligible in %s; this does not prove the IP/country is blocked.", s.retryAfter.Round(time.Second)))
+		lines = append(lines, fmt.Sprintf("This pass is exhausted. Earliest cooldown: %s; one recovery re-probe remains allowed. This does not prove the IP/country is blocked.", s.retryAfter.Round(time.Second)))
 	default:
 		lines = append(lines, "All configured variants have been tried; a later retry can still work if the network changes.")
 	}
 	if s.interrupted > 0 {
 		lines = append(lines, "Canceled contenders remain to try; they are not counted as failures.")
+	}
+	if len(s.inapplicable) > 0 {
+		lines = append(lines, "Not applicable to IPv4 entries: "+strings.Join(s.inapplicable, "; "))
 	}
 	lines = append(lines, "Tried = transport failed or selected for VPN. Only Windscribe confirms the VPN.")
 	v.t.Box(title, k, lines)

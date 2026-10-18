@@ -72,7 +72,7 @@ func TestWindscribeCatalogGapNeverReportsExhaustedCoverage(t *testing.T) {
 func TestWindscribeInventoryNamesEveryMethodAndKeepsTLSOnlyOffRawVPN(t *testing.T) {
 	b := newWSBridge(wsOptions{direct: true, sni: "example.com", serverIP: "198.51.100.10"}, nil, nil, func(string, ...any) {})
 	b.methods = func() []smartproxy.WindscribeMethod {
-		return []smartproxy.WindscribeMethod{{Name: "ByeDPI A"}, {Name: "ByeDPI B"}, {Name: "TLS cut", TLSOnly: true}}
+		return []smartproxy.WindscribeMethod{{Name: "ByeDPI A"}, {Name: "ByeDPI B"}, {Name: "TLS cut", TLSOnly: true}, {Name: "IPv6 cut", TLSOnly: true, IPv6Only: true}}
 	}
 	seen := make(map[string]int)
 	for _, c := range b.carriersFor("203.0.113.100") {
@@ -85,6 +85,11 @@ func TestWindscribeInventoryNamesEveryMethodAndKeepsTLSOnlyOffRawVPN(t *testing.
 		if seen[method] == 0 {
 			t.Fatalf("method hidden from coverage: %s", method)
 		}
+	}
+	b.registerCarriers("203.0.113.100:443", "203.0.113.100", b.carriersFor("203.0.113.100"))
+	s := b.progressSnapshot("203.0.113.100:443")
+	if seen["IPv6 cut"] != 0 || len(s.inapplicable) != 1 || s.inapplicable[0] != "IPv6 cut" {
+		t.Fatal("IPv6 incompatibility was hidden or counted as an IPv4 trial")
 	}
 }
 
