@@ -244,7 +244,17 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 		planTargets = append(planTargets, routeplan.Target{ID: target.ID, Name: target.Name, URL: target.URL})
 	}
 	key := routeProfileKey(targets, *config, privateDir)
-	profile, reused, err := routeplan.LoadOrTestWithRevision(ctx, privateDir, key, routeTargetsRevision(targets), manual, time.Now(), func() (*routeplan.Profile, error) {
+	// Older builds did not record the target revision independently. Migrate
+	// only if every saved exact ID/URL still equals the current user target list;
+	// otherwise keep the explicit-manual-test protection for target edits.
+	force := manual
+	if !manual {
+		if old, loadErr := routeplan.Load(privateDir); loadErr == nil && old.Fresh(time.Now()) &&
+			old.TargetsKey != key && legacyProfileMatchesTargets(old, targets) {
+			force = true
+		}
+	}
+	profile, reused, err := routeplan.LoadOrTestWithRevision(ctx, privateDir, key, routeTargetsRevision(targets), force, time.Now(), func() (*routeplan.Profile, error) {
 		return routeplan.CalibrateWithWorkers(ctx, planTargets, methods, func(ctx context.Context, target routeplan.Target, method routeplan.Method) routeplan.Sample {
 			return measureMethod(ctx, *config, byMethod[method.Name], target, privateDir)
 		}, func(progress routeplan.Progress) {
@@ -297,6 +307,24 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 	routeTestState.Phase = "complete"
 	routeTestMu.Unlock()
 	return profile, nil
+}
+
+func legacyProfileMatchesTargets(p *routeplan.Profile, targets []routeTarget) bool {
+	if p == nil || p.TargetsRevision != "" || len(p.Selections) != len(targets) {
+		return false
+	}
+	remaining := make(map[string]string, len(targets))
+	for _, target := range targets {
+		remaining[target.ID] = target.URL
+	}
+	for _, selection := range p.Selections {
+		url, ok := remaining[selection.TargetID]
+		if !ok || url != selection.URL {
+			return false
+		}
+		delete(remaining, selection.TargetID)
+	}
+	return len(remaining) == 0
 }
 
 func mapValues(values map[string]string) []string {
