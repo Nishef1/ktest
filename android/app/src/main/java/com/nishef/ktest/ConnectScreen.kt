@@ -470,6 +470,14 @@ private fun EndpointsPanel(
         if (status.optString("dns_error").isNotBlank()) {
             Note("Last DNS transport failure (${status.optInt("dns_failures")}): ${status.optString("dns_error")}", Tone.Warn)
         }
+        // Aggregate transport observations contain no URLs, IPs, headers,
+        // cookies or account data. They do not prove a particular app used QUIC.
+        if (status.optInt("tcp_attempts") > 0 || status.optInt("udp_failures") > 0) {
+            Note("Connection diagnostics · TCP events: ${status.optInt("tcp_attempts")}, TCP failures: ${status.optInt("tcp_failures")}, TLS replies: ${status.optInt("tls_responses")}")
+            Note("UDP associations: ${status.optInt("udp_associations")} · UDP failures: ${status.optInt("udp_failures")} (port 443: ${status.optInt("udp_443_failures")}). UDP/443 errors may contribute to a QUIC-to-TCP delay, but are not proof.")
+            val method = status.optString("last_route")
+            if (method.isNotBlank()) Note("Last observed route: $method · first response: ${status.optLong("last_route_ms")} ms · connect: ${status.optLong("last_connect_ms")} ms")
+        }
         val frozen = status.optBoolean("frozen")
         if (frozen) {
             Note("Routes are fixed for this session. Disconnect and use Test routes to measure them again.")
