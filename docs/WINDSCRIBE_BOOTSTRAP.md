@@ -19,6 +19,7 @@ From Windows Terminal **explicitly opened as Administrator**, with the Windscrib
 The output separately reports TCP, certificate-name checked TLS and WebSocket 101. These are **outer-carrier measurements only**, not OpenVPN authentication, success of Windscribe login, a foreign IP, or proof of defeating the ISP's DPI. Windows Defender/firewall/other WinDivert drivers can interfere; if the driver cannot start, the test fails without enabling fallback broad capture. Manual device testing is still needed before any such packet manipulation can safely be promoted to normal `connect` sessions. See [full integration contract](ZAPRET2_WINDOWS_INTEGRATION.md).
 
 
+## Run regular Windscribe bridge (without Zapret2)
 
 ```powershell
 cd D:\Data\ktest
