@@ -30,18 +30,18 @@ func TestNativeStartupCannotSubstituteAnotherModeOrMissingBundle(t *testing.T) {
 
 func TestNativeProfileSelectionPreservesTransportIsolation(t *testing.T) {
 	for _, method := range []string{"auto", "psiphon", "psiphon-cdn"} {
-		p, err := nativeProfile("psiphon", method)
+		p, err := nativeProfile("psiphon", method, false)
 		if err != nil || !p.Psiphon() {
 			t.Fatalf("Psiphon acquired a non-Psiphon backend: %+v %v", p, err)
 		}
 	}
-	if _, err := nativeProfile("psiphon", "masque-h2"); err == nil {
+	if _, err := nativeProfile("psiphon", "masque-h2", false); err == nil {
 		t.Fatal("Psiphon selected a WARP route")
 	}
-	if _, err := nativeProfile("tor", "wireguard"); err == nil {
+	if _, err := nativeProfile("tor", "wireguard", false); err == nil {
 		t.Fatal("Tor selected a WireGuard route")
 	}
-	p, err := nativeProfile("tor", "auto")
+	p, err := nativeProfile("tor", "auto", false)
 	if err != nil || !p.Has("--tor-only") || p.Has("--tor") {
 		t.Fatalf("Tor-only policy unexpectedly gained a WARP hop: %+v %v", p, err)
 	}
@@ -101,5 +101,22 @@ func TestNativeVerificationPromotesHealthyProcess(t *testing.T) {
 	})
 	if err != nil || got.IP != "203.0.113.10" {
 		t.Fatalf("healthy verified core was rejected: %+v, %v", got, err)
+	}
+}
+
+func TestAetherThroughFastOnlyUsesTCPMethods(t *testing.T) {
+	p, err := nativeProfile("aether", "auto", true)
+	if err != nil || !p.Has("--h2") || p.Has("--wg") || p.Psiphon() {
+		t.Fatalf("automatic Fast-carried profile is not an H2 method: %v %v", p.Args, err)
+	}
+	for _, method := range []string{"masque-h2", "gool-h2", "mim-h2"} {
+		if _, err := nativeProfile("aether", method, true); err != nil {
+			t.Fatalf("%s should be carried by Fast: %v", method, err)
+		}
+	}
+	for _, method := range []string{"masque-h3", "wireguard", "psiphon", "psiphon-cdn"} {
+		if _, err := nativeProfile("aether", method, true); err == nil {
+			t.Fatalf("%s needs UDP or its own helper and must be refused through Fast", method)
+		}
 	}
 }

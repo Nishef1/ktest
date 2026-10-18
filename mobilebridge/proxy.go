@@ -30,6 +30,7 @@ type proxySession struct {
 	closeDNS     func()
 	diagnostics  *proxyDiagnostics
 	native       *nativeCore
+	carrier      *fastCarrier
 	localCores   *localCoreSet
 	xrayError    string
 	fronter      *front.Fronter
@@ -262,12 +263,29 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		return "", fmt.Errorf("mode %q is not available in this Android build", mode)
 	}
 	var managed *nativeCore
+	var carrier *fastCarrier
+	keepCarrier := false
 	keepManaged := false
 	if native != nil {
 		proxyMu.Lock()
 		startup.phase = "starting_core"
 		proxyMu.Unlock()
 		var err error
+		if native.viaFast {
+			if mode != "aether" {
+				return "", errors.New("only Aether can run through Fast")
+			}
+			carrier, err = startFastCarrier(startContext, native.libraryDir, native.privateDir)
+			if err != nil {
+				return "", fmt.Errorf("Fast carrier for Aether: %w", err)
+			}
+			defer func() {
+				if !keepCarrier {
+					carrier.stop()
+				}
+			}()
+			native.carrier = carrier.address
+		}
 		managed, err = launchNative(startContext, mode, *native)
 		if err != nil {
 			return "", err
@@ -493,11 +511,12 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		return "", fmt.Errorf("HTTP listener: %w", err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, localCores: localCores, fronter: fronter, xrayError: xrayError, routeProfile: routeProfile}
+	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, routeProfile: routeProfile}
 	activeProxy = session
 	keepDNS = true
 	keepManaged = true
 	keepLocal = true
+	keepCarrier = true
 	if localCores != nil {
 		for _, child := range localCores.cores {
 			go func() {
@@ -580,6 +599,9 @@ func stopLocked() {
 	}
 	if s.native != nil {
 		s.native.stop()
+	}
+	if s.carrier != nil {
+		s.carrier.stop()
 	}
 }
 

@@ -15,7 +15,13 @@ import (
 	"github.com/Nishef1/ktest/internal/egresscheck"
 )
 
-type nativeOptions struct{ method, libraryDir, stateDir string }
+type nativeOptions struct {
+	method, libraryDir, stateDir string
+	// viaFast carries Aether through a private Fast proxy (carrier address).
+	viaFast    bool
+	privateDir string
+	carrier    string
+}
 
 type nativeCore struct {
 	address string
@@ -33,10 +39,10 @@ func StartNativeProxy(mode, method, libraryDir, stateDir string) (string, error)
 	if mode != "aether" && mode != "tor" && mode != "psiphon" {
 		return "", errors.New("managed native startup requires Aether, Tor or Psiphon mode")
 	}
-	return startProxy(mode, "", &nativeOptions{method, libraryDir, stateDir}, "")
+	return startProxy(mode, "", &nativeOptions{method: method, libraryDir: libraryDir, stateDir: stateDir}, "")
 }
 
-func nativeProfile(mode, method string) (aether.Profile, error) {
+func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 	if !aether.ValidMethod(method) {
 		return aether.Profile{}, errors.New("unknown Aether method")
 	}
@@ -51,6 +57,12 @@ func nativeProfile(mode, method string) (aether.Profile, error) {
 		return aether.Profile{}, err
 	}
 	profiles = aether.FilterMethod(aether.ProfilesForMode(profiles, mode), method)
+	if viaFast {
+		profiles = tcpCarriedProfiles(profiles)
+		if len(profiles) == 0 {
+			return aether.Profile{}, errors.New("through Fast only TCP methods work (MASQUE, Gool or MASQUE-in-MASQUE over HTTP/2); choose one of those")
+		}
+	}
 	if len(profiles) == 0 {
 		return aether.Profile{}, errors.New("selected method is incompatible with this mode")
 	}
@@ -60,7 +72,7 @@ func nativeProfile(mode, method string) (aether.Profile, error) {
 }
 
 func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCore, error) {
-	p, err := nativeProfile(mode, o.method)
+	p, err := nativeProfile(mode, o.method, o.carrier != "")
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +101,9 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	address := listener.Addr().String()
 	_ = listener.Close() // Aether binds its own socket; no inherited-fd API.
 	args := paths.ProfileArgs(p, port, o.stateDir)
+	if o.carrier != "" {
+		args = append(args, "--upstream", "socks5://"+o.carrier)
+	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	n := &nativeCore{address: address, method: p.Method(), cancel: cancel, done: make(chan struct{})}
 	go func() {
@@ -159,4 +174,16 @@ func waitNativeWithProbe(ctx context.Context, mode string, n *nativeCore, probe 
 		}
 		timer.Stop()
 	}
+}
+
+// Fast relays TCP (and DNS) only, so UDP-based Aether transports (HTTP/3,
+// WireGuard) and separate Psiphon/Tor helpers cannot use it as an upstream.
+func tcpCarriedProfiles(profiles []aether.Profile) []aether.Profile {
+	var out []aether.Profile
+	for _, p := range profiles {
+		if p.Has("--h2") && !p.Psiphon() && !p.Has("--tor-only") && !p.Has("--wg") {
+			out = append(out, p)
+		}
+	}
+	return out
 }

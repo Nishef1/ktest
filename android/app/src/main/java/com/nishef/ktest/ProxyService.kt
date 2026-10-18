@@ -165,7 +165,12 @@ class ProxyService : Service() {
                             if (wanted) {
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {
-                                    Mobilebridge.startNativeProxy(mode, method,
+                                    val viaFast = mode == "aether" && getSharedPreferences("ktest_android", MODE_PRIVATE)
+                                        .getBoolean("aether_via_fast", false)
+                                    if (viaFast) Mobilebridge.startNativeProxyViaFast(method,
+                                        applicationInfo.nativeLibraryDir,
+                                        File(filesDir, "aether").absolutePath, filesDir.canonicalPath)
+                                    else Mobilebridge.startNativeProxy(mode, method,
                                         applicationInfo.nativeLibraryDir,
                                         File(filesDir, "aether").absolutePath)
                                 } else if (mode == "balanced" || mode == "fast") {

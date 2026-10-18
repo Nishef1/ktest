@@ -646,7 +646,14 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	}
 	var win winner
 	if isTLSFlight(flight) {
-		host = p.nameFor(host, flight)
+		name := p.nameFor(host, flight)
+		if ip := net.ParseIP(host); ip != nil && name != host && !Bogus(ip) {
+			// The SNI decides routing (protected sites, fronting families), but
+			// the client chose this address: dial it, never a re-resolved name.
+			// Gateways and pinned edges (e.g. Aether, custom CDN IPs) depend on it.
+			ctx = context.WithValue(ctx, dialAddrKey{}, host)
+		}
+		host = name
 		win, err = p.race(ctx, host, port, flight)
 	} else {
 		began := time.Now()
@@ -1191,6 +1198,9 @@ func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (
 			return nil, err
 		}
 	}
+	if addr, ok := ctx.Value(dialAddrKey{}).(string); ok {
+		host = addr
+	}
 	dctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
 	defer cancel()
 	d := net.Dialer{}
@@ -1409,3 +1419,7 @@ func (p *Proxy) resolve(ctx context.Context, resolver Resolver, host string) (st
 	}
 	return "", err
 }
+
+// dialAddrKey carries the client's original numeric destination when the
+// routing name was recovered from the ClientHello SNI.
+type dialAddrKey struct{}

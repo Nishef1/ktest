@@ -405,6 +405,23 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 }
             }
         }
+        if (mode == "aether") {
+            val prefs = androidx.compose.ui.platform.LocalContext.current
+                .getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
+            var viaFast by remember { mutableStateOf(prefs.getBoolean("aether_via_fast", false)) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Through Fast", color = K.text, fontSize = 14.sp)
+                    Text("Carry Aether (and WARP registration) through Fast's anti-DPI race. TCP/HTTP2 methods only.",
+                        color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+                Switch(viaFast, { viaFast = it; prefs.edit().putBoolean("aether_via_fast", it).apply() }, enabled = enabled,
+                    colors = SwitchDefaults.colors(checkedThumbColor = K.bg, checkedTrackColor = K.mint,
+                        uncheckedThumbColor = K.muted, uncheckedTrackColor = K.surfaceHigh, uncheckedBorderColor = K.strokeStrong))
+            }
+            if (viaFast && method != "auto" && method !in setOf("masque-h2", "gool-h2", "mim-h2"))
+                Note("This method uses UDP or its own helper and cannot go through Fast. Choose Default or an HTTP/2 method.", Tone.Warn)
+        }
         Note("The packaged core finds gateways and reconnects by itself. If a method cannot connect, disconnect and try another. First-time setup can take several minutes.")
     }
 }
