@@ -71,6 +71,45 @@ jobs:
           Copy-Item (Join-Path $pt.FullName "lyrebird.exe") portable/ktest/cores/pt/lyrebird.exe
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/CluvexStudio/Aether/v2.3.0/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Aether-AGPL-3.0.txt
           Copy-Item "build/wintun/wintun/LICENSE.txt" portable/ktest/THIRD_PARTY/Wintun-LICENSE.txt
+      - name: Bundle official pinned Zapret2 Windows packet engine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $revision = "6eb463a6758fb48cd101bc55dfd057e6e9d98af1"
+          $destination = "portable/ktest/cores/zapret2"
+          New-Item -ItemType Directory -Force -Path $destination, "$destination/lua" | Out-Null
+          $files = @(
+            @{ src="zapret-winws/winws2.exe"; dest="winws2.exe"; blob="8ffd2def2df7dc3e8b1623fdb9a67a94e916fa21" },
+            @{ src="zapret-winws/cygwin1.dll"; dest="cygwin1.dll"; blob="1bb2e05c6d5458ad7987859a17172b635e87b9c5" },
+            @{ src="zapret-winws/WinDivert.dll"; dest="WinDivert.dll"; blob="2c55eeb6921351a6cad292a900f4b8d7d41c4bcc" },
+            @{ src="zapret-winws/WinDivert64.sys"; dest="WinDivert64.sys"; blob="218ccaf423ef0a67696226f9ef3a09149e4441d0" },
+            @{ src="zapret-winws/lua/zapret-lib.lua"; dest="lua/zapret-lib.lua"; blob="c954afd0718534f2eb49d67f08a291e325f68cb1" },
+            @{ src="zapret-winws/lua/zapret-antidpi.lua"; dest="lua/zapret-antidpi.lua"; blob="80f372a63774ca10ce85fd7dcd5d1e95c3f5bfb7" }
+          )
+          foreach ($f in $files) {
+            $path = Join-Path $destination $f.dest
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/bol-van/zapret-win-bundle/$revision/$($f.src)" -OutFile $path
+            $got = (git hash-object -- $path).Trim()
+            if ($LASTEXITCODE -ne 0 -or $got -ne $f.blob) {
+              throw "Zapret2 upstream Git blob mismatch: $($f.dest)"
+            }
+          }
+          $driver = Get-AuthenticodeSignature -FilePath "$destination/WinDivert64.sys"
+          if ($driver.Status -ne "Valid") { throw "WinDivert64.sys driver signature is not valid: $($driver.Status)" }
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/bol-van/zapret2/v1.0.5.2/docs/LICENSE.txt" -OutFile "portable/ktest/THIRD_PARTY/Zapret2-MIT.txt"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/basil00/WinDivert/v2.2.2/LICENSE" -OutFile "portable/ktest/THIRD_PARTY/WinDivert-LICENSE.txt"
+          # Preview the complete filter without opening a WinDivert handle:
+          Push-Location $destination
+          try {
+            $f = "ip and tcp and !loopback and !impostor and ((outbound and ip.DstAddr == 8.8.8.8 and tcp.DstPort == 443) or (inbound and ip.SrcAddr == 8.8.8.8 and tcp.SrcPort == 443))"
+            & ./winws2.exe "--wf-raw=$f" "--wf-save=preview-filter.txt"
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path preview-filter.txt)) {
+              throw "Zapret2 could not validate the exact single-target filter"
+            }
+            Remove-Item preview-filter.txt
+          } finally {
+            Pop-Location
+          }
       - name: Pin the offline profile and ship licenses
         shell: pwsh
         run: |
