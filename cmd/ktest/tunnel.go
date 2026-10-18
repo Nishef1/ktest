@@ -23,6 +23,7 @@ type tunnel struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	restore func()
+	restoreOnce sync.Once
 	logs    *tailBuffer
 }
 
@@ -67,6 +68,9 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 	tn := &tunnel{cancel: cancel, done: make(chan struct{}), restore: restore, logs: logs}
 	go func() {
 		defer close(tn.done)
+		// A native sing-box crash can end the TUN before Connect stops.
+		// Restore the original Go resolver as soon as the tunnel exits.
+		defer tn.restoreDNS()
 		err := systemtun.StartSystem(tctx, filepath.Join(base, "cores"), systemtun.Options{
 			SocksPort: socksPort, PhysicalNIC: nic, DirectProcessPaths: direct,
 		}, logs)
@@ -172,7 +176,13 @@ func (tn *tunnel) stop(t *term) {
 	case <-time.After(12 * time.Second):
 		t.Line(toneWarn, "The tunnel did not confirm its shutdown. If the network does not recover, disable and re-enable the adapter.")
 	}
-	tn.restore()
+	tn.restoreDNS()
+}
+
+func (tn *tunnel) restoreDNS() {
+	if tn != nil {
+		tn.restoreOnce.Do(tn.restore)
+	}
 }
 
 // pinSystemDNS makes this process resolve names through the given servers (the
