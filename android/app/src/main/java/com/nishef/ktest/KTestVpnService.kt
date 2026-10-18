@@ -113,7 +113,7 @@ class KTestVpnService : VpnService() {
                         }
                         state = "tun_running_unverified"
                         startForeground(NOTIFICATION_ID, notification(
-                            "All apps are routed through KTest"
+                            "Android VPN packet routing active (beta)"
                         ))
                         // Fail closed: if the Go proxy or HEV stops, tear the TUN down
                         // instead of leaving a black-holed interface behind.
