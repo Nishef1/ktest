@@ -9,6 +9,7 @@ on:
     paths:
       - ".github/workflows/android-build.yml"
       - "android/app/**"
+      - "android/scripts/**"
       - "mobilebridge/**"
       - "internal/front/**"
       - "internal/quickcheck/**"
