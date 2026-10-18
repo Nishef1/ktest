@@ -495,6 +495,21 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 	return len(updated) == len(wsCatalogURLs)
 }
 
+// Fetch success is not equivalent to coverage of the user's selected node.
+// The first missing mapping is retried promptly; later retries are bounded.
+func wsCatalogRefreshDelay(refreshed, missing bool, missingRetries int) time.Duration {
+	switch {
+	case !refreshed:
+		return 30 * time.Second
+	case missing && missingRetries == 0:
+		return 45 * time.Second
+	case missing:
+		return 5 * time.Minute
+	default:
+		return 30 * time.Minute
+	}
+}
+
 func (c *wsNodeCatalog) run(ctx context.Context, client *http.Client, path string, logf func(string, ...any)) {
 	refreshed := c.refresh(ctx, client, path, logf)
 	c.signalReady() // no source succeeded: unblock with explicit missing mapping
@@ -503,14 +518,9 @@ func (c *wsNodeCatalog) run(ctx context.Context, client *http.Client, path strin
 	// repeatedly downloading the provider's large catalog.
 	missingRetries := 0
 	for {
-		delay := 30 * time.Minute
-		if !refreshed {
-			delay = 30 * time.Second // bootstrap paths may become ready after startup
-		} else if c.hasUnresolvedTargets() {
-			delay = 45 * time.Second
-			if missingRetries > 0 {
-				delay = 5 * time.Minute
-			}
+		missing := c.hasUnresolvedTargets()
+		delay := wsCatalogRefreshDelay(refreshed, missing, missingRetries)
+		if missing {
 			missingRetries++
 		} else {
 			missingRetries = 0
