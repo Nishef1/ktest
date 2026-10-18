@@ -400,7 +400,7 @@ func (f *Fronter) connect(ctx context.Context, fams []*Family, name string, prot
 		case r := <-results:
 			pending--
 			if r.err == nil {
-				f.note(r.rt.fam, r.rt.fr, true)
+				// TLS success is not proof of application HTTP delivery.
 				cancel()
 				go closeLosers(pending)
 				return r.conn, r.rt, nil
@@ -703,7 +703,10 @@ func (s *session) Serve(client net.Conn, flight []byte) error {
 	_ = client.SetDeadline(time.Time{})
 	s.f.acceptedOne()
 	began := time.Now()
-	up, down := relay(srv, s.up)
+	up, down, status := relayObserved(srv, s.up)
+	if up > 0 && down > 0 && status != 0 {
+		s.f.note(s.fam, s.fr, status >= 200 && status < 400)
+	}
 	if s.f.cfg.OnSession != nil {
 		s.f.cfg.OnSession(SessionInfo{Host: s.name, Front: s.fr.String(), Up: up, Down: down, Took: time.Since(began)})
 	}
@@ -733,7 +736,30 @@ type closeWriter interface{ CloseWrite() error }
 
 // relay copies both directions and half-closes each when its source ends.
 // It returns the bytes that went to a (down, from b) and to b (up, from a).
+// Only a bounded HTTP/1 response prefix is observed. The contents of
+// requests, response headers and user data are never retained or logged.
+type httpStatusPrefix struct { first []byte }
+func (p *httpStatusPrefix) Write(b []byte) (int, error) {
+	if remaining := 32 - len(p.first); remaining > 0 {
+		p.first = append(p.first, b[:min(len(b), remaining)]...)
+	}
+	return len(b), nil
+}
+func (p *httpStatusPrefix) status() int {
+	if !strings.HasPrefix(string(p.first), "HTTP/1.1 ") && !strings.HasPrefix(string(p.first), "HTTP/1.0 ") { return 0 }
+	var version string
+	var code int
+	if _, err := fmt.Sscanf(string(p.first), "%s %d", &version, &code); err != nil || code < 100 || code > 599 { return 0 }
+	return code
+}
+
+// Existing callers retain the original byte-counting relay interface.
 func relay(a, b io.ReadWriteCloser) (up, down int64) {
+	up, down, _ = relayObserved(a, b)
+	return
+}
+
+func relayObserved(a, b io.ReadWriteCloser) (up, down int64, status int) {
 	done := make(chan struct{}, 2)
 	cp := func(dst io.WriteCloser, src io.Reader, n *int64) {
 		*n, _ = io.Copy(dst, src)
@@ -742,13 +768,14 @@ func relay(a, b io.ReadWriteCloser) (up, down int64) {
 		}
 		done <- struct{}{}
 	}
-	go cp(a, b, &down)
+	var prefix httpStatusPrefix
+	go cp(a, io.TeeReader(b, &prefix), &down)
 	go cp(b, a, &up)
 	<-done
 	<-done
 	_ = a.Close()
 	_ = b.Close()
-	return up, down
+	return up, down, prefix.status()
 }
 
 // ProbeResult is one front tested against one family without any certificate
