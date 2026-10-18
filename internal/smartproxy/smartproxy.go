@@ -1165,12 +1165,21 @@ func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (
 	if u.Network == "tcp6" {
 		network, resolver = "tcp6", p.cfg.Resolve6
 	}
-	if (u.LocalDNS || u.Addr == "") && resolver != nil && net.ParseIP(host) == nil {
-		ip, err := p.resolve(dctx, resolver, host)
-		switch {
-		case err == nil:
-			host = ip
-		case u.SoftResolve && ctx.Err() == nil:
+	if (u.LocalDNS || u.Addr == "") && net.ParseIP(host) == nil {
+		if resolver == nil && u.LocalBypass {
+			return nil, errors.New("trusted DNS is required before connecting through a local anti-DPI proxy")
+		}
+		if resolver != nil {
+			ip, err := p.resolve(dctx, resolver, host)
+			switch {
+			case err == nil:
+				host = ip
+			case u.LocalBypass:
+				// Never let ciadpi fall back to the ISP resolver if the
+				// trusted bootstrap DNS path failed. Its SOCKS listener
+				// resolves domain-name CONNECT requests using system DNS.
+				return nil, fmt.Errorf("trusted DNS failed for local bypass %s: %w", u.Name, err)
+			case u.SoftResolve && ctx.Err() == nil:
 			p.logf("%s: no trusted address (%v); %s resolves it itself", host, err, u.Name)
 		case errors.Is(err, ErrPoisoned):
 			// Connecting to a block-page address would only look like a
@@ -1178,8 +1187,9 @@ func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (
 			return nil, err
 		case ctx.Err() != nil:
 			return nil, ctx.Err()
-		default:
-			p.logf("%s: no trusted address (%v); using the name as given", host, err)
+			default:
+				p.logf("%s: no trusted address (%v); using the name as given", host, err)
+			}
 		}
 	}
 	if u.Addr == "" {
