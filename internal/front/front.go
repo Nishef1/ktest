@@ -738,7 +738,7 @@ type closeWriter interface{ CloseWrite() error }
 // It returns the bytes that went to a (down, from b) and to b (up, from a).
 // Only a bounded HTTP/1 response prefix is observed. The contents of
 // requests, response headers and user data are never retained or logged.
-type httpStatusPrefix struct { first []byte }
+type httpStatusPrefix struct{ first []byte }
 func (p *httpStatusPrefix) Write(b []byte) (int, error) {
 	if remaining := 32 - len(p.first); remaining > 0 {
 		p.first = append(p.first, b[:min(len(b), remaining)]...)
@@ -746,10 +746,10 @@ func (p *httpStatusPrefix) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 func (p *httpStatusPrefix) status() int {
-	if !strings.HasPrefix(string(p.first), "HTTP/1.1 ") && !strings.HasPrefix(string(p.first), "HTTP/1.0 ") { return 0 }
+	if !strings.HasPrefix(string(p.first), "HTTP/1.1 ") && !strings.HasPrefix(string(p.first), "HTTP/1.0 ") {\n\t\treturn 0\n\t}
 	var version string
 	var code int
-	if _, err := fmt.Sscanf(string(p.first), "%s %d", &version, &code); err != nil || code < 100 || code > 599 { return 0 }
+	if _, err := fmt.Sscanf(string(p.first), "%s %d", &version, &code); err != nil || code < 100 || code > 599 {\n\t\treturn 0\n\t}
 	return code
 }
 
