@@ -12,12 +12,12 @@ import (
 // Coverage belongs to the requested TCP IP:port, not its country, entry IP or
 // API hostname. A canceled contender remains available for a real later trial.
 type wsCarrierProgress struct {
-	method, entry, last string
-	failureStage        string
-	starts, running     int
-	failures, selected  int
+	method, entry, last  string
+	failureStage         string
+	starts, running      int
+	failures, selected   int
 	replies, interrupted int
-	updated             time.Time
+	updated              time.Time
 }
 
 func (p *wsCarrierProgress) needsTrial() bool { return p.failures == 0 && p.selected == 0 }
@@ -38,16 +38,16 @@ type wsMethodProgress struct {
 }
 
 type wsProgressSnapshot struct {
-	key, location, carrier                                  string
-	currentMethod, recentMethod, recentOutcome              string
+	key, location, carrier                                 string
+	currentMethod, recentMethod, recentOutcome             string
 	total, tried, remaining, interrupted, cooling, running int
-	attempted, failed, replied                              int
-	active, connected                                       int
-	retryAfter                                              time.Duration
-	failStages                                              map[string]int
-	methods                                                 []wsMethodProgress
-	incomplete                                              bool
-	inapplicable                                            []string
+	attempted, failed, replied                             int
+	active, connected                                      int
+	retryAfter                                             time.Duration
+	failStages                                             map[string]int
+	methods                                                []wsMethodProgress
+	incomplete                                             bool
+	inapplicable                                           []string
 }
 
 func (b *wsBridge) registerCarriers(key, host string, carriers []wsCarrier) {
@@ -155,7 +155,7 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		} else {
 			s.tried++
 		}
-		 s.running += p.running
+		s.running += p.running
 		if p.starts > 0 {
 			s.attempted++
 		}
@@ -330,9 +330,9 @@ func wsLiveDetail(s wsProgressSnapshot, width int) string {
 		}
 		detail += " | " + wsShortMethod(method, maxMethod)
 	}
-	if width >= 145 {
+	if width >= 105 {
 		if failures := wsFailureStages(s); failures != "" {
-			detail += " | " + failures
+			detail += " | failed " + failures
 		}
 	}
 	return detail
@@ -367,7 +367,9 @@ func (v *wsProgressView) show(s wsProgressSnapshot, force bool) {
 	}
 	phase := wsProgressPhase(s)
 	urgent := !seen || (v.phase[s.key] != phase &&
-		(s.connected > 0 || s.active > 0 || s.incomplete || s.total == 0))
+		(s.connected > 0 || s.active > 0 || s.incomplete || s.total == 0 ||
+			strings.HasPrefix(v.phase[s.key], "true/") ||
+			strings.HasPrefix(v.phase[s.key], "false/true/")))
 	if seen && !urgent && time.Since(v.last[s.key]) < 6*time.Second {
 		return
 	}
