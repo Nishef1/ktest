@@ -285,8 +285,12 @@ func better(a, b Result) bool {
 // one exact target with repeated HTTPS success. A target-only plan has
 // intentionally limited coverage: unknown hosts still fail closed.
 func (p *Profile) Usable() bool {
-	if p == nil {\n\t\treturn false\n\t}
-	if p.Default != "" {\n\t\treturn true\n\t}
+	if p == nil {
+		return false
+	}
+	if p.Default != "" {
+		return true
+	}
 	for _, selection := range p.Selections {
 		if selection.Method != "" && selection.Assessment == "https_verified" &&
 			selection.Attempts >= 3 && selection.Successes == selection.Attempts {
