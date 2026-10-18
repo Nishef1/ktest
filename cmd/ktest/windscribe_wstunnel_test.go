@@ -860,6 +860,19 @@ func TestWindscribeOnlyLearnsCLIAuthenticatedSingleCarrier(t *testing.T) {
 	}
 }
 
+func TestWindscribeCLIConnectedWithoutKtestCarrierIsNotAttributed(t *testing.T) {
+	var output bytes.Buffer
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	b.view = &wsProgressView{t: plainTerm(&output)}
+	b.observeCLIConnected()
+	if len(b.confirmations) != 0 || len(b.good) != 0 {
+		t.Fatal("Windscribe CLI status alone was credited to a nonexistent ktest carrier")
+	}
+	if !strings.Contains(output.String(), "ktest did not carry a verifiable VPN stream") {
+		t.Fatalf("missing nonattribution warning: %s", output.String())
+	}
+}
+
 func TestAmbiguousConcurrentWindscribeSessionsAreNotPromoted(t *testing.T) {
 	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
 	first := &wsActiveCarrier{key: "one:443", name: "WStunnel first", started: time.Now()}
