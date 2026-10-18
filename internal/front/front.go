@@ -746,10 +746,14 @@ func (p *httpStatusPrefix) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 func (p *httpStatusPrefix) status() int {
-	if !strings.HasPrefix(string(p.first), "HTTP/1.1 ") && !strings.HasPrefix(string(p.first), "HTTP/1.0 ") {\n\t\treturn 0\n\t}
+	if !strings.HasPrefix(string(p.first), "HTTP/1.1 ") && !strings.HasPrefix(string(p.first), "HTTP/1.0 ") {
+		return 0
+	}
 	var version string
 	var code int
-	if _, err := fmt.Sscanf(string(p.first), "%s %d", &version, &code); err != nil || code < 100 || code > 599 {\n\t\treturn 0\n\t}
+	if _, err := fmt.Sscanf(string(p.first), "%s %d", &version, &code); err != nil || code < 100 || code > 599 {
+		return 0
+	}
 	return code
 }
 
