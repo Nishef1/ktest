@@ -120,6 +120,7 @@ func fakeServer(label string, delay time.Duration, silent bool, closed chan<- st
 
 type carrierSpec struct {
 	name   string
+	method string
 	fail   bool
 	silent bool
 	delay  time.Duration
@@ -147,7 +148,7 @@ func testBridge(log *dialLog, specs ...carrierSpec) *wsBridge {
 	b.candidates = func(string) []wsCarrier {
 		var cs []wsCarrier
 		for _, s := range specs {
-			cs = append(cs, wsCarrier{name: s.name, open: func(ctx context.Context, host, port string) (net.Conn, error) {
+			cs = append(cs, wsCarrier{name: s.name, method: s.method, open: func(ctx context.Context, host, port string) (net.Conn, error) {
 				log.add(s.name)
 				if s.fail {
 					return nil, errors.New("blocked")
@@ -1143,6 +1144,85 @@ func TestFailedHandshakeCannotWinTheNextRaceWithAnotherFastReset(t *testing.T) {
 	}
 	if label != "viable" {
 		t.Fatalf("failed handshake stole the retry from a slower alternative: %q", label)
+	}
+}
+
+func TestUnconfirmedWindscribeMethodYieldsAcrossVariants(t *testing.T) {
+	for _, session := range []struct {
+		name     string
+		lived    time.Duration
+		received int64
+	}{
+		{"handshake timeout", 24 * time.Second, 284},
+		{"long unverified stream", time.Minute, 128 << 10},
+	} {
+		t.Run(session.name, func(t *testing.T) {
+			b := testBridge(&dialLog{},
+				carrierSpec{name: "WStunnel fake A", method: "ByeDPI disorder + fake packet"},
+				carrierSpec{name: "WStunnel fake B", method: "ByeDPI disorder + fake packet"},
+				carrierSpec{name: "WStunnel slower", method: "ByeDPI TLS record slicing", delay: 60 * time.Millisecond},
+			)
+			host := "68.67.118.163"
+			first, done, err := b.race(context.Background(), host, "443", openvpnReset, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first.(*carrierConn).name == "WStunnel slower" {
+				t.Fatal("fixture did not reproduce the faster unconfirmed reply")
+			}
+			done(session.lived, session.received)
+			_ = first.Close()
+
+			next, done, err := b.race(context.Background(), host, "443", openvpnReset, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer next.Close()
+			if got := next.(*carrierConn).name; got != "WStunnel slower" {
+				t.Fatalf("another variant of the unconfirmed method stole the retry: %s", got)
+			}
+			b.observeCLIConnected()
+			done(time.Second, 1024)
+			_ = next.Close()
+			// A CLI-confirmed method overrides trial counts, even though a
+			// quicker method has another unused entry/SNI variant.
+			confirmed, done, err := b.race(context.Background(), host, "443", openvpnReset, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer confirmed.Close()
+			if got := confirmed.(*carrierConn).name; got != "WStunnel slower" {
+				t.Fatalf("confirmed carrier lost priority: %s", got)
+			}
+			done(time.Second, 1024)
+
+			// This target's trials must not bias another IP's first attempt.
+			other, done, err := b.race(context.Background(), "68.67.118.164", "443", openvpnReset, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer other.Close()
+			if other.(*carrierConn).name == "WStunnel slower" {
+				t.Fatal("another target inherited method trial history")
+			}
+			done(time.Second, 1024)
+		})
+	}
+}
+
+func TestWindscribeMethodRoundsFallBackWhenAlternativesFail(t *testing.T) {
+	b := testBridge(&dialLog{},
+		carrierSpec{name: "WStunnel fast A", method: "ByeDPI disorder + fake packet"},
+		carrierSpec{name: "WStunnel fast B", method: "ByeDPI disorder + fake packet"},
+		carrierSpec{name: "WStunnel blocked", method: "ByeDPI TLS record slicing", fail: true},
+	)
+	for attempt := range 2 {
+		conn, done, err := b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+		if err != nil {
+			t.Fatalf("attempt %d could not recover through the previously selected method: %v", attempt, err)
+		}
+		done(24*time.Second, 284)
+		_ = conn.Close()
 	}
 }
 

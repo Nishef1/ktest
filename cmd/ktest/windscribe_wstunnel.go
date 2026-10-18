@@ -135,11 +135,12 @@ func (o wsOptions) validate() error {
 
 // wsCarrier is one way to carry a Windscribe OpenVPN TCP stream.
 type wsCarrier struct {
-	name   string
-	method string // actual local technique, shared by its transport/SNI variants
-	open   func(ctx context.Context, host, port string) (net.Conn, error)
-	addr   string
-	source string
+	name       string
+	method     string // actual local technique, shared by its transport/SNI variants
+	open       func(ctx context.Context, host, port string) (net.Conn, error)
+	addr       string
+	source     string
+	trialRound int // per-target VPN selections for this method, assigned by ordered
 }
 
 // wsBridge decides, per HTTP CONNECT from Windscribe, how to carry it. Names
@@ -700,9 +701,20 @@ func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
 	attempt := b.retries[key]
 	b.retries[key] = attempt + 1
 	good := b.good[key]
+	// Count selections across the method's entry/SNI/transport variants.
+	// Starting or canceling a contender does not test its VPN handshake.
+	trials := make(map[string]int)
+	for _, c := range cs {
+		if target := b.targets[key]; target != nil {
+			if p := target.paths[c.name]; p != nil {
+				trials[wsMethodKey(c)] += p.selected
+			}
+		}
+	}
 	var preferred, untried, fresh, cooling []wsCarrier
 	now := time.Now()
 	for _, c := range cs {
+		c.trialRound = trials[wsMethodKey(c)]
 		switch {
 		case now.Before(b.bad[key][c.name]):
 			cooling = append(cooling, c)
@@ -717,7 +729,11 @@ func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
 	// Put heavier multi-mechanism methods first, while sampling every
 	// method once before returning for its second variant. A confirmed
 	// Windscribe VPN carrier overrides this heuristic above.
-	ordered := append(preferred, wsDiversifyTiered(untried, fresh, attempt)...)
+	alternatives := wsDiversifyTiered(untried, fresh, attempt)
+	sort.SliceStable(alternatives, func(i, j int) bool {
+		return alternatives[i].trialRound < alternatives[j].trialRound
+	})
+	ordered := append(preferred, alternatives...)
 	if len(ordered) > 0 || len(cooling) == 0 {
 		// Merely launching failed handshakes later still lets their quick
 		// reset packets beat a slower healthy handshake on every retry.
@@ -890,6 +906,32 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	}
 	turn := make(chan struct{})
 	close(turn)
+	// Merely putting a previously selected method later still allows its
+	// next fast variant to beat every slower method. Let methods with fewer
+	// VPN selections finish their transport trials first. If none answers,
+	// release the next round within this same CONNECT and its race budget.
+	roundGate := make([]<-chan struct{}, len(cs))
+	finishRound := make([]func(), len(cs))
+	var ready <-chan struct{} = turn
+	for start := 0; start < len(cs); {
+		end := start + 1
+		for end < len(cs) && cs[end].trialRound == cs[start].trialRound {
+			end++
+		}
+		finished := make(chan struct{})
+		pending := &atomic.Int32{}
+		pending.Store(int32(end - start))
+		for i := start; i < end; i++ {
+			roundGate[i] = ready
+			finishRound[i] = func() {
+				if pending.Add(-1) == 0 {
+					close(finished)
+				}
+			}
+		}
+		ready = finished
+		start = end
+	}
 	for i, c := range cs {
 		previous := turn
 		next := make(chan struct{})
@@ -900,6 +942,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer finishRound[i]()
 			// Always unblock the next candidate, including after early
 			// cancellation or while awaiting the confirmed preferred path.
 			advance := sync.OnceFunc(func() { close(next) })
@@ -933,6 +976,11 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 					return
 				case <-preferredFailed:
 				}
+			}
+			select {
+			case <-rctx.Done():
+				return
+			case <-roundGate[i]:
 			}
 			select {
 			case <-rctx.Done():

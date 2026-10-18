@@ -393,6 +393,7 @@ func wsProgressPhase(s wsProgressSnapshot) string {
 func wsPanelLines(s wsProgressSnapshot, width int) []string {
 	lines := []string{
 		fmt.Sprintf("Checked %d/%d  |  Started %d  |  Running %d  |  Left %d", s.tried, s.total, s.attempted, s.running, s.remaining),
+		fmt.Sprintf("Transport failures %d  |  Control replies %d  |  Canceled, still to try %d", s.failed, s.replied, s.interrupted),
 		"VPN: " + wsShortStatus(s),
 	}
 	if s.incomplete {
@@ -405,6 +406,8 @@ func wsPanelLines(s wsProgressSnapshot, width int) []string {
 	}
 	if s.connected > 0 && s.carrier != "" {
 		lines = append(lines, "Confirmed carrier: "+s.carrier)
+	} else if s.active > 0 && s.carrier != "" {
+		lines = append(lines, "Provisional carrier (awaiting Windscribe): "+s.carrier)
 	}
 	if stages := wsFailureStages(s); stages != "" {
 		lines = append(lines, "Failure stages: "+stages+" (not proof of DPI)")
@@ -456,6 +459,7 @@ func wsPanelLines(s wsProgressSnapshot, width int) []string {
 		lines = append(lines, fmt.Sprintf("%d IPv6-only methods excluded from this IPv4 target", len(s.inapplicable)))
 	}
 	lines = append(lines, "Checked = failed or selected; only Windscribe confirms the VPN.")
+	lines = append(lines, "Left includes canceled/unselected variants; it is not a failure count.")
 	return lines
 }
 
