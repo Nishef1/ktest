@@ -46,13 +46,15 @@ private data class Notice(val name: String, val detail: String, val license: Str
 private val notices = listOf(
     Notice("ByeDPI v0.17.3", "hufrea · local anti-DPI strategies shared with desktop", "MIT",
         "https://github.com/hufrea/byedpi/tree/v0.17.3"),
+    Notice("Xray v26.10.10", "XTLS · official ARMv8 native TLS fragmentation core", "MPL-2.0",
+        "https://github.com/XTLS/Xray-core/releases/tag/v26.10.10"),
     Notice("Aether v2.3.0", "CluvexStudio · MASQUE / WireGuard core with Tor (Arti)", "AGPL-3.0",
         "https://github.com/CluvexStudio/Aether/tree/v2.3.0"),
     Notice("psiphon-tunnel-core", "CluvexStudio fork, shirokhorshid @ 83aa73b", "GPL-3.0",
         "https://github.com/CluvexStudio/psiphon-tunnel-core/tree/83aa73b9b982e7421e00117f5b0c5aceb5dda452"),
     Notice("lyrebird", "Tor Project pluggable transports @ fc105a0", "BSD",
         "https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/-/tree/fc105a03c0e0acc2479301c361c012ffed359c43"),
-    Notice("hev-socks5-tunnel 2.19.0", "heiher · Android TUN adapter (not active yet)", "MIT",
+    Notice("hev-socks5-tunnel 2.19.0", "heiher · Android VPN/TUN-to-SOCKS packet adapter (beta)", "MIT",
         "https://github.com/heiher/hev-socks5-tunnel"),
     Notice("KTest", "Go connection core and this app", "Source", "https://github.com/Nishef1/ktest")
 )
