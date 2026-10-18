@@ -8,7 +8,7 @@ import (
 )
 
 func TestTargetExactPacketFilterAndPresets(t *testing.T) {
-	for _, preset := range []Strategy{Fake, Split} {
+	for _, preset := range []Strategy{Fake, Split, Combo} {
 		t.Run(string(preset), func(t *testing.T) {
 			filter, args, err := Target("198.51.100.23", preset)
 			if err != nil {
@@ -21,7 +21,7 @@ func TestTargetExactPacketFilterAndPresets(t *testing.T) {
 				!strings.Contains(filter, "!loopback") || !strings.Contains(filter, "!impostor") {
 				t.Fatalf("filter widened unexpectedly: %s", filter)
 			}
-			if len(args) != 8 || args[0] != "--wf-raw="+filter ||
+			if len(args) < 8 || len(args) > 9 || args[0] != "--wf-raw="+filter ||
 				strings.Contains(strings.Join(args, " "), "--wf-raw-part") ||
 				strings.Contains(strings.Join(args, " "), "--wf-tcp-out") {
 				t.Fatalf("unsafe or malformed WinDivert arguments: %q", args)
