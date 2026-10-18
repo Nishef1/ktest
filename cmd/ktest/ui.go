@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,9 @@ type term struct {
 	columns      int  // explicit width for captured renders; zero uses the terminal
 	file         *os.File
 	progressLine string
+	pinnedBox    string // final boxed frame, without its trailing newline
+	pinnedRows   int    // cursor rests at the top of the boxed frame
+	rows         int    // optional test terminal height
 	menuScreen   bool // menus use a separate screen; connection history stays intact
 	mu           sync.Mutex
 }
@@ -287,6 +291,76 @@ func cleanTerminalText(s string, allowSGR bool) string {
 	return out.String()
 }
 
+// height returns the number of visible rows; pinning a panel larger than the
+// viewport would hide logs and leave cursor positioning outside the screen.
+func (t *term) height() int {
+	if t.rows > 0 {
+		return t.rows
+	}
+	if t.file != nil {
+		if _, h, err := xterm.GetSize(int(t.file.Fd())); err == nil && h > 0 {
+			return h
+		}
+	}
+	return 24
+}
+
+// A pinned dashboard is rendered with the cursor at its top-left corner.
+// Logs are inserted above it; repainting removes the previous frame rather
+// than appending a new copy to the terminal scrollback.
+func (t *term) repaintPinnedLocked() {
+	if t.pinnedBox == "" {
+		return
+	}
+	_, _ = io.WriteString(t.w, t.pinnedBox)
+	if t.pinnedRows > 1 {
+		_, _ = fmt.Fprintf(t.w, "\x1b[%dA", t.pinnedRows-1)
+	}
+	_, _ = io.WriteString(t.w, "\r")
+}
+
+// PinBox draws one fixed in-place box on supported interactive terminals.
+// It returns false when a full method inventory cannot fit on screen so
+// callers can use ordinary, scrollable box snapshots instead.
+func (t *term) PinBox(title string, k tone, lines []string) bool {
+	if !t.live || t.width() < 45 {
+		return false
+	}
+	var buf bytes.Buffer
+	frame := &term{w: &buf, color: t.color, unicode: t.unicode, columns: t.width()}
+	frame.Box(title, k, lines)
+	body := strings.TrimSuffix(buf.String(), "\n")
+	count := strings.Count(body, "\n") + 1
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if count > t.height()-1 {
+		if t.pinnedBox != "" {
+			_, _ = io.WriteString(t.w, "\r\x1b[0J")
+			t.pinnedBox, t.pinnedRows = "", 0
+		}
+		return false
+	}
+	if t.progressLine != "" {
+		_, _ = io.WriteString(t.w, "\r\x1b[2K")
+		t.progressLine = ""
+	}
+	_, _ = io.WriteString(t.w, "\r\x1b[0J")
+	t.pinnedBox, t.pinnedRows = body, count
+	t.repaintPinnedLocked()
+	return true
+}
+
+// ClearPinnedBox removes the last in-place panel before printing final
+// summaries or returning to the menu, preserving all earlier log lines.
+func (t *term) ClearPinnedBox() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.pinnedBox != "" {
+		_, _ = io.WriteString(t.w, "\r\x1b[0J")
+		t.pinnedBox, t.pinnedRows = "", 0
+	}
+}
+
 // Printf writes text, fitting long rows and prompts to the current terminal.
 func (t *term) Printf(format string, args ...any) {
 	t.mu.Lock()
@@ -307,6 +381,15 @@ func (t *term) Printf(format string, args ...any) {
 		rows[i] = padding + strings.Join(wrapped, "\n"+padding)
 	}
 	text = strings.Join(rows, "\n")
+	if t.pinnedBox != "" {
+		_, _ = io.WriteString(t.w, "\r\x1b[0J")
+		_, _ = io.WriteString(t.w, text)
+		if !strings.HasSuffix(text, "\n") {
+			_, _ = io.WriteString(t.w, "\n")
+		}
+		t.repaintPinnedLocked()
+		return
+	}
 	if t.progressLine != "" {
 		_, _ = io.WriteString(t.w, "\r\x1b[2K")
 	}
