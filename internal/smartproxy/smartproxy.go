@@ -1314,6 +1314,9 @@ func socksConnect(c net.Conn, host, port string) error {
 	if _, err := io.ReadFull(c, head); err != nil {
 		return err
 	}
+	if head[0] != 5 || head[2] != 0 {
+		return errors.New("invalid upstream SOCKS5 CONNECT reply header")
+	}
 	if head[1] != 0 {
 		return fmt.Errorf("upstream CONNECT failed (reply %d)", head[1])
 	}
