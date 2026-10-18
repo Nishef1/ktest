@@ -193,7 +193,66 @@ func TestWindscribeSummaryRetainsFullMethodDetails(t *testing.T) {
 		t.Fatal("live feed printed the full method table")
 	}
 	v.summary(snapshot)
-	if !strings.Contains(out.String(), "ByeDPI: 1/2 tried | TLS reset") || !strings.Contains(out.String(), "Not applicable to IPv4") {
+	if !strings.Contains(out.String(), "ByeDPI: 1/2 checked | 0 live | 0 failed | 0 replied | TLS reset") || !strings.Contains(out.String(), "Not applicable to IPv4") {
 		t.Fatalf("final summary lost diagnostic detail: %s", out.String())
+	}
+}
+
+func TestWindscribeSnapshotDistinguishesStartedCheckedAndReplies(t *testing.T) {
+	b := testBridge(&dialLog{})
+	key := "203.0.113.100:443"
+	b.registerCarriers(key, "203.0.113.100", []wsCarrier{
+		{name: "one", method: "TLS slicing"},
+		{name: "two", method: "TLS slicing"},
+		{name: "three", method: "Xray"},
+	})
+	b.carrierProgress(key, "one", "start")
+	b.carrierProgress(key, "two", "start")
+	b.carrierProgress(key, "two", "tls: reset by peer")
+	b.carrierProgress(key, "two", "finish")
+	b.carrierProgress(key, "three", "start")
+	b.carrierProgress(key, "three", "reply")
+	s := b.progressSnapshot(key)
+	if s.attempted != 3 || s.tried != 1 || s.remaining != 2 || s.running != 2 {
+		t.Fatalf("started variants or live transports were conflated with checked results: %+v", s)
+	}
+	if s.failed != 1 || s.failStages["tls"] != 1 || s.replied != 1 {
+		t.Fatalf("failure boundary or OpenVPN reply lost: %+v", s)
+	}
+	if s.currentMethod != "Xray" || s.recentMethod != "Xray" {
+		t.Fatalf("current/latest method missing: %+v", s)
+	}
+}
+
+func TestWindscribeVerboseRemainsAppendOnly(t *testing.T) {
+	var out bytes.Buffer
+	v := &wsProgressView{t: plainTerm(&out), verbose: true}
+	s := wsProgressSnapshot{key: "203.0.113.100:443", total: 19, tried: 1, remaining: 18, attempted: 3, running: 2, replied: 1}
+	v.show(s, true)
+	if v.line != nil {
+		t.Fatal("verbose mode should not keep a redrawable progress line")
+	}
+	if !strings.Contains(out.String(), "started 3") || !strings.Contains(out.String(), "replies 1") {
+		t.Fatalf("verbose status lost diagnostic counters: %s", out.String())
+	}
+	v.show(s, true)
+	if strings.Count(out.String(), "Windscribe 203.0.113.100:443") != 1 {
+		t.Fatalf("verbose progress should not repeat an unchanged status: %s", out.String())
+	}
+}
+
+func TestWindscribeStatusDisplaysActiveMethodAndFailures(t *testing.T) {
+	s := wsProgressSnapshot{
+		total: 281, tried: 4, running: 16,
+		currentMethod: "ByeDPI TLS record slicing", failStages: map[string]int{"tcp": 1, "tls": 3},
+	}
+	detail := wsLiveDetail(s, 160)
+	for _, expected := range []string{"4/281 checked", "16 live", "ByeDPI TLS record slicing", "tcp=1", "tls=3"} {
+		if !strings.Contains(detail, expected) {
+			t.Fatalf("missing %q from live progress %q", expected, detail)
+		}
+	}
+	if strings.Contains(wsLiveDetail(s, 40), "TLS record slicing") {
+		t.Fatal("very narrow terminals should receive a compact status")
 	}
 }
