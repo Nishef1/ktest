@@ -167,3 +167,31 @@ func TestUDPRejectsFragmentedAndMalformedDatagrams(t *testing.T) {
 		t.Fatal("accepted UDP fragments without reassembly")
 	}
 }
+
+func TestBalancedUDPUsesVerifiedExitInsteadOfFrozenLocalTCPMethod(t *testing.T) {
+	p, err := New(Config{Frozen: &FrozenRoutes{Default: "local", Protected: "foreign"},
+		ExitOnly: func(host string) bool { return host == "private.example" },
+		Upstreams: []Upstream{
+			{Name: "local", LocalBypass: true, Addr: "127.0.0.1:9999"},
+			{Name: "foreign", Addr: "127.0.0.1:9998", Exit: true, AIEligible: true},
+			{Name: "unverified", Addr: "127.0.0.1:9997", Exit: true},
+		},
+	})
+	if err != nil { t.Fatal(err) }
+	udp := p.udpCandidates("public.example")
+	if len(udp) != 1 || udp[0].Name != "foreign" {
+		t.Fatalf("frozen local TCP method blocked the permitted UDP exit: %+v", udp)
+	}
+	if len(p.order("public.example", "443")) != 1 || p.order("public.example", "443")[0].Name != "local" {
+		t.Fatal("UDP selection unexpectedly changed TCP routing")
+	}
+	p.aiPinned = "missing"
+	if got := p.udpCandidates("public.example"); len(got) != 0 {
+		t.Fatalf("UDP fell back from missing pinned exit: %+v", got)
+	}
+	p.aiPinned = ""
+	p.cfg.Frozen.Protected = ""
+	if got := p.udpCandidates("private.example"); len(got) != 0 {
+		t.Fatalf("protected UDP escaped empty frozen exit pin: %+v", got)
+	}
+}
