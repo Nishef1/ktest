@@ -29,7 +29,7 @@ type term struct {
 	pinnedBox    string // final boxed frame, without its trailing newline
 	pinnedRows   int    // cursor rests at the top of the boxed frame
 	rows         int    // optional test terminal height
-	menuScreen   bool // menus use a separate screen; connection history stays intact
+	menuScreen   bool   // menus use a separate screen; connection history stays intact
 	mu           sync.Mutex
 }
 
