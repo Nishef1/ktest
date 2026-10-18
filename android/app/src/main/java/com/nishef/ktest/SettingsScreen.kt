@@ -1,5 +1,7 @@
 package com.nishef.ktest
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -27,6 +30,10 @@ internal class SettingsState {
     var bundleBusy by mutableStateOf(false)
     var bundle by mutableStateOf<JSONObject?>(null)
     var bundleError by mutableStateOf<String?>(null)
+    var caBusy by mutableStateOf(false)
+    var caReport by mutableStateOf<JSONObject?>(null)
+    var caError by mutableStateOf<String?>(null)
+    var caMessage by mutableStateOf<String?>(null)
 }
 
 private data class Notice(val name: String, val detail: String, val license: String, val url: String)
@@ -53,6 +60,43 @@ internal fun SettingsScreen(
     vpn: JSONObject, vpnServiceState: String, vpnError: String?,
     onVpnAction: () -> Unit, openUrl: (String) -> Unit
 ) {
+    val context = LocalContext.current
+    val privateDir = context.filesDir.absolutePath
+
+    // Storage Access Framework only exports the public certificate. The CA
+    // private key must never enter an Intent, shared file or clipboard.
+    val exportCert = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/x-x509-ca-cert")
+    ) { uri ->
+        if (uri != null) {
+            s.caBusy = true
+            s.caError = null
+            s.caMessage = null
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        val pem = Mobilebridge.frontCAPublicPEM(privateDir)
+                        val output = context.contentResolver.openOutputStream(uri)
+                            ?: error("Android could not open the selected certificate file")
+                        output.use { it.write(pem.toByteArray(Charsets.US_ASCII)) }
+                    }
+                    s.caMessage = "Public CA saved. Install it manually from Android Settings; private key was not exported."
+                } catch (e: Exception) {
+                    s.caError = e.message ?: "Unable to export the public certificate"
+                } finally {
+                    s.caBusy = false
+                }
+            }
+        }
+    }
+    LaunchedEffect(privateDir) {
+        try {
+            s.caReport = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.frontCAStatus(privateDir)) }
+        } catch (e: Exception) {
+            s.caError = e.message ?: "Could not inspect local CA"
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ScreenTitle("Settings", "App, engine and privacy information.")
         Spacer(Modifier.height(4.dp))
@@ -145,7 +189,7 @@ internal fun SettingsScreen(
             SectionLabel("Privacy")
             PrivacyRow(KIcons.Lock, "No logs leave the device", "Native core output can contain identifiers, so it is discarded rather than shown or written to logcat.")
             Hairline()
-            PrivacyRow(KIcons.Key, "No certificates installed", "The optional domain-fronting CA stays in the Go source. This app never changes trusted certificates.")
+            PrivacyRow(KIcons.Key, "No automatic CA installation", "A local certificate can be generated only on request. You export and install its public part manually; private key stays on the phone.")
             Hairline()
             PrivacyRow(KIcons.Globe, "No analytics", "The only network calls are the ones you start: connections, tools and update checks.")
         }
