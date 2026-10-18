@@ -52,8 +52,6 @@ jobs:
           gomobile bind -target=android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
       - name: Fetch pinned HEV Android tun2socks adapter
         run: bash android/scripts/fetch-hev-aar.sh
-      - name: Inspect official Xray ARMv8 candidate
-        run: python3 android/scripts/inspect-xray.py
       - name: Prepare pinned official native cores
         run: python3 android/scripts/prepare-native-cores.py --abis arm64-v8a
       - name: Build Android preview APK (debug-signed, internal testing only)
@@ -65,14 +63,14 @@ jobs:
           test -s "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
           BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK")"
-          echo "$BADGING" | grep -F "versionCode='10'"
-          echo "$BADGING" | grep -F "versionName='0.3.2-preview'"
+          echo "$BADGING" | grep -F "versionCode='11'"
+          echo "$BADGING" | grep -F "versionName='0.3.3-preview'"
           unzip -t "$APK" | tail -n 1
           test "$(unzip -Z1 "$APK" | awk -F/ '/^lib\/[^/]+\/[^/]+$/ {print $2}' | sort -u)" = arm64-v8a
           for ABI in arm64-v8a; do
             unzip -Z1 "$APK" | grep -Fx "lib/$ABI/libgojni.so"
             unzip -Z1 "$APK" | grep -Fx "lib/$ABI/libhev-socks5-tunnel.so"
-            for CORE in aether psiphon-tunnel-core lyrebird ciadpi; do
+            for CORE in aether psiphon-tunnel-core lyrebird ciadpi xray; do
               unzip -Z1 "$APK" | grep -Fx "lib/$ABI/lib$CORE.so"
             done
           done
