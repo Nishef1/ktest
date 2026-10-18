@@ -2,6 +2,7 @@ package xraycfg
 
 import (
 	"encoding/json"
+	"os/exec"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,5 +71,25 @@ func TestXrayNativeBinaryRejectsNonPackageOrTamperedExecutable(t *testing.T) {
 	}
 	if _, err := AndroidBinary(dir, "arm64"); err == nil {
 		t.Fatal("accepted tampered Xray executable")
+	}
+}
+
+func TestOfficialXrayValidatesGeneratedAndroidProfile(t *testing.T) {
+	bin := os.Getenv("KTEST_XRAY_BIN")
+	if bin == "" {
+		t.Skip("set KTEST_XRAY_BIN to the official pinned Xray executable to validate native schema")
+	}
+	config, err := ClientConfig(31337)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "fragment.json")
+	if err := os.WriteFile(path, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "run", "-test", "-c", path)
+	cmd.Env = append(os.Environ(), "XRAY_LOCATION_ASSET="+filepath.Dir(bin))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("upstream Xray rejected Android fragment JSON: %v: %s", err, out)
 	}
 }
