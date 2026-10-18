@@ -212,6 +212,13 @@ func TestWindscribeSnapshotDistinguishesStartedCheckedAndReplies(t *testing.T) {
 	b.carrierProgress(key, "two", "finish")
 	b.carrierProgress(key, "three", "start")
 	b.carrierProgress(key, "three", "reply")
+	// Windows timer granularity can assign identical wall-clock timestamps
+	// to all three events. Sequence numbers must retain their real order.
+	b.mu.Lock()
+	for _, p := range b.targets[key].paths {
+		p.updated = time.Unix(0, 0)
+	}
+	b.mu.Unlock()
 	s := b.progressSnapshot(key)
 	if s.attempted != 3 || s.tried != 1 || s.remaining != 2 || s.running != 2 {
 		t.Fatalf("started variants or live transports were conflated with checked results: %+v", s)
