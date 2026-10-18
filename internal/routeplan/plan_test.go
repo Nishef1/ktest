@@ -3,6 +3,7 @@ package routeplan
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -134,5 +135,75 @@ func TestCancelAtCompletionDoesNotPublishAReusableProfile(t *testing.T) {
 		})
 	if p != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation at completion produced a reusable profile: %+v, %v", p, err)
+	}
+}
+
+
+func TestCalibrationRejectsOnlyHTTPRefusalsAsSelectedRoute(t *testing.T) {
+	p, err := Calibrate(context.Background(),
+		[]Target{{ID: "x", Name: "X", URL: "https://x.example/"}},
+		[]Method{{Name: "front", General: true}},
+		func(context.Context, Target, Method) Sample {
+			return Sample{Reachable: true, TLSVerified: true, Status: 403, LatencyMS: 15}
+		}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Selections[0].Method != "" || p.Default != "" || p.Rows[0].Successes != 0 {
+		t.Fatalf("HTTP refusal became a frozen winner: %+v", p)
+	}
+}
+
+func TestConcurrentCalibrationKeepsIndependentSamples(t *testing.T) {
+	var inFlight, peak atomic.Int32
+	targets := []Target{
+		{ID: "a", Name: "A", URL: "https://a.example/"},
+		{ID: "b", Name: "B", URL: "https://b.example/"},
+	}
+	methods := []Method{{Name: "first", General: true}, {Name: "second", General: true}}
+	p, err := CalibrateWithWorkers(context.Background(), targets, methods,
+		func(context.Context, Target, Method) Sample {
+			n := inFlight.Add(1)
+			for {
+				old := peak.Load()
+				if n <= old || peak.CompareAndSwap(old, n) {
+					break
+				}
+			}
+			time.Sleep(15 * time.Millisecond)
+			inFlight.Add(-1)
+			return Sample{Success: true, Reachable: true, TLSVerified: true, Status: 200, LatencyMS: 15}
+		}, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peak.Load() < 2 || len(p.Selections) != 2 {
+		t.Fatalf("bounded parallelism not exercised: peak=%d selections=%+v", peak.Load(), p.Selections)
+	}
+	for _, row := range p.Rows {
+		if row.Attempts != 3 || row.Successes != 3 || row.Assessment != "https_verified" {
+			t.Fatalf("parallel calibration lost repeated observations: %+v", row)
+		}
+	}
+}
+
+func TestMethodChangeRecalibratesOnlyIfTargetsUnchanged(t *testing.T) {
+	now := time.Now().UTC()
+	dir := t.TempDir()
+	old := &Profile{Version: 1, CompletedAt: now, TargetsKey: "method-a", TargetsRevision: "targets-v1", Default: "a"}
+	if err := Save(dir, old); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	run := func() (*Profile, error) {
+		calls++
+		return &Profile{Version: 1, CompletedAt: now, Default: "b"}, nil
+	}
+	if _, _, err := LoadOrTestWithRevision(context.Background(), dir, "method-b", "targets-v2", false, now, run); err == nil || calls != 0 {
+		t.Fatal("edited targets triggered an unauthorized automatic calibration")
+	}
+	p, reused, err := LoadOrTestWithRevision(context.Background(), dir, "method-b", "targets-v1", false, now, run)
+	if err != nil || reused || calls != 1 || p.Default != "b" || p.TargetsRevision != "targets-v1" {
+		t.Fatalf("optional method disappearance was not recoverable: profile=%+v, reused=%v, err=%v", p, reused, err)
 	}
 }
