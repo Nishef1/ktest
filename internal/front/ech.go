@@ -104,7 +104,8 @@ func (f *Fronter) tryECH(ctx context.Context, fr Front, name string, protos []st
 		}
 		_ = raw.Close()
 		var rej *tls.ECHRejectionError
-		if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 && round < 2 {
+		// RFC 9849: never accept a second retry_config after the retry.
+		if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 && round == 0 {
 			list = rej.RetryConfigList
 			f.storeECH(fr.ECH, list)
 			continue
