@@ -147,3 +147,22 @@ func FrontCAPublicPEM(privateFilesDir string) (string, error) {
 	}
 	return string(pem.EncodeToMemory(block)), nil
 }
+
+func loadAndroidFrontCA(privateFilesDir string) (*front.CA, error) {
+	frontCAMu.Lock()
+	defer frontCAMu.Unlock()
+	dir, err := frontCAPath(privateFilesDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range []string{front.CertFile, front.KeyFile} {
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("CA %s is missing, non-regular or unsafe", name)
+		}
+	}
+	if inspectAndroidFrontCA(dir).State != "ready" {
+		return nil, errors.New("CA is not current and name-constrained")
+	}
+	return front.Load(dir)
+}
