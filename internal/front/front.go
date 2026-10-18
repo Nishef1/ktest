@@ -209,7 +209,7 @@ func chooseALPN(fam *Family, name string, offered []string) ([]string, error) {
 	case has("http/1.1"):
 		return []string{"http/1.1"}, nil
 	case has("h2"):
-		return []string{"h2"}, nil
+		return nil, fmt.Errorf("%s needs HTTP/1.1 through this front, but client offered %v", name, offered)
 	}
 	return nil, fmt.Errorf("application protocol %v is not HTTP", offered)
 }
