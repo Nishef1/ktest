@@ -144,6 +144,7 @@ func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", o.windscribeCLI, "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "opt in to reconnecting Windscribe after confirmed disconnect (off by default; Windscribe normally manages its own retries)")
 	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: race WStunnel and Stealth straight to the Windscribe node with chosen SNIs")
+	fs.StringVar(&o.ws.zapret, "windscribe-zapret", o.ws.zapret, "Windows Windscribe bridge: off, fake, split or combo; automatically use the app's requested node (Administrator)")
 	fs.StringVar(&o.ws.sni, "windscribe-wstunnel-sni", o.ws.sni, "comma-separated TLS SNIs raced on the direct carriers")
 	fs.StringVar(&o.ws.serverIP, "windscribe-wstunnel-ip", o.ws.serverIP, "explicit Windscribe WStunnel server IP (default: addresses advertised for the same node by Windscribe)")
 	fs.StringVar(&o.ws.path, "windscribe-wstunnel-path", o.ws.path, "WStunnel path (default "+wstunnel.DefaultPath+")")
@@ -189,6 +190,17 @@ func validateConnectOptions(o connectOptions) error {
 	}
 	if err := o.ws.validate(); err != nil {
 		return err
+	}
+	if o.ws.packetEnabled() {
+		if !zapretOptionValid(o.ws.zapret) {
+			return errors.New("-windscribe-zapret must be off, fake, split or combo")
+		}
+		if o.mode != ModeWindscribe || o.tun || !o.ws.direct || o.ws.serverIP != "" || o.ws.cdnHost != "" {
+			return errors.New("Zapret2 requires local Windscribe WStunnel without ktest TUN, Aether, CDN or entry overrides")
+		}
+		if runtime.GOOS != "windows" {
+			return errors.New("Windscribe Zapret2 is Windows-only")
+		}
 	}
 	if o.mode != ModeWindscribe && o.ws.cdnHost != "" {
 		return errors.New("-windscribe-cdn only applies to -mode windscribe")
@@ -503,11 +515,22 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 	}
 	monitor := startWindscribeMonitor(ctx, o, t)
+	if o.ws.packetEnabled() {
+		if err := checkWindscribeZapret(o.base); err != nil {
+			t.Line(toneFail, "%v", err)
+			return 1
+		}
+		if monitor == nil {
+			t.Line(toneFail, "Zapret2 needs the Windscribe CLI to observe the real VPN state")
+			return 1
+		}
+		t.Note("Zapret2 %s: waiting for Windscribe's HTTP CONNECT target; filters may affect other processes using the same IP:443 during each outer handshake", o.ws.zapret)
+	}
 	if o.mode == ModeWindscribeAether && monitor == nil {
 		t.Line(toneFail, "Windscribe through Aether needs a trusted CLI state; check Windscribe/login before starting a second tunnel")
 		return 1
 	}
-	if monitor != nil && (monitor.Connected() || (o.mode == ModeWindscribeAether && monitor.State() != windscribeDisconnected)) {
+	if monitor != nil && (monitor.Connected() || (o.mode == ModeWindscribeAether && monitor.State() != windscribeDisconnected) || (o.ws.packetEnabled() && monitor.State() == windscribeUnknown)) {
 		t.Note("Windscribe is %s. Standing by until the official CLI confirms disconnect; existing VPN is left running.", monitor.State())
 		if !monitor.waitDisconnected(ctx) {
 			return 0
@@ -892,6 +915,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 					return smartproxy.DialVia(ctx, l.Addr().String(), host, port, 8*time.Second)
 				}
 				bridge := newWSBridge(o.ws, apiDial, cfg.OnEvent, logf)
+				if o.ws.packetEnabled() {
+					bridge.packet = newWSPacketDesync(o.base, o.ws.zapret, t.Note)
+				}
 				windscribeBridge = bridge
 				bridge.historyPath = filepath.Join(o.base, "cache", "windscribe-method-history.jsonl")
 				bridge.methods = proxy.WindscribeMethods

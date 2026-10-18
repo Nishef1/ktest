@@ -27,6 +27,7 @@ import (
 // hostname. The exit is always the Windscribe server: no other proxy or VPN
 // sees the decrypted traffic.
 type wsOptions struct {
+	zapret   string // opt-in Windows packet strategy; empty/off uses existing transports
 	direct   bool
 	sni      string // comma-separated SNIs for direct mode
 	serverIP string // explicit WStunnel server IP; otherwise provider node list
@@ -42,8 +43,13 @@ const defaultWindscribeSNIs = "www.speedtest.net,www.digikala.com,www.aparat.com
 
 func (o wsOptions) enabled() bool { return o.direct || o.cdnHost != "" }
 
+func (o wsOptions) packetEnabled() bool { return o.zapret != "" && o.zapret != "off" }
+
 // describe names the WStunnel carriers for the connect summary.
 func (o wsOptions) describe() string {
+	if o.packetEnabled() {
+		return "WStunnel + Zapret2 " + o.zapret + " (automatic Windscribe target; serial outer handshakes)"
+	}
 	var parts []string
 	if o.cdnHost != "" {
 		parts = append(parts, "CDN "+o.cdnHost)
@@ -150,6 +156,7 @@ type wsActiveCarrier struct {
 }
 
 type wsBridge struct {
+	packet       *wsPacketDesync
 	opts         wsOptions
 	path         string
 	local        func(ctx context.Context, host, port string) (net.Conn, error)
@@ -308,7 +315,10 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		dial   func(context.Context, string) (net.Conn, error)
 	}
 	legs := []wsLeg{{method: "direct", dial: directDial}}
-	if b.methods == nil {
+	if o := b.opts; o.packetEnabled() {
+		legs[0].suffix = " +Zapret2 " + o.zapret
+		legs[0].method = "Zapret2 " + o.zapret
+	} else if b.methods == nil {
 		legs = append(legs, wsLeg{suffix: " +anti-DPI", method: "local anti-DPI rotation", dial: viaLocal})
 	} else {
 		for _, method := range b.methods() {
@@ -386,7 +396,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 				// Stealth and ip2 for raw OpenVPN TCP. An ip3 TLS listener
 				// cannot be inferred from the node's ip field. Explicit
 				// server-IP overrides apply to WStunnel only.
-				if o.serverIP == "" {
+				if o.serverIP == "" && !o.packetEnabled() {
 					for _, endpoint := range stealthEndpoints {
 						addr := net.JoinHostPort(endpoint.ip, "443")
 						for _, fp := range []struct {
@@ -872,6 +882,11 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	// admission and progress-start order equal to the method round-robin;
 	// competing goroutines must not reorder the first sixteen slots.
 	slots := make(chan struct{}, 16)
+	if b.opts.packetEnabled() {
+		// Complete and clean up each outer handshake before starting the
+		// next packet-shaped candidate. Established VPN streams continue.
+		slots = make(chan struct{}, 1)
+	}
 	turn := make(chan struct{})
 	close(turn)
 	for i, c := range cs {
@@ -950,7 +965,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			advance() // Admit the next method only after this one has started.
 			probeCtx, stopProbe := context.WithTimeout(rctx, b.replyTimeout)
 			defer stopProbe()
-			conn, err := c.open(probeCtx, host, port)
+			conn, err := b.openCarrier(probeCtx, host, port, c)
 			if err != nil {
 				if ctx.Err() == nil && rctx.Err() == nil {
 					fail(c, err)

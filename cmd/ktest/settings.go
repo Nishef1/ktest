@@ -92,6 +92,9 @@ func loadPreferences(base string) (userSettings, string, connectOptions, error) 
 
 func optionsForMode(o connectOptions, mode ConnectionMode) connectOptions {
 	o.mode = mode
+	if mode != ModeWindscribe {
+		o.ws.zapret = ""
+	}
 	if mode.isWindscribe() {
 		o.tun = false
 	} else {

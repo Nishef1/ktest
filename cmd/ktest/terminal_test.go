@@ -562,16 +562,19 @@ func TestEnterKeepsItsMeaningInMenus(t *testing.T) {
 	s.expectExit()
 }
 
-func TestWindscribeMenuOptionThreeIsExplicitlyExperimental(t *testing.T) {
+func TestWindscribeZapretMenuDetectsTargetsWithoutManualInput(t *testing.T) {
 	out := menuOutput(t, "5\n3\n0\n0\n0\n")
 	for _, want := range []string{
-		"Zapret2 (Windows experimental test)",
+		"Zapret2 bridge (Windows experimental)",
 		"Diagnostics and tests",
-		"Windows packet-layer A/B test; does NOT connect Windscribe VPN.",
+		"Click Connect in Windscribe; its requested node is detected automatically.",
 		"Free access toolkit",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("Windscribe option three did not explain its experimental limitations, missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "Windscribe location or TCP IP") {
+		t.Fatal("live Zapret2 bridge still asks the user to identify the node")
 	}
 }

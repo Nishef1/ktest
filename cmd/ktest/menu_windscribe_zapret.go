@@ -8,11 +8,31 @@ import (
 	"github.com/Nishef1/ktest/internal/systemtun"
 )
 
-// windscribeZapretMenu is deliberately NOT a third VPN connection mode.
-// winws2/WinDivert changes OS packets (not a SOCKS connection), and real
-// Windscribe authentication/driver cleanup have not been field-verified yet.
-// Offer only the existing fixed-node, serial A/B transport experiment.
 func (t *terminal) windscribeZapretMenu(base string, in *input) bool {
+	t.ui.menuView()
+	t.ui.Heading("Windscribe / Zapret2 bridge (experimental)", "Click Connect in Windscribe; its requested node is detected automatically.")
+	t.ui.Note("Use Windscribe OpenVPN TCP/443 with HTTP Proxy Settings pointing to 127.0.0.1:10801.")
+	t.ui.Note("Zapret2 temporarily affects other processes using the same entry IP:443 during each outer handshake.")
+	if err := checkWindscribeZapret(base); err != nil {
+		t.ui.Line(toneWarn, "%v", err)
+		t.ui.Printf("\n  Press Enter or 0 to return > ")
+		_, ok := in.read()
+		return ok
+	}
+	o := t.menuConnectOptions(base, ModeWindscribe)
+	if !o.ws.packetEnabled() {
+		o.ws.zapret = "fake"
+	}
+	o.ws.direct = true
+	o.ws.serverIP, o.ws.cdnHost, o.ws.cdnSNI, o.ws.cdnEdges = "", "", "", ""
+	t.options.mode = ModeWindscribe
+	t.rememberConnect("mode", string(ModeWindscribe))
+	t.ui.leaveMenu()
+	return t.connectWithOptions(in, o)
+}
+
+// The fixed-entry comparison remains available separately under diagnostics.
+func (t *terminal) windscribeZapretTestMenu(base string, in *input) bool {
 	t.ui.menuViewHeight(33)
 	t.ui.Heading("Windscribe / Zapret2 (experimental)", "Windows packet-layer A/B test; does NOT connect Windscribe VPN.")
 	t.ui.Note("A baseline WStunnel probe is compared with the same target and SNI under Zapret2.")

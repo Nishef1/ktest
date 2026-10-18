@@ -16,7 +16,7 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 		}
 		t.ui.menuOption("1", "Local anti-DPI bridge", "No Aether / WARP / Psiphon")
 		t.ui.menuOption("2", "Windscribe through Aether", "WARP carries OpenVPN TCP; keep Aether running")
-		t.ui.menuOption("3", "Zapret2 (Windows experimental test)", "Compare the same Windscribe WStunnel with/without packet shaping; not VPN login")
+		t.ui.menuOption("3", "Zapret2 bridge (Windows experimental)", "Detect the node automatically when you click Connect in Windscribe")
 		t.ui.menuOption("4", "Diagnostics and tests", "")
 		t.ui.menuOption("0", "Back", backHint)
 		t.ui.Printf("\n  Windscribe > ")
@@ -33,7 +33,13 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 			if answer == "2" {
 				mode = ModeWindscribeAether
 			}
-			if !t.connectFromMenu(base, in, mode) {
+			// Option 1 always means the ordinary local bridge, even when a
+			// packet strategy was previously saved from the CLI.
+			previous := t.options.ws.zapret
+			t.options.ws.zapret = ""
+			alive := t.connectFromMenu(base, in, mode)
+			t.options.ws.zapret = previous
+			if !alive {
 				if in.interrupted {
 					in.interrupted = false
 					continue
@@ -81,6 +87,7 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 			{"7", "Run Windscribe through Aether", "OpenVPN TCP; explicit extra tunnel"},
 			{"8", "Verify connected VPN data", "System HTTPS + optional app-reported VPN IP"},
 			{"9", "Test own CDN route", "Requires your configured hostname"},
+			{"10", "Zapret2 manual A/B comparison", "Fixed entry/SNI; transport test only"},
 		} {
 			t.ui.menuOption(row.key, row.name, row.detail)
 		}
@@ -95,6 +102,8 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 		}
 		alive := true
 		switch answer {
+		case "10":
+			alive = t.windscribeZapretTestMenu(base, in)
 		case "2", "3", "4":
 			transport := map[string]string{"2": "wstunnel", "3": "stealth", "4": "both"}[answer]
 			t.settings.Tools.WindscribeTransport = transport
@@ -135,7 +144,7 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 				}
 			})
 		default:
-			message = "Select 1-9, or 0"
+			message = "Select 1-10, or 0"
 		}
 		if !alive {
 			if in.interrupted {

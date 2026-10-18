@@ -555,6 +555,11 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 	t.options.mode = mode
 	t.rememberConnect("mode", string(mode))
 	o := t.menuConnectOptions(base, mode)
+	return t.connectWithOptions(in, o)
+}
+
+func (t *terminal) connectWithOptions(in *input, o connectOptions) bool {
+	mode := o.mode
 	t.ui.Note("Policy: %s. Coverage: %s", mode, connectionCoverage(o))
 	usesFronting := (mode == ModeBalanced || mode == ModeFast) && !o.noFront
 	if state := certState(); state != "ok" && !t.settings.SkipCertificateOffer && usesFronting {
@@ -607,6 +612,9 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 			t.ui.Bold("Proxy       ") + "Proxy Settings → HTTP, 127.0.0.1, port 10801, no login",
 			t.ui.Dim("Not Proxy Gateway. WireGuard, IKEv2 and Stealth ignore this proxy."),
 		})
+		if o.ws.packetEnabled() {
+			t.ui.Note("Click Connect in Windscribe. ktest detects its requested node automatically; no location or IP entry is needed.")
+		}
 		if mode == ModeWindscribeAether {
 			t.ui.Note("Carrier: Aether WARP. Exclude this ktest executable and aether.exe from Windscribe VPN routing; keep this process running while connected.")
 		}

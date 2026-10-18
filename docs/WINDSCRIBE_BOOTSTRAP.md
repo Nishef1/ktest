@@ -4,9 +4,25 @@ The **local Windscribe** mode (`-mode windscribe`) helps the installed Windows c
 
 The separately selected **Windscribe through Aether** (`-mode windscribe-aether`) uses a measured WARP carrier for raw OpenVPN TCP. It does not wrap that stream again in WStunnel or silently fall back to Psiphon/local methods. Keep ktest/Aether running; exclude their helper transport from Windscribe's tunnel to avoid recursion. A WARP carrier may exit in Iran; that permits carrying Windscribe but does not authorize direct AI traffic. See [methods, diagnosis and identity handling](NETWORK_DIAGNOSIS.md).
 
-## Windows Zapret2 controlled experiment (opt-in, independent of VPN login)
+## Windows Zapret2 bridge (opt-in, experimental)
 
-In the interactive menu, choose **5 · Windscribe → 3 · Zapret2 (Windows experimental test)**. The old **Diagnostics and tests** entry is now option **4**; its diagnostic tools are unchanged. The new option asks for one Windscribe location/IP, a single SNI and one of Fake TLS, Multisplit or Combo, then requires explicit confirmation. It **does not activate the Windscribe client or start a permanent Zapret2 service**.
+In the interactive menu, choose **5 · Windscribe → 3 · Zapret2 bridge (Windows experimental)**, then click **Connect in Windscribe**. Like the local bridge, this option detects the requested OpenVPN TCP node from Windscribe's HTTP CONNECT request. It does **not** ask you to type the location or IP. Changing location in Windscribe changes the target on its next connection. Windscribe still owns account login, VPN authentication, reconnects and the final exit.
+
+Use the same Windscribe **OpenVPN TCP / 443** and **HTTP Proxy Settings → 127.0.0.1:10801, no credentials** described below. Open Windows Terminal explicitly as **Administrator** and stop ktest's TUN first. If Windscribe is already connected or its initial CLI state is unknown, ktest waits for a confirmed disconnection before preparing this bridge. An app already reporting Connecting can use the bridge as soon as it listens, on its next proxy connection attempt. Keep ktest running while using the connection.
+
+The menu uses Fake TLS unless a different strategy was configured. The equivalent direct command is:
+
+```powershell
+go run ./cmd/ktest connect -mode windscribe -windscribe-zapret fake
+```
+
+`split` and `combo` are also supported. This flag is off by default and cannot be used with Aether, ktest TUN, an explicit entry IP or a CDN override. Only fresh provider-advertised entries belonging to the app's exact requested TCP node are eligible. Outer WStunnel handshakes run serially, without stacking Xray/ByeDPI/Stealth on the VPN carrier. The existing local anti-DPI paths still handle Windscribe API calls. The owned Zapret2 process starts before each outer handshake and stops before the OpenVPN stream is forwarded. Once that handshake succeeds, the established VPN stream continues without a resident Zapret2 service. Startup or cleanup failures block further packet filters in that session and report the reason.
+
+Automated tests cover following two different requested nodes, filter ordering, serialization, cancellation, cleanup failure, and keeping API traffic on its existing route. Real Windows/ISP authenticated VPN success, packet interception and driver release still need live verification; this option remains experimental.
+
+## Windows Zapret2 manual A/B comparison
+
+The fixed-entry transport experiment remains under **5 · Windscribe → 4 · Diagnostics and tests → 10 · Zapret2 manual A/B comparison**. This diagnostic asks for a location/IP, one SNI and a strategy, and never initiates VPN login.
 
 
 The portable Windows build now includes pinned Zapret2 `winws2.exe`, WinDivert and Lua helpers. **Do not mistake this for an additional SOCKS route**: it temporarily intercepts native Windows TCP packets to one exact provider-advertised destination, including other processes connecting to that same IP:443.
