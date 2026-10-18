@@ -63,6 +63,13 @@ func StartCDNScan(budget, goal int) error {
 }
 
 func StartCDNScanForProvider(provider string, budget, goal int) error {
+	if !proxyStartMu.TryLock() {
+		return errors.New("disconnect or finish startup before scanning CDN routes")
+	}
+	defer proxyStartMu.Unlock()
+	if routeWorkActive() {
+		return errors.New("disconnect before scanning CDN routes")
+	}
 	return startCDNScan(provider, budget, goal, "", nil, nil)
 }
 
