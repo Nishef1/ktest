@@ -8,6 +8,7 @@ import (
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/byedpi"
@@ -73,10 +74,22 @@ func startLocalCores(ctx context.Context, bin string, strategies []byedpi.Strate
 			close(core.done)
 		}()
 	}
+	// Probe all listeners concurrently under one bounded deadline. A slow or
+	// hung first process must not prevent a healthy later strategy from joining.
 	readyCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	for _, core := range set.cores {
-		if localCoreReady(readyCtx, core) {
+	ready := make([]bool, len(set.cores))
+	var wg sync.WaitGroup
+	for i, core := range set.cores {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready[i] = byedpi.WaitReady(readyCtx, core.done, core.address)
+		}()
+	}
+	wg.Wait()
+	for i, core := range set.cores {
+		if ready[i] {
 			set.upstreams = append(set.upstreams, smartproxy.Upstream{
 				Name: core.method, Addr: core.address, LocalDNS: true, LocalBypass: true, Rank: 2,
 			})
@@ -89,41 +102,6 @@ func startLocalCores(ctx context.Context, bin string, strategies []byedpi.Strate
 		return set, errors.New("packaged ByeDPI did not start a SOCKS5 listener")
 	}
 	return set, nil
-}
-
-func localCoreReady(ctx context.Context, core *nativeCore) bool {
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-core.done:
-			return false
-		default:
-		}
-		c, err := (&net.Dialer{Timeout: 100 * time.Millisecond}).DialContext(ctx, "tcp4", core.address)
-		if err == nil {
-			_ = c.SetDeadline(time.Now().Add(100 * time.Millisecond))
-			_, err = c.Write([]byte{5, 1, 0})
-			var reply [2]byte
-			if err == nil {
-				_, err = io.ReadFull(c, reply[:])
-			}
-			_ = c.Close()
-			if err == nil && reply == [2]byte{5, 0} {
-				return true
-			}
-		}
-		timer := time.NewTimer(20 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false
-		case <-core.done:
-			timer.Stop()
-			return false
-		case <-timer.C:
-		}
-	}
 }
 
 func (set *localCoreSet) stop() {
