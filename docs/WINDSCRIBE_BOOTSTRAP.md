@@ -6,6 +6,9 @@ The separately selected **Windscribe through Aether** (`-mode windscribe-aether`
 
 ## Windows Zapret2 controlled experiment (opt-in, independent of VPN login)
 
+In the interactive menu, choose **5 · Windscribe → 3 · Zapret2 (Windows experimental test)**. The old **Diagnostics and tests** entry is now option **4**; its diagnostic tools are unchanged. The new option asks for one Windscribe location/IP, a single SNI and one of Fake TLS, Multisplit or Combo, then requires explicit confirmation. It **does not activate the Windscribe client or start a permanent Zapret2 service**.
+
+
 The portable Windows build now includes pinned Zapret2 `winws2.exe`, WinDivert and Lua helpers. **Do not mistake this for an additional SOCKS route**: it temporarily intercepts native Windows TCP packets to one exact provider-advertised destination, including other processes connecting to that same IP:443.
 
 From Windows Terminal **explicitly opened as Administrator**, with the Windscribe app in its confirmed **Disconnected** state, ktest's TUN stopped, and an up-to-date Windscribe node catalog, run:
