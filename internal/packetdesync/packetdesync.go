@@ -5,7 +5,7 @@ package packetdesync
 import (
 	"context"
 	"crypto/sha256"
-		"errors"
+	"errors"
 	"fmt"
 	"io"
 	"net"
