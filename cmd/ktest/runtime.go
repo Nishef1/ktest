@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/byedpi"
 	"github.com/Nishef1/ktest/internal/quickcheck"
 )
 
@@ -50,6 +51,14 @@ func waitForPort(ctx context.Context, done <-chan struct{}, port int, limit time
 			}
 		}
 	}
+}
+
+// waitForByeDPI requires the actual SOCKS5 no-auth handshake. Port-only
+// readiness can accidentally accept a broken or unrelated TCP listener.
+func waitForByeDPI(ctx context.Context, done <-chan struct{}, port int, limit time.Duration) bool {
+	readyCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	return byedpi.WaitReady(readyCtx, done, fmt.Sprintf("127.0.0.1:%d", port))
 }
 
 // measure runs the real HTTPS checks through the local SOCKS port and, in
