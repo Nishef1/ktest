@@ -13,9 +13,10 @@ import (
 // API hostname. A canceled contender remains available for a real later trial.
 type wsCarrierProgress struct {
 	method, entry, last string
+	failureStage        string
 	starts, running     int
 	failures, selected  int
-	interrupted         int
+	replies, interrupted int
 	updated             time.Time
 }
 
@@ -29,20 +30,24 @@ type wsTargetProgress struct {
 }
 
 type wsMethodProgress struct {
-	name         string
-	total, tried int
-	last         string
-	updated      time.Time
+	name                          string
+	total, tried, running, failed int
+	replied                       int
+	last                          string
+	updated                       time.Time
 }
 
 type wsProgressSnapshot struct {
-	key, location, carrier                                 string
+	key, location, carrier                                  string
+	currentMethod, recentMethod, recentOutcome              string
 	total, tried, remaining, interrupted, cooling, running int
-	active, connected                                      int
-	retryAfter                                             time.Duration
-	methods                                                []wsMethodProgress
-	incomplete                                             bool
-	inapplicable                                           []string
+	attempted, failed, replied                              int
+	active, connected                                       int
+	retryAfter                                              time.Duration
+	failStages                                              map[string]int
+	methods                                                 []wsMethodProgress
+	incomplete                                              bool
+	inapplicable                                            []string
 }
 
 func (b *wsBridge) registerCarriers(key, host string, carriers []wsCarrier) {
@@ -113,9 +118,11 @@ func (b *wsBridge) carrierProgress(key, name, outcome string) {
 				p.interrupted++
 				p.last = "interrupted; still to try"
 			case "reply":
+				p.replies++
 				p.last = "OpenVPN reply; VPN unverified"
 			default:
 				p.failures++
+				p.failureStage = strings.TrimSpace(strings.SplitN(outcome, ":", 2)[0])
 				p.last = outcome
 			}
 		}
@@ -127,7 +134,7 @@ func (b *wsBridge) carrierProgress(key, name, outcome string) {
 func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	s := wsProgressSnapshot{key: key}
+	s := wsProgressSnapshot{key: key, failStages: make(map[string]int)}
 	target := b.targets[key]
 	if target == nil {
 		return s
@@ -136,6 +143,7 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 	s.inapplicable = append([]string(nil), target.inapplicable...)
 	rows := make(map[string]*wsMethodProgress)
 	now := time.Now()
+	var currentUpdated, latestUpdated time.Time
 	for _, name := range target.inventory {
 		p := target.paths[name]
 		s.total++
@@ -147,7 +155,25 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		} else {
 			s.tried++
 		}
-		s.running += p.running
+		 s.running += p.running
+		if p.starts > 0 {
+			s.attempted++
+		}
+		if p.failures > 0 {
+			s.failed++
+			if p.failureStage != "" {
+				s.failStages[p.failureStage]++
+			}
+		}
+		if p.replies > 0 {
+			s.replied++
+		}
+		if p.running > 0 && (s.currentMethod == "" || p.updated.After(currentUpdated)) {
+			s.currentMethod, currentUpdated = p.method, p.updated
+		}
+		if p.starts > 0 && (s.recentMethod == "" || p.updated.After(latestUpdated)) {
+			s.recentMethod, s.recentOutcome, latestUpdated = p.method, p.last, p.updated
+		}
 		if until := b.bad[key][name]; now.Before(until) {
 			s.cooling++
 			if wait := until.Sub(now); s.retryAfter == 0 || wait < s.retryAfter {
@@ -160,6 +186,13 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 			rows[p.method] = row
 		}
 		row.total++
+		row.running += p.running
+		if p.failures > 0 {
+			row.failed++
+		}
+		if p.replies > 0 {
+			row.replied++
+		}
 		if !p.needsTrial() {
 			row.tried++
 		}
@@ -210,11 +243,14 @@ type wsProgressEvent struct {
 }
 
 type wsProgressView struct {
-	t     *term
-	mu    sync.Mutex
-	last  map[string]time.Time
-	state map[string]string
-	line  *progress // one in-place status line for interactive terminals
+	t       *term
+	verbose bool
+	mu      sync.Mutex
+	last    map[string]time.Time
+	state   map[string]string
+	phase   map[string]string
+	line    *progress // one in-place status line for interactive non-verbose output
+	lineKey string
 }
 
 func wsProgressStatus(s wsProgressSnapshot) (tone, string) {
@@ -236,49 +272,137 @@ func wsProgressStatus(s wsProgressSnapshot) (tone, string) {
 	}
 }
 
-// Live updates are a single redrawable status line, not a new 15-row box for
-// every carrier event. Redirected output receives an occasional concise row.
-// Full per-method diagnostics are emitted once, when the session ends.
+// These are distinct candidates with an observed failure at each boundary,
+// not a claim that the ISP or VPN has blocked that stage.
+func wsFailureStages(s wsProgressSnapshot) string {
+	var parts []string
+	for _, stage := range []string{"tcp", "tls", "websocket", "openvpn"} {
+		if count := s.failStages[stage]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", stage, count))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func wsShortStatus(s wsProgressSnapshot) string {
+	switch {
+	case s.connected > 0:
+		return "VPN CONNECTED"
+	case s.active > 0:
+		return "OPENVPN REPLY (unverified)"
+	case s.running > 0:
+		return "VPN pending"
+	case s.incomplete:
+		return "discovery incomplete"
+	case s.total == 0:
+		return "no carriers"
+	default:
+		return "VPN unconfirmed"
+	}
+}
+
+// Avoid taking a noisy line off the edge of an 80-column Windows terminal.
+func wsShortMethod(name string, maxWidth int) string {
+	if maxWidth < 4 {
+		return ""
+	}
+	runes := []rune(name)
+	if len(runes) > maxWidth {
+		return string(runes[:maxWidth-1]) + "…"
+	}
+	return name
+}
+
+func wsLiveDetail(s wsProgressSnapshot, width int) string {
+	status := wsShortStatus(s)
+	method := s.currentMethod
+	if method == "" {
+		method = s.recentMethod
+	}
+	if width < 60 {
+		return fmt.Sprintf("%d/%d checked | %d live | %s", s.tried, s.total, s.running, status)
+	}
+	detail := fmt.Sprintf("%d/%d checked | %d live | %s", s.tried, s.total, s.running, status)
+	if method != "" {
+		maxMethod := 16
+		if width >= 120 {
+			maxMethod = 30
+		}
+		detail += " | " + wsShortMethod(method, maxMethod)
+	}
+	if width >= 145 {
+		if failures := wsFailureStages(s); failures != "" {
+			detail += " | " + failures
+		}
+	}
+	return detail
+}
+
+func wsProgressSignature(s wsProgressSnapshot) string {
+	return fmt.Sprintf("%d/%d/%d/%d/%d/%d/%d/%t/%s/%s",
+		s.attempted, s.tried, s.remaining, s.running, s.active,
+		s.connected, s.failed, s.incomplete, s.carrier, s.currentMethod)
+}
+
+func wsProgressPhase(s wsProgressSnapshot) string {
+	return fmt.Sprintf("%t/%t/%t/%t/%t", s.connected > 0, s.active > 0,
+		s.running > 0, s.incomplete, s.total == 0)
+}
+
+// Updates are rendered by the event loop, never by a carrier worker.
+// The normal terminal has one redrawable line; -v retains full carrier logs
+// and deliberately avoids rewriting that line through the verbose transcript.
 func (v *wsProgressView) show(s wsProgressSnapshot, force bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.last == nil {
 		v.last = make(map[string]time.Time)
 		v.state = make(map[string]string)
+		v.phase = make(map[string]string)
 	}
-	k, verdict := wsProgressStatus(s)
-	signature := fmt.Sprintf("%d/%d/%d/%d/%d/%t/%s", s.tried, s.remaining, s.running, s.connected, s.interrupted, s.incomplete, s.carrier)
+	signature := wsProgressSignature(s)
 	previous, seen := v.state[s.key]
 	if seen && previous == signature {
 		return
 	}
-	// Avoid flood on back-to-back starts/failures, including forced race
-	// notifications. A newly confirmed VPN is reported immediately.
-	if seen && s.connected == 0 && time.Since(v.last[s.key]) < 6*time.Second {
-		return
-	}
-	if !force && seen && time.Since(v.last[s.key]) < 2*time.Second {
+	phase := wsProgressPhase(s)
+	urgent := !seen || (v.phase[s.key] != phase &&
+		(s.connected > 0 || s.active > 0 || s.incomplete || s.total == 0))
+	if seen && !urgent && time.Since(v.last[s.key]) < 6*time.Second {
 		return
 	}
 	v.last[s.key] = time.Now()
 	v.state[s.key] = signature
+	wasConnected := strings.HasPrefix(v.phase[s.key], "true/")
+	v.phase[s.key] = phase
 	title := s.key
 	if s.location != "" {
 		title += " (" + s.location + ")"
 	}
-	if v.t.live {
-		if v.line == nil {
-			v.t.Line(toneInfo, "Windscribe carrier search: %s", title)
-			v.line = v.t.Progress("Windscribe", max(s.total, 1))
+	k, verdict := wsProgressStatus(s)
+	if v.t.live && !v.verbose {
+		if v.line == nil || v.lineKey != s.key || v.line.total != max(s.total, 1) {
+			if v.line != nil {
+				v.line.Finish(toneInfo, "target changed")
+			}
+			v.t.Line(toneInfo, "Windscribe target: %s", title)
+			v.lineKey = s.key
+			v.line = v.t.Progress("WS", max(s.total, 1))
 		}
-		detail := fmt.Sprintf("%s | %d/%d tried, %d left, %d active | %s", title, s.tried, s.total, s.remaining, s.running, verdict)
-		v.line.Set(s.tried, detail)
-		if s.connected > 0 {
-			v.t.Line(k, "Windscribe confirmed VPN over %s", s.carrier)
+		v.line.Set(s.tried, wsLiveDetail(s, v.t.width()))
+		if s.connected > 0 && !wasConnected {
+			v.t.Line(toneOK, "VPN confirmed by Windscribe: %s", s.carrier)
 		}
 		return
 	}
-	v.t.Line(k, "%s | Windscribe %s | %d/%d tried, %d left, %d running", verdict, title, s.tried, s.total, s.remaining, s.running)
+	// On piped output / CI / verbose, preserve a readable append-only log.
+	// Do not dump the entire 19-variant inventory for every progress event.
+	detail := fmt.Sprintf("%s | Windscribe %s | checked %d/%d | started %d | live %d | replies %d",
+		verdict, title, s.tried, s.total, s.attempted, s.running, s.replied)
+	if !v.verbose && s.recentMethod != "" {
+		detail += " | latest " + s.recentMethod
+	}
+	v.t.Line(k, "%s", detail)
 }
 
 func (v *wsProgressView) summary(s wsProgressSnapshot) {
@@ -287,6 +411,7 @@ func (v *wsProgressView) summary(s wsProgressSnapshot) {
 	if v.line != nil {
 		v.line.Finish(toneInfo, "session ended")
 		v.line = nil
+		v.lineKey = ""
 	}
 	k, verdict := wsProgressStatus(s)
 	title := "WINDSCRIBE " + s.key
@@ -294,14 +419,19 @@ func (v *wsProgressView) summary(s wsProgressSnapshot) {
 		title += " | " + s.location
 	}
 	lines := []string{
-		fmt.Sprintf("Coverage: %d/%d tried | %d remaining | %d interrupted | %d cooling", s.tried, s.total, s.remaining, s.interrupted, s.cooling),
+		fmt.Sprintf("Coverage: %d/%d checked | %d started | %d live | %d remaining", s.tried, s.total, s.attempted, s.running, s.remaining),
+		fmt.Sprintf("Evidence: %d failed variants | %d OpenVPN replies | %d cooling | %d interrupted", s.failed, s.replied, s.cooling, s.interrupted),
 		"VPN: " + verdict,
+	}
+	if detail := wsFailureStages(s); detail != "" {
+		lines = append(lines, "Failure stages (distinct variants): "+detail)
 	}
 	if s.carrier != "" {
 		lines = append(lines, "Selected: "+s.carrier)
 	}
 	for _, row := range s.methods {
-		lines = append(lines, fmt.Sprintf("%s: %d/%d tried | %s", row.name, row.tried, row.total, row.last))
+		lines = append(lines, fmt.Sprintf("%s: %d/%d checked | %d live | %d failed | %d replied | %s",
+			row.name, row.tried, row.total, row.running, row.failed, row.replied, row.last))
 	}
 	if s.incomplete {
 		lines = append(lines, "Discovery incomplete; the carrier inventory is not exhaustive.")
@@ -313,7 +443,7 @@ func (v *wsProgressView) summary(s wsProgressSnapshot) {
 	if len(s.inapplicable) > 0 {
 		lines = append(lines, "Not applicable to IPv4: "+strings.Join(s.inapplicable, "; "))
 	}
-	lines = append(lines, "A carrier reply is not VPN success. Only Windscribe confirms its VPN.")
+	lines = append(lines, "Checked = transport failure or selected OpenVPN reply, not VPN success; only Windscribe confirms its VPN.")
 	v.t.Box(title, k, lines)
 }
 
