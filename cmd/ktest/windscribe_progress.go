@@ -395,7 +395,7 @@ func wsPanelLines(s wsProgressSnapshot, width int) []string {
 		if s.total == 0 {
 			lines = append(lines, "NO WRAPPED CARRIERS: zero tests were run (not 0 failed).")
 		}
-		lines = append(lines, "Provider mapping: "+s.mappingReason)
+		lines = append(lines, "Provider mapping discovery incomplete: "+s.mappingReason)
 		lines = append(lines, "Exact Windscribe node mapping required; no IP guessing.")
 		lines = append(lines, "Retry discovery is automatic; reconnect Windscribe manually after mapping recovers.")
 	}
