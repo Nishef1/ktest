@@ -63,6 +63,14 @@ func TestParseWindscribeStatus(t *testing.T) {
 		{"reconnecting", "Login state: Logged in\nConnect state: Reconnecting\n", windscribeConnecting, true},
 		{"disconnected", "Login state: Logged in\nConnect state: Disconnected\n", windscribeDisconnected, true},
 		{"loggedout", "Login state: Not logged in\nConnect state: Disconnected\n", windscribeUnknown, false},
+		{"API SSL error with live tunnel", "Login state: Error: SSL error\nConnect state: Connected: London - 1984\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeConnected, false},
+		{"API error during handshake", "Login state: Error: Network error\nConnect state: Connecting\nProtocol: TCP:443\n", windscribeConnecting, false},
+		{"API error during tunnel test", "Login state: Error: SSL error\n*Connect state: Connected: London\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeConnecting, false},
+		{"API error cannot authorize disconnect", "Login state: Error: SSL error\nConnect state: Disconnected\n", windscribeUnknown, false},
+		{"API error without tunnel evidence", "Login state: Error: SSL error\nConnect state: Connected: London\n", windscribeConnecting, false},
+		{"API error without public exit", "Login state: Error: SSL error\nConnect state: Connected: London\nProtocol: TCP:443\nVPN IP: 10.0.0.1\n", windscribeConnecting, false},
+		{"API error without connection state", "Login state: Error: SSL error\n", windscribeUnknown, false},
+		{"explicit logout with stale tunnel", "Login state: Not logged in\nConnect state: Connected: London\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeUnknown, false},
 		{"ambiguous", "Login state: Logged in\nConnect state: Warming up\n", windscribeUnknown, true},
 		{"empty", "", windscribeUnknown, false},
 	}
@@ -131,6 +139,10 @@ func TestWindscribeStatusIssueDoesNotEchoCredentials(t *testing.T) {
 	if !strings.Contains(message, "connection state") {
 		t.Fatalf("unrecognized connection treated as trusted: %q", message)
 	}
+	message = windscribeStatusIssue("Login state: Error: SSL error\n", windscribeUnknown, false)
+	if strings.Contains(message, "not logged in") || !strings.Contains(message, "API") {
+		t.Fatalf("account API failure misreported as a logout: %q", message)
+	}
 }
 
 func TestWindscribeCLIStatusGraceExpiresWithoutInventingDisconnection(t *testing.T) {
@@ -148,6 +160,8 @@ func TestWindscribeCLIStatusGraceExpiresWithoutInventingDisconnection(t *testing
 		{"expired IPC error", windscribeConnected, now.Add(-20 * time.Second), windscribeUnknown, false, errors.New("IPC"), windscribeUnknown},
 		{"no prior status", windscribeConnected, time.Time{}, windscribeUnknown, false, errors.New("IPC"), windscribeUnknown},
 		{"explicit logout", windscribeConnected, now, windscribeUnknown, false, nil, windscribeUnknown},
+		{"live tunnel despite API failure", windscribeUnknown, time.Time{}, windscribeConnected, false, nil, windscribeConnected},
+		{"handshake despite API failure", windscribeUnknown, time.Time{}, windscribeConnecting, false, nil, windscribeConnecting},
 		{"unrecognized CLI status", windscribeConnected, now, windscribeUnknown, true, nil, windscribeUnknown},
 		{"actual disconnect", windscribeConnected, now, windscribeDisconnected, true, nil, windscribeDisconnected},
 	} {

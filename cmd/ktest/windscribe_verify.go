@@ -22,6 +22,9 @@ func windscribeStatusIssue(raw string, state windscribeState, loggedIn bool) str
 		for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
 			field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 			if ok && strings.EqualFold(strings.TrimSpace(field), "Login state") {
+				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "error:") {
+					return "Windscribe account API failed; login is unverified, which does not establish that the VPN disconnected"
+				}
 				if !strings.EqualFold(strings.TrimSpace(value), "logged in") {
 					return "Windscribe desktop app is not logged in; open the app and log in"
 				}
@@ -44,7 +47,7 @@ func readWSStatus(ctx context.Context, cli string) wsCLIStatus {
 		return wsCLIStatus{err: fmt.Errorf("Windscribe CLI status command failed: %w", err)}
 	}
 	state, loggedIn := parseWindscribeStatus(string(out))
-	if !loggedIn {
+	if !loggedIn && state != windscribeConnected && state != windscribeConnecting {
 		return wsCLIStatus{err: fmt.Errorf("%s", windscribeStatusIssue(string(out), state, loggedIn))}
 	}
 	if state == windscribeUnknown {

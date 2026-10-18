@@ -550,8 +550,10 @@ func TestRaceOrderLearnsFromStreamLifetime(t *testing.T) {
 	defer c.Close()
 	done(2*time.Second, 100) // answered but died at once
 	order := b.ordered(key, b.carriersFor("68.67.118.163"))
-	if order[len(order)-1].name != "a" {
-		t.Fatalf("early death not demoted: %v", order[len(order)-1].name)
+	for _, candidate := range order {
+		if candidate.name == "a" {
+			t.Fatal("failed handshake still races against fresh alternatives")
+		}
 	}
 	b.mu.Lock()
 	b.bad = map[string]map[string]time.Time{}
@@ -880,5 +882,131 @@ func TestStaleCarrierCannotBeCreditedWithNewCLIConnection(t *testing.T) {
 	b.observeCLIConnected()
 	if s.confirmed || b.good[s.key] != "" {
 		t.Fatal("old unrelated carrier falsely credited with newer CLI Connected state")
+	}
+}
+
+func TestFailedHandshakeCannotWinTheNextRaceWithAnotherFastReset(t *testing.T) {
+	b := testBridge(&dialLog{})
+	b.candidates = func(string) []wsCarrier {
+		return []wsCarrier{
+			{name: "WStunnel fast reset", open: func(context.Context, string, string) (net.Conn, error) {
+				a, peer := net.Pipe()
+				go func() {
+					defer peer.Close()
+					packet := make([]byte, len(openvpnReset))
+					if _, err := io.ReadFull(peer, packet); err == nil {
+						_, _ = peer.Write(serverControlPacket("reset"))
+					}
+					// Upstream closes after its initial control reply, before
+					// Windscribe could complete TLS/authentication.
+				}()
+				return a, nil
+			}},
+			{name: "Stealth viable", open: func(context.Context, string, string) (net.Conn, error) {
+				return fakeServer("viable", 60*time.Millisecond, false, nil), nil
+			}},
+		}
+	}
+	label, conn := roundTrip(t, b, "68.67.118.163", openvpnReset)
+	if conn == nil {
+		t.Fatalf("initial reply failed: %q", label)
+	}
+	var one [1]byte
+	if _, err := conn.Read(one[:]); err != io.EOF {
+		conn.Close()
+		t.Fatalf("expected the reproduced upstream close, got %v", err)
+	}
+	// EOF from the bridge follows session cleanup, so the next real Dial
+	// observes the failed handshake without calling its scoring hook here.
+	_ = conn.Close()
+	label, next := roundTrip(t, b, "68.67.118.163", openvpnReset)
+	if next != nil {
+		defer next.Close()
+	}
+	if label != "viable" {
+		t.Fatalf("failed handshake stole the retry from a slower alternative: %q", label)
+	}
+}
+
+func TestCLIConfirmedCarrierIsNotPreemptedByAnUnverifiedFastReply(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "WStunnel verified", delay: 60 * time.Millisecond}, carrierSpec{name: "Stealth reset only"})
+	b.good["68.67.118.163:443"] = "WStunnel verified"
+	label, conn := roundTrip(t, b, "68.67.118.163", openvpnReset)
+	if conn != nil {
+		defer conn.Close()
+	}
+	if label != "WStunnel verified" {
+		t.Fatalf("unverified reply replaced a CLI-confirmed carrier: %q", label)
+	}
+}
+
+func TestAllCoolingCarriersReprobeOnlyTheEarliestExpiry(t *testing.T) {
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	key := "68.67.118.163:443"
+	b.bad[key] = map[string]time.Time{"recent": time.Now().Add(time.Minute), "oldest": time.Now().Add(20 * time.Second)}
+	got := b.ordered(key, []wsCarrier{{name: "recent"}, {name: "oldest"}})
+	if len(got) != 1 || got[0].name != "oldest" {
+		t.Fatalf("all-cooling retry must remain possible without racing every failed route: %+v", got)
+	}
+}
+
+func TestEndedCarrierCannotBePromotedByALaterCLIObservation(t *testing.T) {
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	s := &wsActiveCarrier{key: "68.67.118.163:443", name: "ended", started: time.Now(), upstreamEnd: true}
+	b.active[s] = true
+	b.observeCLIConnected()
+	if s.confirmed || b.good[s.key] != "" {
+		t.Fatal("CLI observation promoted a carrier whose upstream already ended")
+	}
+}
+
+func TestSilentPreferredCarrierTimesOutAndFallsBackInTheSameAttempt(t *testing.T) {
+	b := testBridge(&dialLog{}, carrierSpec{name: "WStunnel was working", silent: true}, carrierSpec{name: "Stealth fallback"})
+	b.replyTimeout = 30 * time.Millisecond
+	key := "68.67.118.163:443"
+	b.good[key] = "WStunnel was working"
+	label, conn := roundTrip(t, b, "68.67.118.163", openvpnReset)
+	if conn != nil {
+		defer conn.Close()
+	}
+	if label != "Stealth fallback" {
+		t.Fatalf("silent preferred carrier prevented fallback: %q", label)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.good[key] != "" || !b.bad[key]["WStunnel was working"].After(time.Now()) {
+		t.Fatal("silent preferred route was not demoted after its own reply deadline")
+	}
+}
+
+func TestInitialReplyDeadlineDoesNotExpireTheSelectedVPNStream(t *testing.T) {
+	b := testBridge(&dialLog{})
+	b.replyTimeout = 40 * time.Millisecond
+	b.candidates = func(string) []wsCarrier {
+		return []wsCarrier{{name: "WStunnel echo", open: func(context.Context, string, string) (net.Conn, error) {
+			a, peer := net.Pipe()
+			go func() {
+				defer peer.Close()
+				packet := make([]byte, len(openvpnReset))
+				if _, err := io.ReadFull(peer, packet); err == nil {
+					_, _ = peer.Write(serverControlPacket("echo"))
+					_, _ = io.Copy(peer, peer)
+				}
+			}()
+			return a, nil
+		}}}
+	}
+	label, conn := roundTrip(t, b, "68.67.118.163", openvpnReset)
+	if conn == nil {
+		t.Fatalf("initial reply failed: %q", label)
+	}
+	defer conn.Close()
+	time.Sleep(2 * b.replyTimeout)
+	if _, err := conn.Write([]byte("VPN data")); err != nil {
+		t.Fatalf("selected stream expired with the initial-reply deadline: %v", err)
+	}
+	buf := make([]byte, len("VPN data"))
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "VPN data" {
+		t.Fatalf("stream lost continuation data: %q, %v", buf, err)
 	}
 }

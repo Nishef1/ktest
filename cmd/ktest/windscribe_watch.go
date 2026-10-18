@@ -46,6 +46,7 @@ func (s windscribeState) String() string {
 func parseWindscribeStatus(raw string) (windscribeState, bool) {
 	var state windscribeState
 	loggedIn := false
+	accountAPIError := false
 	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
 		line = strings.TrimSpace(line)
 		pendingField := strings.HasPrefix(line, "*")
@@ -54,6 +55,7 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 		if strings.HasPrefix(low, "login state:") {
 			status := strings.TrimSpace(strings.TrimPrefix(low, "login state:"))
 			loggedIn = status == "logged in"
+			accountAPIError = strings.HasPrefix(status, "error:")
 		}
 		if !strings.HasPrefix(low, "connect state:") {
 			continue
@@ -78,6 +80,20 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 		}
 	}
 	if !loggedIn {
+		// The account API and the live tunnel are independent: v2.25.4
+		// can report Login state: Error: SSL error while TCP is Connected.
+		// Retain corroborated tunnel observations for read-only monitoring;
+		// never interpret an API error as login or permission to reconnect.
+		if accountAPIError {
+			if state == windscribeConnected && parseWindscribeProtocol(raw) != "" && parseWindscribeVPNIP(raw) != "" {
+				return windscribeConnected, false
+			}
+			if state == windscribeConnected || state == windscribeConnecting {
+				// Incomplete tunnel metadata still prevents starting work
+				// through an existing tunnel; it cannot confirm VPN success.
+				return windscribeConnecting, false
+			}
+		}
 		return windscribeUnknown, false
 	}
 	return state, true
@@ -225,7 +241,7 @@ func (m *windscribeMonitor) command(ctx context.Context, args ...string) ([]byte
 // unrecognized status fails closed immediately.
 func windscribeObservedState(previous windscribeState, lastValid, now time.Time, parsed windscribeState, loggedIn bool, commandErr error) windscribeState {
 	if commandErr == nil {
-		if !loggedIn {
+		if !loggedIn && parsed != windscribeConnected && parsed != windscribeConnecting {
 			return windscribeUnknown
 		}
 		return parsed
@@ -241,14 +257,14 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	state, loggedIn := parseWindscribeStatus(string(out))
 	m.mu.Lock()
 	state = windscribeObservedState(m.state, m.lastValidCLIStatus, time.Now(), state, loggedIn, err)
-	if err == nil && loggedIn && state != windscribeUnknown {
+	if err == nil && state != windscribeUnknown {
 		m.lastValidCLIStatus = time.Now()
 	}
 	previous := m.state
 	m.state = state
 	protocolChanged := false
 	previousIP := m.vpnIP
-	if err == nil && loggedIn {
+	if err == nil && (loggedIn || state == windscribeConnected || state == windscribeConnecting) {
 		protocol := parseWindscribeProtocol(string(out))
 		protocolChanged = protocol != m.protocol
 		m.protocol = protocol
@@ -284,7 +300,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		}
 	}
 	onConnected := m.onTCPConnected
-	shouldReconnect := m.autoReconnect && state == windscribeDisconnected &&
+	shouldReconnect := m.autoReconnect && loggedIn && state == windscribeDisconnected &&
 		m.disconnectedSamples >= 3 && ready &&
 		!time.Now().Before(m.nextReconnect)
 	if shouldReconnect {
@@ -308,6 +324,9 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 			m.t.Note("Windscribe is connecting or validating its tunnel; no duplicate reconnect command")
 		default:
 			m.t.Note("Windscribe state unavailable; cannot safely auto-reconnect (check CLI/login)")
+		}
+		if err == nil && !loggedIn && (state == windscribeConnected || state == windscribeConnecting) {
+			m.t.Note("Windscribe account API unavailable; tunnel state is read-only, login and automatic reconnect are not authorized")
 		}
 	}
 	if state == windscribeConnected && (changed || ipChanged) {

@@ -156,6 +156,7 @@ type wsBridge struct {
 	logf         func(string, ...any)
 	note         func(string, ...any) // always shown (edge scan progress)
 	stagger      time.Duration
+	replyTimeout time.Duration // TCP, TLS/upgrade and initial OpenVPN reply per carrier
 	catalog      *wsNodeCatalog
 	// candidates overrides the carrier list (tests).
 	candidates func(host string) []wsCarrier
@@ -186,7 +187,7 @@ func (b *wsBridge) observeCLIConnected() {
 		// A long-lived leftover socket from an earlier connection attempt
 		// must not be credited when an unrelated CLI session changes state.
 		// CLI state has no authoritative link to the carrier socket.
-		if active.started.IsZero() || time.Since(active.started) > 90*time.Second {
+		if active.upstreamEnd || active.started.IsZero() || time.Since(active.started) > 90*time.Second {
 			return
 		}
 		active.confirmed = true
@@ -226,7 +227,8 @@ func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.C
 		path = wstunnel.DefaultPath
 	}
 	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 250 * time.Millisecond,
-		good: map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}, shortEnds: map[string]int{}}
+		replyTimeout: 12 * time.Second,
+		good:         map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}, shortEnds: map[string]int{}}
 	for _, e := range splitList(o.cdnEdges) {
 		if _, _, err := net.SplitHostPort(e); err != nil {
 			e = net.JoinHostPort(e, "443")
@@ -516,7 +518,20 @@ func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
 		}
 	}
 	ordered := append(preferred, wsDiversify(fresh, attempt)...)
-	return append(ordered, wsDiversify(cooling, attempt)...)
+	if len(ordered) > 0 || len(cooling) == 0 {
+		// Merely launching failed handshakes later still lets their quick
+		// reset packets beat a slower healthy handshake on every retry.
+		return ordered
+	}
+	// Keep recovery possible when every route is cooling, but re-probe
+	// only the least recently penalized route instead of flooding them all.
+	oldest := cooling[0]
+	for _, c := range cooling[1:] {
+		if b.bad[key][c.name].Before(b.bad[key][oldest.name]) {
+			oldest = c
+		}
+	}
+	return []wsCarrier{oldest}
 }
 
 // Only observed transport failures lower a carrier's priority; neither a
@@ -652,6 +667,13 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		b.demoteFailure(key, c.name, stage)
 		b.logf("Windscribe attempt=%d target=%s carrier=%s destination=%s source=%s failed stage=%s: %v", attemptID, key, c.name, c.addr, c.source, stage, err)
 	}
+	b.mu.Lock()
+	hasPreferred := len(cs) > 0 && cs[0].name == b.good[key]
+	b.mu.Unlock()
+	preferredFailed := make(chan struct{})
+	if !hasPreferred {
+		close(preferredFailed)
+	}
 	for i, c := range cs {
 		if c.addr == "" {
 			c.addr = key
@@ -659,21 +681,42 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			keep := false
+			if hasPreferred && i == 0 {
+				// A previously CLI-confirmed path gets a bounded exclusive
+				// attempt. A faster unauthenticated reset cannot steal it.
+				defer func() {
+					if !keep {
+						close(preferredFailed)
+					}
+				}()
+			} else {
+				select {
+				case <-rctx.Done():
+					return
+				case <-preferredFailed:
+				}
+			}
+			slot := i
+			if hasPreferred && i > 0 {
+				slot--
+			}
 			select {
 			case <-rctx.Done():
 				return
-			case <-time.After(time.Duration(i) * b.stagger):
+			case <-time.After(time.Duration(slot) * b.stagger):
 			}
-			conn, err := c.open(rctx, host, port)
+			probeCtx, stopProbe := context.WithTimeout(rctx, b.replyTimeout)
+			defer stopProbe()
+			conn, err := c.open(probeCtx, host, port)
 			if err != nil {
 				if ctx.Err() == nil && rctx.Err() == nil {
 					fail(c, err)
 				}
 				return
 			}
-			stop := context.AfterFunc(rctx, func() { _ = conn.Close() })
+			stop := context.AfterFunc(probeCtx, func() { _ = conn.Close() })
 			wctx, stopWrite := context.WithCancel(live)
-			keep := false
 			defer func() {
 				if !keep {
 					stopWrite()
@@ -691,7 +734,9 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			reply, err := readOpenVPNReply(conn)
 			if err != nil || !stop() {
 				_ = conn.Close()
-				if err == nil {
+				if probeCtx.Err() != nil {
+					err = probeCtx.Err()
+				} else if err == nil {
 					err = errors.New("no answer")
 				}
 				if ctx.Err() == nil && rctx.Err() == nil {
