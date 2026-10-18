@@ -89,6 +89,9 @@ func TestManualRouteTestAndLiveCheckAreRejectedDuringFrozenSession(t *testing.T)
 	if err := StartCDNScanToFile("cloudflare", 10, t.TempDir()); err == nil {
 		t.Fatal("CDN scan ignored the connected-session guard")
 	}
+	if err := StartCDNScanForProvider("cloudflare", 10, 1); err == nil {
+		t.Fatal("legacy CDN scan entrypoint ignored the connected-session guard")
+	}
 }
 
 func TestManualRouteTestRejectsHeldStartupGate(t *testing.T) {
