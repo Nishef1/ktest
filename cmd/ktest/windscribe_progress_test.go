@@ -234,7 +234,7 @@ func TestWindscribeVerboseRemainsAppendOnly(t *testing.T) {
 	v := &wsProgressView{t: plainTerm(&out), verbose: true}
 	s := wsProgressSnapshot{key: "203.0.113.100:443", total: 19, tried: 1, remaining: 18, attempted: 3, running: 2, replied: 1}
 	v.show(s, true)
-	if strings.Contains(out.String(), "\\x1b[0J") {
+	if strings.Contains(out.String(), "\x1b[0J") {
 		t.Fatal("redirected verbose output must not emit terminal redraw escapes")
 	}
 	if !strings.Contains(out.String(), "Started 3") || !strings.Contains(out.String(), "0 OpenVPN replies") && !strings.Contains(out.String(), "Running 2") {
@@ -293,7 +293,7 @@ func TestWindscribeLiveBoxContainsAllMethodCounters(t *testing.T) {
 	if v.t.pinnedBox == first {
 		t.Fatal("live box did not update counters")
 	}
-	if strings.Count(out.String(), "\\x1b[0J") < 2 {
+	if strings.Count(out.String(), "\x1b[0J") < 2 {
 		t.Fatal("live box update failed to clear previous frame")
 	}
 	v.summary(s)
