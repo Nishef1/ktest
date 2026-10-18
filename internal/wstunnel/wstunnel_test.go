@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -475,5 +476,70 @@ func TestWebSocketUpgradeResponseHeadersAreBoundedAndBinaryDataPreserved(t *test
 	long := "HTTP/1.1 101 Switching Protocols\r\nX-Padding: " + strings.Repeat("x", 17<<10) + "\r\n\r\n"
 	if _, err := readBoundedUpgrade(bufio.NewReader(strings.NewReader(long))); err == nil {
 		t.Fatal("unbounded HTTP upgrade headers accepted")
+	}
+}
+
+func TestStealthRandomizedHelloKeepsItsALPN(t *testing.T) {
+	// Unlike the HTTP/1.1 WebSocket Upgrade, Stealth carries raw OpenVPN
+	// after TLS. It must not discard the upstream randomized h2 offer.
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	seen := make(chan []string, 1)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: srv.TLS.Certificates,
+		NextProtos:   []string{"h2", "http/1.1"},
+		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+			seen <- append([]string(nil), info.SupportedProtos...)
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		c, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_ = c.(*tls.Conn).Handshake()
+	}()
+	conn, err := DialStealth(context.Background(), Config{
+		Addr: listener.Addr().String(), SNI: "www.speedtest.net",
+		Dial: dialTCP, OfficialHello: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	select {
+	case offered := <-seen:
+		if !slices.Contains(offered, "h2") || !slices.Contains(offered, "http/1.1") {
+			t.Fatalf("Stealth randomized ClientHello ALPN was overwritten: %v", offered)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stealth server did not observe a ClientHello")
+	}
+}
+
+func TestProbeDoesNotConfuseCustomPeerCallbackWithPKIVerification(t *testing.T) {
+	srv := wsEcho(t, DefaultPath, nil)
+	// Accepting a test server's self-signed certificate via a callback is
+	// a useful transport test, but proves no certificate-chain trust.
+	result := Probe(context.Background(), "wstunnel", Config{
+		Addr: srv.Listener.Addr().String(),
+		SNI:  "example.com",
+		Host: "example.com",
+		Dial: dialTCP,
+		VerifyPeer: func([]*x509.Certificate) error {
+			return nil
+		},
+	})
+	if !result.TCP || !result.TLS || !result.WebSocket {
+		t.Fatalf("expected outer carrier to work: %+v", result)
+	}
+	if result.CertificateVerified || result.VPNAuthenticated {
+		t.Fatalf("peer callback/HTTP 101 must not imply certificate or VPN authentication: %+v", result)
 	}
 }

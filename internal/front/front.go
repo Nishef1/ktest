@@ -11,8 +11,9 @@
 // :authority, not by the SNI, so the site that was asked for answers.
 //
 // What ktest adds over a plain MITM setup:
-//   - the CA is name-constrained to the fronted sites and lives in the user's
-//     profile, so a leaked key cannot impersonate anything else;
+//   - the CA requests name constraints and lives in the user's profile;
+//     trust-anchor handling differs across clients, so the CA key must still
+//     be protected and removed when fronting is no longer needed;
 //   - the upstream connection is made and verified first; the application is only
 //     answered if that worked, so a failed front falls back to the other paths
 //     with the application none the wiser;

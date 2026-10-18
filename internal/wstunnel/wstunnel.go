@@ -137,7 +137,7 @@ func DialStealth(ctx context.Context, c Config) (net.Conn, error) {
 		return nil, stageError("tcp", err)
 	}
 	stop := context.AfterFunc(dctx, func() { _ = raw.Close() })
-	conn, err := clientTLS(dctx, raw, c)
+	conn, err := clientTLS(dctx, raw, c, false)
 	err = stageError("tls", err)
 	if !stop() || err != nil {
 		_ = raw.Close()
@@ -150,8 +150,10 @@ func DialStealth(ctx context.Context, c Config) (net.Conn, error) {
 	return conn, nil
 }
 
-// clientTLS runs a Chrome-like TLS handshake offering only http/1.1.
-func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error) {
+// clientTLS builds the outer TLS connection. A WebSocket upgrade requires
+// HTTP/1.1 ALPN, while Stealth carries raw OpenVPN and preserves the chosen
+// fingerprint's ALPN (including Windscribe's randomized offer).
+func clientTLS(ctx context.Context, raw net.Conn, c Config, websocket bool) (*utls.UConn, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = raw.SetDeadline(dl)
 	}
@@ -176,8 +178,9 @@ func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error)
 	}
 	u := utls.UClient(raw, conf, utls.HelloChrome_Auto)
 	if c.OfficialHello {
-		// Windscribe/wstunnel uses HelloRandomizedALPN + ApplyPreset.
-		// Keep http/1.1 as the only offered ALPN for WebSocket upgrade.
+		// Windscribe Stealth uses HelloRandomizedALPN + ApplyPreset. The
+		// WebSocket alternative must restrict ALPN to HTTP/1.1, but the
+		// raw Stealth transport must not inherit that restriction.
 		spec, err := utls.UTLSIdToSpec(utls.HelloRandomizedALPN)
 		if err != nil {
 			return nil, fmt.Errorf("Windscribe ClientHello preset: %w", err)
@@ -186,9 +189,13 @@ func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error)
 		for _, ext := range spec.Extensions {
 			switch x := ext.(type) {
 			case *utls.ALPNExtension:
-				x.AlpnProtocols = []string{"http/1.1"}
+				if websocket {
+					x.AlpnProtocols = []string{"http/1.1"}
+				}
 			case *utls.ApplicationSettingsExtension:
-				continue
+				if websocket {
+					continue
+				}
 			case *utls.SupportedCurvesExtension:
 				// The randomized generator can advertise X25519MLKEM768
 				// without an initial key share. uTLS 1.8.2 then fails
@@ -210,7 +217,9 @@ func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error)
 	if err := u.BuildHandshakeState(); err != nil {
 		return nil, err
 	}
-	onlyHTTP11(u)
+	if websocket {
+		onlyHTTP11(u)
+	}
 	if err := u.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("TLS: %w", err)
 	}
@@ -218,7 +227,7 @@ func clientTLS(ctx context.Context, raw net.Conn, c Config) (*utls.UConn, error)
 }
 
 func handshake(ctx context.Context, raw net.Conn, c Config, path string) (net.Conn, *bufio.Reader, error) {
-	u, err := clientTLS(ctx, raw, c)
+	u, err := clientTLS(ctx, raw, c, true)
 	if err != nil {
 		return nil, nil, stageError("tls", err)
 	}
