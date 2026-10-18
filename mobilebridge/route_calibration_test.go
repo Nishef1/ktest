@@ -292,3 +292,27 @@ func TestBalancedProfileKeyChangesWhenUnderlyingAndroidNetworkChanges(t *testing
 		t.Fatal("empty network identity was accepted")
 	}
 }
+
+
+func TestLegacyCachedPlanMigrationRequiresExactSameTargets(t *testing.T) {
+	targets := []routeTarget{
+		{ID: "default-x", URL: "https://x.com/"},
+		{ID: "default-media", URL: "https://pbs.twimg.com/"},
+	}
+	legacy := &routeplan.Profile{Version: 1, Selections: []routeplan.Selection{
+		{TargetID: "default-x", URL: "https://x.com/"},
+		{TargetID: "default-media", URL: "https://pbs.twimg.com/"},
+	}}
+	if !legacyProfileMatchesTargets(legacy, targets) {
+		t.Fatal("unchanged targets were not eligible for migration")
+	}
+	changed := append([]routeTarget(nil), targets...)
+	changed[1].URL = "https://video.twimg.com/"
+	if legacyProfileMatchesTargets(legacy, changed) {
+		t.Fatal("edited target was mistaken for the cached configuration")
+	}
+	legacy.Selections = legacy.Selections[:1]
+	if legacyProfileMatchesTargets(legacy, targets) {
+		t.Fatal("incomplete cached target coverage was accepted")
+	}
+}
