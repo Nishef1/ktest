@@ -47,6 +47,28 @@ var routeTestMu sync.Mutex
 var routeTestState routeTestReport
 var routeTestCancel context.CancelFunc
 
+// The Android caller sets an ephemeral OS network handle before a manual
+// test or Balanced connection. This is not an SSID, BSSID, operator ID or
+// device identifier. It is hashed into the private route-profile cache key.
+var routeNetworkMu sync.Mutex
+var routeNetworkToken string
+
+func SetRouteNetworkToken(token string) error {
+	if len(token) == 0 || len(token) > 96 || strings.IndexFunc(token, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
+		return errors.New("active Android network identity is unavailable")
+	}
+	routeNetworkMu.Lock()
+	routeNetworkToken = token
+	routeNetworkMu.Unlock()
+	return nil
+}
+
+func currentRouteNetworkToken() string {
+	routeNetworkMu.Lock()
+	defer routeNetworkMu.Unlock()
+	return routeNetworkToken
+}
+
 func routeWorkActive() bool {
 	proxyMu.Lock()
 	active := activeProxy != nil || pendingProxy != nil
@@ -65,8 +87,8 @@ func StartRouteTest(mode, upstream, nativeDir, privateDir string, fronting bool)
 		return errors.New("disconnect or finish the current startup before testing routes")
 	}
 	defer proxyStartMu.Unlock()
-	if mode != "balanced" && mode != "fast" {
-		return errors.New("route calibration is available for Balanced and Fast")
+	if mode != "balanced" {
+		return errors.New("route calibration is available only in Balanced; Fast remains adaptive")
 	}
 	if routeWorkActive() {
 		return errors.New("disconnect before testing routes")
@@ -116,7 +138,7 @@ func CancelRouteTest() {
 
 // RouteTestStatus only reads private observations; polling never causes traffic.
 func RouteTestStatus(privateDir, mode string) (string, error) {
-	if mode != "balanced" && mode != "fast" {
+	if mode != "balanced" {
 		return "{}", nil
 	}
 	dir, err := realRouteDirectory(privateDir)
@@ -147,7 +169,7 @@ func RouteTestStatus(privateDir, mode string) (string, error) {
 }
 
 func routeProfileKey(targets []routeTarget, config smartproxy.Config, privateDir string) string {
-	parts := []string{routeTargetsRevision(targets), "stable-routing-v2"}
+	parts := []string{routeTargetsRevision(targets), "stable-routing-v3", currentRouteNetworkToken()}
 	for _, u := range config.Upstreams {
 		parts = append(parts, u.Name)
 		if u.Exit {
@@ -222,8 +244,8 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 		planTargets = append(planTargets, routeplan.Target{ID: target.ID, Name: target.Name, URL: target.URL})
 	}
 	key := routeProfileKey(targets, *config, privateDir)
-	profile, reused, err := routeplan.LoadOrTest(ctx, privateDir, key, manual, time.Now(), func() (*routeplan.Profile, error) {
-		return routeplan.Calibrate(ctx, planTargets, methods, func(ctx context.Context, target routeplan.Target, method routeplan.Method) routeplan.Sample {
+	profile, reused, err := routeplan.LoadOrTestWithRevision(ctx, privateDir, key, routeTargetsRevision(targets), manual, time.Now(), func() (*routeplan.Profile, error) {
+		return routeplan.CalibrateWithWorkers(ctx, planTargets, methods, func(ctx context.Context, target routeplan.Target, method routeplan.Method) routeplan.Sample {
 			return measureMethod(ctx, *config, byMethod[method.Name], target, privateDir)
 		}, func(progress routeplan.Progress) {
 			routeTestMu.Lock()
@@ -231,7 +253,7 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 			routeTestState.CurrentTarget, routeTestState.CurrentMethod = progress.Target, progress.Method
 			routeTestState.Phase = progress.Phase
 			routeTestMu.Unlock()
-		})
+		}, 4)
 	})
 	if err != nil {
 		return nil, err
