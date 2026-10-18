@@ -1,8 +1,13 @@
-# Android preview builds are manual-only and uploaded as Actions artifacts.
+# Android preview builds are normally manual and uploaded as Actions artifacts.
+# A workflow-file update also triggers a preview build on main (not production publication).
 # Production signing and release publication remain separate.
-name: Android APK (manual preview)
+name: Android APK (v8 preview)
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/android-build.yml"
 permissions:
   contents: read
 jobs:
@@ -52,6 +57,9 @@ jobs:
           APK=android/app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
+          BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK")"
+          echo "$BADGING" | grep -F "versionCode=\x278\x27"
+          echo "$BADGING" | grep -F "versionName=\x278.0.0-preview.1\x27"
           unzip -t "$APK" | tail -n 1
           test "$(unzip -Z1 "$APK" | awk -F/ '/^lib\/[^/]+\/[^/]+$/ {print $2}' | sort -u)" = arm64-v8a
           for ABI in arm64-v8a; do
@@ -63,11 +71,11 @@ jobs:
           done
           python3 android/scripts/prepare-native-cores.py --abis arm64-v8a --verify-apk "$APK"
           mkdir -p android/dist
-          cp "$APK" android/dist/KTest-Connection-v0.3.0-preview-arm64-v8a.apk
+          cp "$APK" android/dist/KTest-Connection-v8-preview-arm64-v8a.apk
           sha256sum android/dist/*.apk
       - uses: actions/upload-artifact@v7
         with:
-          name: KTest-Connection-v0.3.0-preview-arm64-v8a
+          name: KTest-Connection-v8-preview-arm64-v8a
           path: android/dist/KTest-Connection-v0.3.0-preview-arm64-v8a.apk
           retention-days: 14
           if-no-files-found: error
