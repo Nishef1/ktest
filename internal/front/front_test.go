@@ -134,6 +134,7 @@ func TestChooseALPN(t *testing.T) {
 	}{
 		{"www.youtube.com", []string{"h2", "http/1.1"}, "h2", false},
 		{"rr1.googlevideo.com", []string{"h2", "http/1.1"}, "http/1.1", false},
+		{"rr1.googlevideo.com", []string{"h2"}, "", true}, // do not force h2 on an h1-only video edge
 		{"www.youtube.com", []string{"http/1.1"}, "http/1.1", false},
 		{"pbs.twimg.com", []string{"h2", "http/1.1"}, "http/1.1", false},
 		{"www.youtube.com", []string{"mqtt"}, "", true},
