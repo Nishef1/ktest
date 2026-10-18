@@ -336,11 +336,16 @@ func (s *siteEvents) print(e smartproxy.Event) {
 				t.Line(toneInfo, "%s · LATENCY RESPONSE · %s", t.Bold(target), t.Dim(shortDur(e.Took)))
 			}
 		} else {
-			s.latencyFail.Add(1)
-			if time.Since(s.failedAt[key+"|latency"]) >= time.Minute {
-				s.failedAt[key+"|latency"] = time.Now()
+			failed := s.latencyFail.Add(1)
+			if s.verbose {
+				// Diagnostic mode keeps the original endpoint and full error,
+				// including repeated latency failures across different IPs.
 				t.Line(toneWarn, "%s · LATENCY PROBE FAILED (not VPN handshake)", t.Bold(target))
 				s.detail(e.Err)
+			} else if failed == 1 || failed%25 == 0 || time.Since(s.failedAt["ws-latency-overview"]) >= 30*time.Second {
+				s.failedAt["ws-latency-overview"] = time.Now()
+				t.Line(toneWarn, "Windscribe latency probes: %d failures (port 6464; not VPN handshake)", failed)
+				t.Note("Individual destinations and failures available with -v.")
 			}
 		}
 		return
