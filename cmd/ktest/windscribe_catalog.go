@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +23,8 @@ const wsCatalogLimit = 4 << 20
 // Windscribe desktop switched to the mob-v2 server list in 2026.
 // The older openvpn URLs are fallbacks on networks that cannot reach the
 // current API. The two mob-v2 variants may contain different node subsets.
+// Also fetch their unmodified inventories: a valid country-altered response
+// can omit the exact TCP node selected by the installed Windscribe client.
 // Timestamp suffixes match the public API format; no account tokens are sent.
 type wsCatalogSource struct {
 	name, url, fallback string
@@ -30,6 +33,8 @@ type wsCatalogSource struct {
 var wsCatalogURLs = []wsCatalogSource{
 	{"global", "https://assets.windscribe.com/serverlist/mob-v2/1/", "https://assets.windscribe.com/serverlist/openvpn/1/ktest?country_override=ZZ"},
 	{"regional", "https://assets.windscribe.com/serverlist/mob-v2/0/", "https://assets.windscribe.com/serverlist/openvpn/1/ktest"},
+	{"unmodified-global", "https://assets.windscribe.com/serverlist/mob-v2/1/?country_override=ZZ", "https://assets.windscribe.com/serverlist/openvpn/1/ktest?country_override=ZZ"},
+	{"unmodified-regional", "https://assets.windscribe.com/serverlist/mob-v2/0/?country_override=ZZ", "https://assets.windscribe.com/serverlist/openvpn/1/ktest?country_override=ZZ"},
 }
 
 type wsNode struct {
@@ -370,7 +375,7 @@ func (c *wsNodeCatalog) load(path string) {
 	}
 	defer f.Close()
 	var lists map[string]wsCatalogList
-	if json.NewDecoder(io.LimitReader(f, 3*wsCatalogLimit)).Decode(&lists) != nil {
+	if json.NewDecoder(io.LimitReader(f, int64(len(wsCatalogURLs)+1)*wsCatalogLimit)).Decode(&lists) != nil {
 		return
 	}
 	for _, source := range wsCatalogURLs {
@@ -430,13 +435,15 @@ func fetchWSNodeList(ctx context.Context, client *http.Client, url string) ([]by
 	return body, nil
 }
 
-// mob-v2 uses a Unix-time URL component. A source without trailing slash
-// stays unchanged, allowing local regression servers to exercise fallbacks.
+// mob-v2 uses a Unix-time path component, before any country override query.
+// A path without a trailing slash stays unchanged (including legacy URLs).
 func wsCatalogRequestURL(base string, now time.Time) string {
-	if strings.HasSuffix(base, "/") {
-		return base + strconv.FormatInt(now.Unix(), 10)
+	u, err := url.Parse(base)
+	if err != nil || !strings.HasSuffix(u.Path, "/") {
+		return base
 	}
-	return base
+	u.Path += strconv.FormatInt(now.Unix(), 10)
+	return u.String()
 }
 
 func (c *wsNodeCatalog) updateFromSource(ctx context.Context, client *http.Client, source wsCatalogSource) error {

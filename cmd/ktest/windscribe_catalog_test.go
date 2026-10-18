@@ -265,6 +265,60 @@ func TestWindscribeMobV2ProviderURLAndLegacyFallback(t *testing.T) {
 	}
 }
 
+func TestCatalogKeepsUnmodifiedNodesWhenRegionalResponseIsAltered(t *testing.T) {
+	// The observed IR response was valid and populated, but omitted the
+	// app-selected Ashburn TCP entry. Only country_override=ZZ supplied it.
+	const unmodified = `{"data":[{"name":"US East","groups":[{"city":"Ashburn","nick":"Bles Park","nodes":[{"ip":"152.233.50.129","ip2":"152.233.50.130","ip3":"152.233.50.131","hostname":"us-east-197.whiskergalaxy.com"}]}]}]}`
+	var regionalRequests, unmodifiedRequests int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("country_override") == "ZZ" {
+			unmodifiedRequests++
+			_, _ = w.Write([]byte(unmodified))
+		} else {
+			regionalRequests++
+			_, _ = w.Write([]byte(globalNodeFixture))
+		}
+	}))
+	defer srv.Close()
+	c := newWSNodeCatalog()
+	for _, configured := range wsCatalogURLs {
+		source := configured
+		source.url = strings.Replace(source.url, "https://assets.windscribe.com", srv.URL, 1)
+		source.fallback = ""
+		if err := c.updateFromSource(context.Background(), srv.Client(), source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if regionalRequests == 0 || unmodifiedRequests == 0 {
+		t.Fatalf("both routing inventories are required even when the first succeeds: regional=%d unmodified=%d", regionalRequests, unmodifiedRequests)
+	}
+	for _, catalog := range []*wsNodeCatalog{c, newWSNodeCatalog()} {
+		if catalog != c {
+			path := filepath.Join(t.TempDir(), "catalog.json")
+			if err := c.save(path); err != nil {
+				t.Fatal(err)
+			}
+			catalog.load(path)
+		}
+		if got := catalog.endpoints("152.233.50.130"); len(got) != 2 || got[0].ip != "152.233.50.129" || got[1].ip != "152.233.50.131" {
+			t.Fatalf("app-selected node still has no exact provider mapping: %+v", got)
+		}
+		if got := catalog.endpoints("203.0.113.100"); len(got) != 2 {
+			t.Fatalf("regional inventory was lost: %+v", got)
+		}
+		if got := catalog.endpoints("152.233.50.146"); len(got) != 0 {
+			t.Fatalf("a neighboring TCP target inherited the node: %+v", got)
+		}
+	}
+}
+
+func TestCatalogTimestampPrecedesCountryOverrideQuery(t *testing.T) {
+	got := wsCatalogRequestURL("https://assets.windscribe.com/serverlist/mob-v2/1/?country_override=ZZ", time.Unix(1760700000, 0))
+	if got != "https://assets.windscribe.com/serverlist/mob-v2/1/1760700000?country_override=ZZ" {
+		t.Fatalf("timestamp lost or appended to the country override: %s", got)
+	}
+}
+
 func TestWindscribeCatalogAvoidsForceDisconnectNodes(t *testing.T) {
 	// wsnet 1.5.33 exposes fd:1, instructing clients to avoid starting
 	// new connections on a draining server even in an otherwise healthy city.
@@ -421,7 +475,9 @@ func TestCatalogMissingTargetDiagnosedAndRetriedWithoutInventedIPs(t *testing.T)
 	c.mu.Lock()
 	c.sourceErrors["regional"] = "HTTP 503"
 	c.mu.Unlock()
-	c.finishFetch()
+	for range len(wsCatalogURLs) - 1 {
+		c.finishFetch()
+	}
 	if c.waitForTarget(context.Background(), target, time.Millisecond) {
 		t.Fatal("unrelated fresh list was accepted for missing target")
 	}
