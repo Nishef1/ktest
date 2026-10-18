@@ -110,3 +110,21 @@ func TestMalformedClientHelloCannotEnterPathRace(t *testing.T) {
 		t.Fatal("malformed TLS ClientHello entered upstream race")
 	}
 }
+
+func TestAndroidHEVCanRecoverSNIForNormalIPTargets(t *testing.T) {
+	flight := helloWithExtensions(sniExtension("www.youtube.com"))
+	p := &Proxy{cfg: Config{RecoverIPHostSNI: true}}
+	if got := p.nameFor("142.250.1.1", flight); got != "www.youtube.com" {
+		t.Fatalf("HEV IP destination lost HTTPS identity: %q", got)
+	}
+	if got := p.nameFor("142.250.1.1", []byte("MTProto first flight")); got != "142.250.1.1" {
+		t.Fatalf("non-TLS traffic identity was invented: %q", got)
+	}
+	if got := p.nameFor("142.250.1.1", helloWithExtensions(sniExtension("198.51.100.5"))); got != "142.250.1.1" {
+		t.Fatalf("IP-shaped SNI was substituted: %q", got)
+	}
+	desktop := &Proxy{cfg: Config{}}
+	if got := desktop.nameFor("142.250.1.1", flight); got != "142.250.1.1" {
+		t.Fatalf("desktop explicit IP semantics unexpectedly changed: %q", got)
+	}
+}
