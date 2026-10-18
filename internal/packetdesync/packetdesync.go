@@ -23,6 +23,7 @@ type Strategy string
 const (
 	Fake  Strategy = "fake"
 	Split Strategy = "split"
+	Combo Strategy = "combo"
 )
 
 // Source files are pinned to the official zapret-win-bundle Git tree at
@@ -60,7 +61,7 @@ func Target(ip string, strategy Strategy) (string, []string, error) {
 		addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
 		return "", nil, errors.New("Zapret2 requires an exact public IPv4 Windscribe entry")
 	}
-	if strategy != Fake && strategy != Split {
+	if strategy != Fake && strategy != Split && strategy != Combo {
 		return "", nil, fmt.Errorf("unsupported Zapret2 strategy %q", strategy)
 	}
 	ip = addr.To4().String()
@@ -81,6 +82,13 @@ func Target(ip string, strategy Strategy) (string, []string, error) {
 		args = append(args, "--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,rndsni,dupsid")
 	case Split:
 		args = append(args, "--lua-desync=multisplit:pos=1,midsld")
+	case Combo:
+		// Upstream Zapret2 uses ordered Lua instances: a fake TLS packet
+		// followed by a sequence-overlapped split of the real ClientHello.
+		args = append(args,
+			"--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,rndsni,dupsid",
+			"--lua-desync=multisplit:pos=1,midsld:seqovl=5:seqovl_pattern=0x1603030000",
+		)
 	}
 	return filter, args, nil
 }
