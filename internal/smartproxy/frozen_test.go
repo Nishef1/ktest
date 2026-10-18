@@ -67,7 +67,7 @@ func TestFrozenDestinationsAndPolicyRemainIsolated(t *testing.T) {
 
 func TestFrozenSessionReverifiesSameExitAfterLeaseExpires(t *testing.T) {
 	var checks atomic.Int32
-	p, err := New(Config{Frozen: &FrozenRoutes{Protected: "exit"}, Upstreams: []Upstream{{Name: "exit", Exit: true, AIEligible: true}},
+	p, err := New(Config{Frozen: &FrozenRoutes{Protected: "exit"}, ExitOnly: func(host string) bool { return host == "protected.example" }, Upstreams: []Upstream{{Name: "exit", Exit: true, AIEligible: true}},
 		VerifyExit: func(context.Context, Upstream) error { checks.Add(1); return nil },
 	})
 	if err != nil {
@@ -87,7 +87,7 @@ func TestFrozenSessionReverifiesSameExitAfterLeaseExpires(t *testing.T) {
 
 func TestFrozenSessionRejectsFailedExitReverification(t *testing.T) {
 	var checks atomic.Int32
-	p, err := New(Config{Frozen: &FrozenRoutes{Protected: "exit"}, Upstreams: []Upstream{{Name: "exit", Exit: true, AIEligible: true}},
+	p, err := New(Config{Frozen: &FrozenRoutes{Protected: "exit"}, ExitOnly: func(host string) bool { return host == "protected.example" }, Upstreams: []Upstream{{Name: "exit", Exit: true, AIEligible: true}},
 		VerifyExit: func(context.Context, Upstream) error {
 			checks.Add(1)
 			return errors.New("foreign exit is unavailable")
