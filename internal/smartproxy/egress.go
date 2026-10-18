@@ -41,9 +41,9 @@ func (p *Proxy) verifyExit(ctx context.Context, u *upstreamState) error {
 	if time.Now().UnixNano() < u.verifiedUntil.Load() {
 		return nil
 	}
-	if p.cfg.Frozen != nil {
-		return fmt.Errorf("foreign exit verification expired; disconnect and run an explicit test before reusing this exit")
-	}
+	// A frozen route may reverify its SAME already selected foreign exit.
+	// This is a trust-lease refresh, not route calibration or a fallback.
+	// Failure still blocks protected traffic; no direct socket is permitted.
 	if time.Now().Before(u.retryAfter) {
 		return u.verifyErr
 	}
