@@ -434,6 +434,17 @@ private fun EndpointsPanel(
             val address = status.optString(key)
             if (address.isNotBlank()) EndpointRow(label, address, onCopy)
         }
+        if (status.optBoolean("fronting")) {
+            val accepted = status.optInt("front_accepted")
+            val refused = status.optInt("front_refused")
+            val disabled = status.optString("front_disabled")
+            Note(
+                if (disabled.isNotBlank()) "Domain fronting retired: $disabled"
+                else "Optional fronting active · $accepted accepted TLS sessions · $refused rejected by clients",
+                if (disabled.isNotBlank() || refused > 0) Tone.Warn else Tone.Info
+            )
+            Note("This is per-connection evidence only. Installed user CA trust is not universal across Android apps.")
+        }
         if (status.optString("dns_error").isNotBlank()) {
             Note("Last DNS transport failure (${status.optInt("dns_failures")}): ${status.optString("dns_error")}", Tone.Warn)
         }
