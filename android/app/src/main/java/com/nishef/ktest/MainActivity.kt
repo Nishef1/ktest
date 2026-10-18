@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -65,11 +66,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val connectingPhases = setOf("preparing", "starting_core", "verifying_upstream")
+private val connectingPhases = setOf("preparing", "starting_core", "verifying_upstream", "calibrating")
 
 @Composable
 private fun KTestApp() {
     val context = LocalContext.current
+    val privateDir = remember(context) { context.filesDir.canonicalPath }
     val prefs = remember { context.getSharedPreferences("ktest_android", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -88,11 +90,22 @@ private fun KTestApp() {
     var connectAfterConsent by remember { mutableStateOf(false) }
     val tools = remember { ToolsState() }
     val settings = remember { SettingsState() }
+    val routePlan = remember { RoutePlanState() }
+    val routeTargets = remember { RouteTargetsState() }
     val running = status.optBoolean("running")
     val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
+    val manualTesting = routePlan.manualBusy
+    val offline = !running && !connecting && !connectAfterConsent && !routePlan.busy &&
+        vpnState != "preparing" && vpnState != "tun_running_unverified"
+    val routeStatusReady = routePlan.report != null && routePlan.readError == null
+    val scanBusy = tools.cdnStarting || tools.cdnStatus.optBoolean("running")
+    val scanStatusReady = tools.cdnStatusLoaded && tools.cdnStatusError == null
+    val connectBlocked = routePlan.busy || routeTargets.busy || scanBusy || !routeStatusReady || !scanStatusReady
+    val canTestRoutes = offline && routeStatusReady && !routeTargets.busy && !settings.caBusy &&
+        !scanBusy && scanStatusReady && activeMode.id in listOf("balanced", "fast")
     val linkState = when {
         running -> LinkState.Active
-        connecting -> LinkState.Connecting
+        (connecting || connectAfterConsent) && !manualTesting -> LinkState.Connecting
         !activeMode.available -> LinkState.Unavailable
         else -> LinkState.Idle
     }
@@ -109,7 +122,11 @@ private fun KTestApp() {
             error = e.message ?: "Unable to start the Android VPN adapter"
         }
     }
-    val launchConnect: () -> Unit = {
+    val launchConnect: () -> Unit = connect@{
+        if (connectBlocked) {
+            error = "Stop any CDN scan, finish the manual test or target update, and wait for status before connecting."
+            return@connect
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED) {
@@ -155,8 +172,26 @@ private fun KTestApp() {
                 .getOrElse { JSONObject() }
             vpnCapability = runCatching { withContext(Dispatchers.IO) { JSONObject(Mobilebridge.vpnCapability()) } }
                 .getOrElse { JSONObject() }
-            connecting = status.optString("phase") in connectingPhases
-            if (status.optString("phase") == "failed") {
+            try {
+                val routeMode = if (modeId in listOf("balanced", "fast")) modeId else "balanced"
+                routePlan.report = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.routeTestStatus(privateDir, routeMode)) }
+                routePlan.readError = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                routePlan.readError = e.message ?: "Could not read saved route observations"
+            }
+            try {
+                tools.cdnStatus = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.cdnScanStatus()) }
+                tools.cdnStatusLoaded = true
+                tools.cdnStatusError = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                tools.cdnStatusError = e.message ?: "Could not read CDN scan status"
+            }
+            connecting = status.optString("phase") in connectingPhases && !routePlan.manualBusy
+            if (status.optString("phase") == "failed" && !routePlan.manualBusy) {
                 connecting = false
                 error = status.optString("error")
             }
@@ -196,22 +231,64 @@ private fun KTestApp() {
                             nativeMethod = nativeMethod,
                             onNativeMethod = { nativeMethod = it; prefs.edit().putString("method_$modeId", it).apply() },
                             error = error, onDismissError = { error = null; ProxyService.lastError = null },
+                            routePlan = routePlan, connectBlocked = connectBlocked, scanBusy = scanBusy,
+                            canTestRoutes = canTestRoutes,
+                            onTestRoutes = {
+                                if (canTestRoutes) {
+                                    routePlan.starting = true
+                                    routePlan.error = null
+                                    val mode = activeMode.id
+                                    val testUpstream = upstream.trim()
+                                    scope.launch {
+                                        try {
+                                            routePlan.report = withContext(Dispatchers.IO) {
+                                                val fronting = ProxyService.checkedFrontingOptIn(context, privateDir)
+                                                Mobilebridge.startRouteTest(mode, testUpstream,
+                                                    context.applicationInfo.nativeLibraryDir, privateDir, fronting)
+                                                JSONObject(Mobilebridge.routeTestStatus(privateDir, mode))
+                                            }
+                                            routePlan.readError = null
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            routePlan.error = e.message ?: "Could not start manual route test"
+                                        } finally {
+                                            routePlan.starting = false
+                                        }
+                                    }
+                                }
+                            },
+                            onCancelRouteTest = {
+                                if (routePlan.manualBusy && !routePlan.starting && !routePlan.canceling) {
+                                    routePlan.canceling = true
+                                    scope.launch {
+                                        try { withContext(Dispatchers.IO) { Mobilebridge.cancelRouteTest() } }
+                                        catch (e: CancellationException) { throw e }
+                                        catch (e: Exception) { routePlan.error = e.message ?: "Could not cancel manual route test" }
+                                        finally { routePlan.canceling = false }
+                                    }
+                                }
+                            },
                             routeReport = routeReport, checkingRoute = checkingRoute,
                             onCheckRoute = {
-                                checkingRoute = true
-                                routeReport = null
-                                scope.launch {
-                                    try {
-                                        routeReport = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.checkRoute()) }
-                                    } catch (e: Exception) {
-                                        error = e.message ?: "Route check failed"
-                                    } finally {
-                                        checkingRoute = false
+                                if (running && !status.optBoolean("frozen") && !checkingRoute && !routePlan.busy) {
+                                    checkingRoute = true
+                                    routeReport = null
+                                    scope.launch {
+                                        try {
+                                            routeReport = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.checkRoute()) }
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            error = e.message ?: "Route check failed"
+                                        } finally {
+                                            checkingRoute = false
+                                        }
                                     }
                                 }
                             },
                             onMode = {
-                                if (!running && !connecting) {
+                                if (offline && !routeTargets.busy) {
                                     modeId = it
                                     upstream = prefs.getString("upstream_$it", "") ?: ""
                                     nativeMethod = prefs.getString("method_$it", "auto") ?: "auto"
@@ -224,12 +301,12 @@ private fun KTestApp() {
                             onCoverage = { coverage = it; prefs.edit().putString("coverage", it).apply() },
                             onPower = {
                                 error = null
-                                if (running || connecting) {
+                                if (running || (connecting && !routePlan.manualBusy)) {
                                     context.startService(Intent(context, ProxyService::class.java).apply {
                                         action = ProxyService.ACTION_STOP
                                     })
                                     connecting = false
-                                } else if (activeMode.available) {
+                                } else if (activeMode.available && !connectBlocked) {
                                     val consent = if (coverage == "vpn") VpnService.prepare(context) else null
                                     if (consent != null) {
                                         connectAfterConsent = true
@@ -239,9 +316,14 @@ private fun KTestApp() {
                             },
                             onCopy = copy
                         )
-                        1 -> ToolsScreen(tools, scope, copy)
+                        1 -> ToolsScreen(tools, scope, copy, scanAllowed = offline && routeStatusReady && !routeTargets.busy)
                         else -> SettingsScreen(
                             s = settings, scope = scope,
+                            routeTargets = routeTargets, targetsEditable = offline,
+                            manualTesting = manualTesting,
+                            onTargetsChanged = {
+                                routePlan.changedProfileAt = routePlan.report?.optJSONObject("profile")?.optString("completed_at").orEmpty()
+                            },
                             nativeLibraryDir = context.applicationInfo.nativeLibraryDir,
                             vpn = vpnCapability, vpnServiceState = KTestVpnService.state,
                             vpnError = KTestVpnService.lastError,
@@ -250,7 +332,7 @@ private fun KTestApp() {
                                     context.startService(Intent(context, KTestVpnService::class.java).apply {
                                         action = KTestVpnService.ACTION_STOP
                                     })
-                                } else if (vpnCapability.optBoolean("available")) {
+                                } else if (vpnCapability.optBoolean("available") && !manualTesting) {
                                     val consent = VpnService.prepare(context)
                                     if (consent == null) startVpn() else vpnConsent.launch(consent)
                                 }

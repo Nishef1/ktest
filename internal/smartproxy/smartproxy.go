@@ -94,8 +94,17 @@ type Session interface {
 	Close()
 }
 
+// FrozenRoutes is a preconnection selection. Empty exact selections fail
+// closed; unknown destinations use one fixed default, never a new race.
+type FrozenRoutes struct {
+	Targets   map[string]string
+	Default   string
+	Protected string
+}
+
 type Config struct {
 	Upstreams []Upstream
+	Frozen    *FrozenRoutes
 	// ExitOnly forces matched names to use only verified foreign exits.
 	// If none is present, fail closed instead of silently revealing the ISP IP.
 	ExitOnly func(string) bool
@@ -151,6 +160,7 @@ type Event struct {
 	Path        string // winning path; empty when none answered
 	Egress      string // route class; never a fabricated destination-observed IP
 	Took        time.Duration
+	ConnectMS   int64 // destination TCP/SOCKS establishment, excluding TLS response
 	OK          bool
 	Err         string // last failure reason when no path answered
 	// TCPOnly means only the upstream TCP/SOCKS handshake succeeded. It must
@@ -239,6 +249,14 @@ func New(cfg Config) (*Proxy, error) {
 		return nil, errors.New("at least one upstream is required")
 	}
 	cfg.defaults()
+	if cfg.Frozen != nil {
+		pins := *cfg.Frozen
+		pins.Targets = make(map[string]string, len(cfg.Frozen.Targets))
+		for destination, method := range cfg.Frozen.Targets {
+			pins.Targets[destination] = method
+		}
+		cfg.Frozen = &pins
+	}
 	p := &Proxy{cfg: cfg, mem: map[string]*destinationMemory{}, hints: map[string]memo{}}
 	seen := map[string]bool{}
 	for _, u := range cfg.Upstreams {
@@ -697,11 +715,12 @@ type outcome struct {
 // winner is what a successful attempt hands to handle: either an upstream
 // connection that already produced a TLS record, or a prepared takeover.
 type winner struct {
-	conn  net.Conn
-	first []byte
-	sess  Session
-	tls   bool
-	path  string
+	conn        net.Conn
+	first       []byte
+	sess        Session
+	tls         bool
+	path        string
+	connectTook time.Duration
 }
 
 func (w winner) release() {
@@ -814,7 +833,7 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 				continue
 			}
 			p.logf("%s:%s won by %s in %dms", host, port, r.u.Name, r.took.Milliseconds())
-			p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Path: r.u.Name, Took: time.Since(began), OK: true, TLSResponse: r.win.tls, Prepared: r.win.sess != nil})
+			p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Path: r.u.Name, Took: time.Since(began), ConnectMS: r.win.connectTook.Milliseconds(), OK: true, TLSResponse: r.win.tls, Prepared: r.win.sess != nil})
 			cancel()
 			go drain(results, pending)
 			r.win.path = r.u.Name
@@ -901,10 +920,12 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 		}
 		return winner{sess: sess}, nil
 	}
+	dialBegan := time.Now()
 	conn, err := p.dial(ctx, u, host, port)
 	if err != nil {
 		return winner{}, err
 	}
+	connectTook := time.Since(dialBegan)
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	fail := func(err error) (winner, error) {
 		stop()
@@ -928,7 +949,7 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 		return winner{}, context.Canceled
 	}
 	_ = conn.SetDeadline(time.Time{})
-	return winner{conn: conn, first: response, tls: true}, nil
+	return winner{conn: conn, first: response, tls: true, connectTook: connectTook}, nil
 }
 
 // plain handles non-TLS traffic: nothing cuts a protocol it cannot parse, so

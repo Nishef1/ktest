@@ -1,5 +1,7 @@
 package com.nishef.ktest
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
@@ -10,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -19,6 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,11 +33,11 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mobilebridge.Mobilebridge
 import org.json.JSONObject
+import java.io.File
 import kotlin.math.roundToInt
 
 /** Tool inputs and results outlive tab switches; network calls run on the app scope. */
@@ -48,16 +54,32 @@ internal class ToolsState {
     var cdnBudget by mutableFloatStateOf(120f)
     var cdnStarting by mutableStateOf(false)
     var cdnError by mutableStateOf<String?>(null)
+    var cdnStatus by mutableStateOf(JSONObject())
+    var cdnStatusLoaded by mutableStateOf(false)
+    var cdnStatusError by mutableStateOf<String?>(null)
+    var cdnExportBusy by mutableStateOf(false)
+    var cdnExportPath by mutableStateOf<String?>(null)
+    var cdnExportMessage by mutableStateOf<String?>(null)
 
-    var frontUrl by mutableStateOf("https://example.com")
-    var frontSni by mutableStateOf("example.com")
-    var frontHost by mutableStateOf("example.com")
+    var frontTarget by mutableStateOf("x")
+    var frontUrl by mutableStateOf("https://x.com/")
+    var frontMode by mutableStateOf("auto")
+    var frontSni by mutableStateOf("")
+    var frontHost by mutableStateOf("")
+    var frontPreset by mutableStateOf<JSONObject?>(null)
+    var frontPresetFor by mutableStateOf("")
+    var frontPresetError by mutableStateOf<String?>(null)
     var frontEdges by mutableStateOf("")
     var frontRounds by mutableStateOf("1")
     var frontProof by mutableStateOf(false)
     var frontBusy by mutableStateOf(false)
     var frontReport by mutableStateOf<JSONObject?>(null)
     var frontError by mutableStateOf<String?>(null)
+    var frontRunMode by mutableStateOf("auto")
+    var frontRunPreset by mutableStateOf<JSONObject?>(null)
+    var frontRunUrl by mutableStateOf("")
+    var frontRunSni by mutableStateOf("")
+    var frontRunHost by mutableStateOf("")
 
     var echBusy by mutableStateOf(false)
     var echReport by mutableStateOf<JSONObject?>(null)
@@ -84,7 +106,7 @@ private fun CoroutineScope.runTool(
 }
 
 @Composable
-internal fun ToolsScreen(s: ToolsState, scope: CoroutineScope, onCopy: (String) -> Unit) {
+internal fun ToolsScreen(s: ToolsState, scope: CoroutineScope, onCopy: (String) -> Unit, scanAllowed: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ScreenTitle("Tools", "Desktop diagnostics, running on your current Android network.")
         Spacer(Modifier.height(4.dp))
@@ -92,9 +114,9 @@ internal fun ToolsScreen(s: ToolsState, scope: CoroutineScope, onCopy: (String) 
             DiagnoseTool(s, scope)
         }
         ToolCard(s, "cdn", KIcons.Search, "CDN scan", "Find responsive provider edges") {
-            CDNScanTool(s, scope, onCopy)
+            CDNScanTool(s, scope, onCopy, scanAllowed)
         }
-        ToolCard(s, "front", KIcons.Route, "Fronting test", "Compare up to 12 edges, optional origin proof") {
+        ToolCard(s, "front", KIcons.Route, "Fronting test", "Target presets or controlled-origin comparison") {
             FrontingTool(s, scope)
         }
         ToolCard(s, "ech", KIcons.Lock, "ECH bootstrap", "Fetch a fresh Cloudflare ECH configuration") {
@@ -194,79 +216,189 @@ private fun DiagnoseTool(s: ToolsState, scope: CoroutineScope) {
 }
 
 @Composable
-private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -> Unit) {
-    var status by remember { mutableStateOf(JSONObject(Mobilebridge.cdnScanStatus())) }
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            status = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.cdnScanStatus()) }
-            delay(500)
+private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -> Unit, scanAllowed: Boolean) {
+    val context = LocalContext.current
+    val pollError = s.cdnStatusError
+    val exportCsv = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        val path = s.cdnExportPath
+        s.cdnExportPath = null
+        if (uri == null) {
+            s.cdnExportBusy = false
+        } else {
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        val source = privateScanCsv(context.filesDir, path ?: error("No completed scan selected"))
+                        source.inputStream().use { input ->
+                            val output = context.contentResolver.openOutputStream(uri, "w")
+                                ?: error("Android could not open the selected CSV file")
+                            output.use { input.copyTo(it) }
+                        }
+                    }
+                    s.cdnExportMessage = "CSV saved with every attempted IP and its measured result."
+                } catch (e: Exception) {
+                    s.cdnError = e.message ?: "Unable to export scan results"
+                } finally {
+                    s.cdnExportBusy = false
+                }
+            }
         }
     }
+    val status = s.cdnStatus
     val running = status.optBoolean("running")
     val busy = s.cdnStarting || running
-    val budget = s.cdnBudget.roundToInt()
+    val controlsBusy = busy || s.cdnExportBusy || pollError != null || !s.cdnStatusLoaded || !scanAllowed
+    val budget = if (s.cdnBudget.roundToInt() >= 310) 0L else s.cdnBudget.roundToInt().toLong()
+    val budgetLabel = if (budget == 0L) "Until stopped" else "$budget IPs"
     Segmented(listOf("cloudflare" to "Cloudflare", "akamai" to "Akamai", "fastly" to "Fastly", "google" to "Google"),
-        s.cdnProvider, { s.cdnProvider = it }, enabled = !busy)
+        s.cdnProvider, { s.cdnProvider = it }, enabled = !controlsBusy)
     Column {
         Row {
             Text("Candidate budget", color = K.muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
-            Text("$budget", color = K.text, fontSize = 13.sp, fontFamily = K.mono)
+            Text(budgetLabel, color = K.text, fontSize = 13.sp, fontFamily = K.mono)
         }
-        Slider(value = s.cdnBudget, onValueChange = { s.cdnBudget = it }, valueRange = 10f..300f, enabled = !busy,
+        Slider(value = s.cdnBudget, onValueChange = { s.cdnBudget = it }, valueRange = 10f..310f,
+            steps = 29, enabled = !controlsBusy, modifier = Modifier.semantics { stateDescription = budgetLabel },
             colors = SliderDefaults.colors(thumbColor = K.mint, activeTrackColor = K.mint,
                 inactiveTrackColor = K.stroke, disabledThumbColor = K.faint, disabledActiveTrackColor = K.strokeStrong))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("10 IPs", color = K.faint, fontSize = 11.sp)
+            Text("300 IPs · Until stopped →", color = K.muted, fontSize = 11.sp)
+        }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         PrimaryButton(if (busy) "Scanning…" else "Start scan", {
             s.cdnStarting = true; s.cdnError = null
+            s.cdnExportMessage = null
+            val provider = s.cdnProvider
             scope.launch {
                 try {
-                    withContext(Dispatchers.IO) {
-                        Mobilebridge.startCDNScanForProvider(s.cdnProvider, budget.toLong(), minOf(10, budget).toLong())
+                    s.cdnStatus = withContext(Dispatchers.IO) {
+                        Mobilebridge.startCDNScanToFile(provider, budget, context.filesDir.canonicalPath)
+                        JSONObject(Mobilebridge.cdnScanStatus())
                     }
-                    status = JSONObject(Mobilebridge.cdnScanStatus())
+                    s.cdnStatusLoaded = true
+                    s.cdnStatusError = null
                 } catch (e: Exception) { s.cdnError = e.message ?: "Scan could not start" }
                 finally { s.cdnStarting = false }
             }
-        }, Modifier.weight(1f), busy = busy)
-        if (running) SecondaryButton("Cancel", { Mobilebridge.cancelCDNScan() }, tint = K.red)
+        }, Modifier.weight(1f), enabled = !controlsBusy, busy = busy)
+        if (running) SecondaryButton("Stop", {
+            scope.launch { withContext(Dispatchers.IO) { Mobilebridge.cancelCDNScan() } }
+        }, tint = K.red)
     }
-    val attempted = status.optInt("attempted")
-    val total = status.optInt("budget").coerceAtLeast(1)
-    val verified = status.optJSONArray("verified_http")
-    val found = verified?.length() ?: 0
+    val attempted = status.optLong("attempted")
+    val total = status.optLong("budget")
+    val unlimited = status.optBoolean("unlimited")
+    val found = status.optLong("total_verified")
+    val results = status.optJSONArray("results")?.let { array ->
+        (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    }.orEmpty()
     if (busy || attempted > 0) {
-        LinearProgressIndicator(progress = { (attempted.toFloat() / total).coerceIn(0f, 1f) },
-            modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape), color = K.mint, trackColor = K.stroke,
-            drawStopIndicator = {})
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Stat("Checked", "$attempted / $total", Modifier.weight(1f))
-            Stat("Verified", "$found", Modifier.weight(1f), if (found > 0) K.mint else K.text)
-            Stat("Time", "${status.optLong("elapsed_ms") / 1000}s", Modifier.weight(1f))
+        if (unlimited && busy) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
+                color = K.mint, trackColor = K.stroke)
+        } else if (!unlimited && total > 0) {
+            LinearProgressIndicator(progress = { (attempted.toFloat() / total).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape), color = K.mint, trackColor = K.stroke,
+                drawStopIndicator = {})
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Stat("Attempted", "$attempted", Modifier.weight(1f))
+            Stat("Provider HTTPS", "$found", Modifier.weight(1f), if (found > 0) K.mint else K.text)
+            Stat("Elapsed", formatDuration(status.optLong("elapsed_ms") / 1000), Modifier.weight(1f))
+        }
+        Text(if (unlimited) "Budget: Until stopped" else "Budget: $total IPs",
+            color = K.muted, fontSize = 12.sp)
     }
-    if (!busy && status.optBoolean("reached_goal")) Note("Stopped early: found ${status.optInt("goal")} verified edges.", Tone.Good)
-    if (status.optBoolean("canceled")) Note(if (running) "Canceling…" else "Canceled; partial results shown.", Tone.Warn)
-    if (verified != null && found > 0) {
-        val ips = (0 until found).map { verified.getString(it) }
-        @OptIn(ExperimentalLayoutApi::class)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            ips.forEach { ip ->
-                Text(ip, color = K.mint, fontSize = 12.sp, fontFamily = K.mono,
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(K.mint.copy(alpha = .1f))
-                        .clickable { onCopy(ip) }.padding(horizontal = 9.dp, vertical = 5.dp))
+    if (!busy && status.optBoolean("exhausted")) Note("Provider candidate inventory exhausted.")
+    if (status.optBoolean("canceled")) Note(if (running) "Stopping…" else "Stopped; completed checks are retained.", Tone.Warn)
+    SecondaryButton(if (s.cdnExportBusy) "Saving CSV…" else "Export all scan results (.csv)", {
+        s.cdnExportBusy = true; s.cdnError = null; s.cdnExportMessage = null
+        scope.launch {
+            try {
+                s.cdnExportPath = withContext(Dispatchers.IO) {
+                    privateScanCsv(context.filesDir, Mobilebridge.cdnScanExportPath()).path
+                }
+                exportCsv.launch("ktest-cdn-results.csv")
+            } catch (e: Exception) {
+                s.cdnExportBusy = false
+                s.cdnError = e.message ?: "No completed CSV is available"
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            SecondaryButton("Copy all", { onCopy(ips.joinToString("\n")) }, Modifier.weight(1f), icon = KIcons.Copy)
-            SecondaryButton("Fronting test", {
-                s.frontEdges = ips.take(12).joinToString(", ")
-                s.expanded = "front"
-            }, Modifier.weight(1f), icon = KIcons.Route)
+    }, Modifier.fillMaxWidth(), enabled = !busy && pollError == null && status.optString("export_path").isNotBlank(),
+        busy = s.cdnExportBusy, icon = KIcons.Download)
+    if (results.isNotEmpty()) {
+        FrontTargetInput(s, enabled = !s.frontBusy)
+        LoadFrontingPreset(s)
+        val preset = s.frontPreset.takeIf { s.frontPresetFor == s.frontUrl.trim() }
+        val provider = status.optString("provider")
+        val compatible = preset?.optBoolean("supported") == true && when (preset.optString("family")) {
+            "fastly" -> provider == "fastly"
+            "cloudflare", "google", "akamai" -> provider == preset.optString("family")
+            else -> false
         }
+        val candidates = results.filter {
+            it.optString("ip").isNotBlank() && (it.optBoolean("tls_verified") ||
+                it.optBoolean("http_verified") || it.optLong("tcp_ms") > 0 || it.optString("assessment") == "tcp_only")
+        }.sortedWith(compareByDescending<JSONObject> { it.optBoolean("http_verified") && it.optBoolean("tls_verified") }
+            .thenByDescending { it.optBoolean("tls_verified") }
+            .thenBy { it.optLong("tcp_ms", Long.MAX_VALUE) }
+            .thenBy { it.optLong("elapsed_ms", Long.MAX_VALUE) })
+        SecondaryButton("Use best for fronting test", {
+            s.frontEdges = candidates.map { it.optString("ip") }.distinct().take(12).joinToString(", ")
+            s.frontMode = "auto"
+            s.frontReport = null
+            s.frontError = null
+            s.expanded = "front"
+        }, Modifier.fillMaxWidth(), enabled = compatible && candidates.isNotEmpty() && !s.frontBusy, icon = KIcons.Route)
+        Text(when {
+            compatible -> "Selects up to 12 family-compatible edges from this preview, ranked by provider HTTPS, TLS and TCP connect time. Target proof is a separate test."
+            preset?.optString("family") == "twimg" -> "This target needs its own customer-specific Fastly edges. Enter those IPs in Fronting test."
+            else -> "Choose a target supported by this provider's family, or scan its provider first. X uses Cloudflare; YouTube uses Google."
+        },
+            color = K.muted, fontSize = 12.sp, lineHeight = 17.sp)
+        s.frontPresetError?.let { Note(it, Tone.Warn) }
+        Text("Result preview · ${minOf(24, results.size)} of ${results.size} returned results",
+            color = K.muted, fontSize = 12.sp)
+        results.take(24).forEach { result ->
+            val tls = result.optBoolean("tls_verified")
+            val http = result.optBoolean("http_verified")
+            val tcp = tls || http || result.optLong("tcp_ms") > 0 || result.optString("assessment") == "tcp_only"
+            val color = if (tls && http) K.mint else if (tcp) K.amber else K.red
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(K.bg).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(result.optString("ip"), color = color, fontFamily = K.mono, fontSize = 14.sp,
+                    modifier = Modifier.fillMaxWidth().clickable { onCopy(result.optString("ip")) })
+                Text(when {
+                    tls && http -> "Provider HTTPS verified · target proof not tested"
+                    tls -> "TLS only · provider HTTP not verified"
+                    tcp -> "TCP only · TLS not verified"
+                    else -> "Connection not verified"
+                }, color = color, fontSize = 12.sp)
+                Text("TCP connect: ${if (tcp) "${result.optLong("tcp_ms")} ms" else "not connected"} · " +
+                    "TLS: ${if (tls) "verified" else "not verified"} (${result.optLong("tls_ms")} ms)",
+                    color = K.muted, fontSize = 12.sp)
+                Text("HTTP: ${result.optInt("http_status").takeIf { it > 0 } ?: "no response"} · " +
+                    "Elapsed: ${result.optLong("elapsed_ms")} ms", color = K.muted, fontSize = 12.sp)
+                result.optString("error").takeIf { it.isNotBlank() }?.let { Text(it, color = K.amber, fontSize = 11.sp) }
+            }
+        }
+        Note("The preview is bounded. Provider HTTPS total and the CSV include results beyond this list. TCP connect measures a connection handshake, not ICMP ping.")
     }
-    (s.cdnError ?: status.optString("error").takeIf { it.isNotBlank() })?.let { Note(it, Tone.Danger) }
-    Note("Up to six checks run at once, for at most 90 seconds. A provider check does not prove arbitrary fronting, DNS availability or a working VPN.")
+    (s.cdnError ?: pollError ?: status.optString("error").takeIf { it.isNotBlank() })?.let { Note(it, Tone.Danger) }
+    s.cdnExportMessage?.let { Note(it, Tone.Good) }
+    Note("CDN scanning is available only while offline. Stop a running scan before Connect or Test routes. Finite budgets check the selected number of candidates; Until stopped continues until you stop it or the provider inventory is exhausted. A completed CSV can still be exported while connected. Provider HTTPS does not prove target fronting or VPN access.")
+}
+
+private fun privateScanCsv(filesDir: File, path: String): File {
+    require(path.isNotBlank() && File(path).isAbsolute) { "No completed private CSV is available" }
+    val root = filesDir.canonicalFile
+    val source = File(path).canonicalFile
+    require(source.path.startsWith(root.path + File.separator) && source.isFile && source.extension.equals("csv", true)) {
+        "Scan export must be a CSV inside KTest's private files directory"
+    }
+    return source
 }
 
 @Composable
@@ -279,20 +411,88 @@ private fun Stat(label: String, value: String, modifier: Modifier, color: androi
 }
 
 @Composable
+private fun FrontTargetInput(s: ToolsState, enabled: Boolean, showUrl: Boolean = true) {
+    Segmented(listOf("x" to "X", "youtube" to "YouTube", "custom" to "Custom URL"), s.frontTarget, {
+        s.frontTarget = it
+        when (it) {
+            "x" -> s.frontUrl = "https://x.com/"
+            "youtube" -> s.frontUrl = "https://www.youtube.com/"
+        }
+    }, enabled = enabled)
+    if (showUrl && s.frontTarget == "custom") {
+        KField(s.frontUrl, { s.frontUrl = it }, "Target HTTPS URL", enabled = enabled, keyboardType = KeyboardType.Uri)
+    }
+}
+
+@Composable
+private fun LoadFrontingPreset(s: ToolsState) {
+    val url = s.frontUrl.trim()
+    LaunchedEffect(url) {
+        if (s.frontPresetFor == url && s.frontPreset != null) return@LaunchedEffect
+        s.frontPresetError = null
+        s.frontPreset = null
+        delay(250)
+        try {
+            val preset = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.frontingPreset(url)) }
+            s.frontPreset = preset
+            s.frontPresetFor = url
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            s.frontPresetError = e.message ?: "Could not resolve target preset"
+        }
+    }
+}
+
+@Composable
+private fun ToolDetail(label: String, value: String, mono: Boolean = false) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(label, color = K.muted, fontSize = 12.sp)
+        SelectionContainer {
+            Text(value, modifier = Modifier.fillMaxWidth(), color = K.text, fontSize = 13.sp,
+                fontFamily = if (mono) K.mono else null, lineHeight = 18.sp)
+        }
+    }
+}
+
+@Composable
 private fun FrontingTool(s: ToolsState, scope: CoroutineScope) {
+    val privateDir = LocalContext.current.filesDir.canonicalPath
     val busy = s.frontBusy
-    KField(s.frontUrl, { s.frontUrl = it }, "HTTPS URL", enabled = !busy, keyboardType = KeyboardType.Uri)
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        KField(s.frontSni, { s.frontSni = it }, "TLS SNI", Modifier.weight(1f), enabled = !busy)
-        KField(s.frontHost, { s.frontHost = it }, "HTTP Host", Modifier.weight(1f), enabled = !busy)
+    val automatic = s.frontMode == "auto"
+    FrontTargetInput(s, enabled = !busy, showUrl = automatic)
+    Segmented(listOf("auto" to "Target preset", "manual" to "Manual SNI / Host"), s.frontMode,
+        { s.frontMode = it }, enabled = !busy)
+    LoadFrontingPreset(s)
+    val preset = s.frontPreset.takeIf { s.frontPresetFor == s.frontUrl.trim() }
+    if (automatic) {
+        if (preset != null) {
+            ToolDetail("Method", if (preset.optBoolean("uses_ech")) "Encrypted Client Hello (ECH)" else "Family fronting probe")
+            ToolDetail("Family", preset.optString("family").ifBlank { "Unsupported" })
+            ToolDetail(if (preset.optBoolean("uses_ech")) "Outer SNI · target name is encrypted" else "TLS SNI",
+                preset.optString("sni").ifBlank { "No SNI" }, mono = true)
+            ToolDetail("HTTP Host", preset.optString("http_host"), mono = true)
+            preset.optString("note").takeIf { it.isNotBlank() }?.let { Note(it) }
+            if (!preset.optBoolean("supported")) Note("No automatic family preset for this URL. Use manual mode for a controlled origin.", Tone.Warn)
+        } else if (s.frontPresetError == null) {
+            Note("Resolving the target's family and transport method…")
+        }
+        s.frontPresetError?.let { Note(it, Tone.Warn) }
+        Note("Automatic tests use the Go family's real transport, including ECH when required. Setting a plain SNI to cloudflare-ech.com does not negotiate ECH.")
+    } else {
+        KField(s.frontUrl, { s.frontUrl = it; s.frontTarget = "custom" }, "Manual HTTPS URL", enabled = !busy,
+            keyboardType = KeyboardType.Uri)
+        KField(s.frontSni, { s.frontSni = it }, "TLS SNI (blank uses URL hostname)", enabled = !busy)
+        KField(s.frontHost, { s.frontHost = it }, "HTTP Host (blank uses URL host)", enabled = !busy)
+        Note("Manual mode sends the SNI and Host you specify without ECH. Use a controlled origin and its proof response to verify routing.", Tone.Warn)
     }
     KField(s.frontEdges, { s.frontEdges = it }, "Edge IPs (comma or newline separated)", enabled = !busy,
-        singleLine = false, minLines = 2, mono = true, supporting = "1–12 numeric addresses from an authorized edge")
+        singleLine = false, minLines = 2, mono = true, supporting = "Comparison batch: 1–12 numeric IPs. This is separate from the CDN scan budget.")
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Rounds per edge", color = K.muted, fontSize = 13.sp)
         Segmented(listOf("1" to "1", "2" to "2", "3" to "3"), s.frontRounds, { s.frontRounds = it }, enabled = !busy)
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    if (!automatic) Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Require origin proof", color = K.text, fontSize = 14.sp)
             Text("Only count edges that reach your controlled origin", color = K.muted, fontSize = 12.sp)
@@ -303,46 +503,83 @@ private fun FrontingTool(s: ToolsState, scope: CoroutineScope) {
     }
     PrimaryButton(if (busy) "Testing edges…" else "Compare edges", {
         s.frontReport = null
+        s.frontRunMode = s.frontMode
+        s.frontRunPreset = preset
+        s.frontRunUrl = s.frontUrl.trim()
+        s.frontRunSni = s.frontSni.trim()
+        s.frontRunHost = s.frontHost.trim()
+        val url = s.frontRunUrl
+        val edges = s.frontEdges.trim()
+        val rounds = s.frontRounds.toLong()
+        val sni = s.frontRunSni
+        val host = s.frontRunHost
+        val proof = s.frontProof
         scope.runTool({ s.frontBusy = it }, { s.frontError = it }, "Fronting test failed", {
-            Mobilebridge.testFronts(s.frontUrl.trim(), s.frontSni.trim(), s.frontHost.trim(), s.frontEdges.trim(),
-                s.frontRounds.toLong(), s.frontProof)
+            if (automatic) Mobilebridge.testTargetFronting(privateDir, url, edges, rounds)
+            else Mobilebridge.testFronts(url, sni, host, edges, rounds, proof)
         }) { s.frontReport = it }
-    }, enabled = s.frontEdges.isNotBlank(), busy = busy)
+    }, enabled = s.frontEdges.isNotBlank() && s.frontUrl.isNotBlank() &&
+        (!automatic || preset?.optBoolean("supported") == true), busy = busy)
     s.frontError?.let { Note(it, Tone.Danger) }
     s.frontReport?.let { r ->
+        val autoResult = s.frontRunMode == "auto"
+        ToolDetail("Tested URL", r.optString("url").ifBlank { s.frontRunUrl }, mono = true)
+        ToolDetail("Method", r.optString("method").ifBlank {
+            if (!autoResult) "Manual TLS / HTTP Host probe"
+            else if (s.frontRunPreset?.optBoolean("uses_ech") == true) "Target family probe with ECH"
+            else "Target family fronting probe"
+        })
+        val reportedSni = r.optString("tls_name").ifBlank { r.optString("sni") }
+        ToolDetail(if (reportedSni.isBlank()) "Requested TLS / outer SNI" else "Reported TLS / outer SNI",
+            reportedSni.ifBlank {
+                if (autoResult) s.frontRunPreset?.optString("sni").orEmpty().ifBlank { "No SNI" }
+                else s.frontRunSni.ifBlank { "URL hostname" }
+            }, mono = true)
+        ToolDetail("HTTP Host", r.optString("http_host").ifBlank {
+            if (autoResult) s.frontRunPreset?.optString("http_host").orEmpty()
+            else s.frontRunHost.ifBlank { "URL host" }
+        }, mono = true)
         val candidates = r.optJSONArray("candidates")
         if (candidates != null) for (i in 0 until candidates.length()) {
             val c = candidates.optJSONObject(i) ?: continue
-            val attempts = c.optInt("attempts").coerceAtLeast(1)
+            val attempts = c.optInt("attempts")
             val assessment = c.optString("assessment")
-            val color = when (assessment) {
-                "origin_verified" -> K.mint; "http_2xx_unverified" -> K.cyan
-                "tls_only", "tcp_only" -> K.amber; else -> K.red
-            }
+            val verified = attempts > 0 && c.optInt("origin_verified") == attempts
+            val color = if (verified) K.mint else if (c.optInt("tcp_connected") > 0 ||
+                c.optInt("tls_verified") > 0 || c.optInt("http_2xx") > 0) K.amber else K.red
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(K.bg)
                 .border(1.dp, K.stroke, RoundedCornerShape(16.dp)).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(c.optString("ip"), color = K.text, fontFamily = K.mono, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                    Tag(assessment.replace('_', ' '), color)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(c.optString("ip"), color = K.text, fontFamily = K.mono, fontSize = 14.sp)
+                Text(if (verified) (if (autoResult) "Target proof verified" else "Controlled origin verified")
+                    else "${assessment.ifBlank { "No proof" }.replace('_', ' ')} · target proof unverified",
+                    color = color, fontSize = 12.sp)
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     for ((label, key) in listOf("TCP" to "tcp_connected", "TLS" to "tls_verified",
-                        "HTTP" to "http_2xx", "Origin" to "origin_verified")) {
+                        "HTTP 2xx" to "http_2xx", (if (autoResult) "Target proof" else "Origin proof") to "origin_verified")) {
                         Column {
                             Text(label, color = K.faint, fontSize = 10.sp)
                             Text("${c.optInt(key)}/$attempts", color = if (c.optInt(key) > 0) K.text else K.faint,
                                 fontSize = 13.sp, fontFamily = K.mono)
                         }
                     }
-                    Spacer(Modifier.weight(1f))
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("Median", color = K.faint, fontSize = 10.sp)
+                    Column {
+                        Text("Median elapsed", color = K.faint, fontSize = 10.sp)
                         Text("${c.optLong("median_elapsed_ms")} ms", color = K.text, fontSize = 13.sp, fontFamily = K.mono)
                     }
                 }
+                c.optInt("last_http_status").takeIf { it > 0 }?.let {
+                    Text("Last HTTP status: $it", color = K.muted, fontSize = 12.sp)
+                }
+                for ((label, key) in listOf("Method" to "method", "SNI" to "sni", "HTTP Host" to "http_host", "Evidence" to "evidence")) {
+                    c.optString(key).takeIf { it.isNotBlank() }?.let { ToolDetail(label, it) }
+                }
+                Text(if (verified) "Explicit ${if (autoResult) "target" else "origin"} proof passed in every round."
+                    else "A response status, including HTTP 200, does not verify arbitrary fronting.",
+                    color = if (verified) K.mint else K.muted, fontSize = 12.sp)
                 c.optString("last_error").takeIf { it.isNotBlank() }?.let {
-                    Text(it, color = K.faint, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(it, color = K.amber, fontSize = 11.sp)
                 }
             }
         }

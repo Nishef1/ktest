@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.os.SystemClock
@@ -44,6 +45,16 @@ class ProxyService : Service() {
         @Volatile var lastError: String? = null
         /** SystemClock.elapsedRealtime() when the current session became active; 0 otherwise. */
         @Volatile var connectedAt: Long = 0
+
+        /** Shared by normal startup and the offline test; never changes Android trust. */
+        internal fun checkedFrontingOptIn(context: Context, privateDir: String): Boolean {
+            val enabled = context.getSharedPreferences("ktest_android", Context.MODE_PRIVATE)
+                .getBoolean("fronting_opt_in", false)
+            if (enabled && LocalCaTrust.inspect(privateDir).state != "installed_user") {
+                error("Fronting is enabled but the exact KTest CA is not installed. Check the CA in Settings or disable fronting.")
+            }
+            return enabled
+        }
     }
 
     private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -84,21 +95,17 @@ class ProxyService : Service() {
                                         applicationInfo.nativeLibraryDir,
                                         File(filesDir, "aether").absolutePath)
                                 } else if (mode == "balanced" || mode == "fast") {
-                                    val enabled = getSharedPreferences("ktest_android", MODE_PRIVATE)
-                                        .getBoolean("fronting_opt_in", false)
+                                    val privateDir = filesDir.canonicalPath
+                                    val enabled = checkedFrontingOptIn(this@ProxyService, privateDir)
                                     if (enabled) {
                                         // The user must explicitly opt in, and the exact CA must
                                         // still be in Android's user store at *each* session start.
                                         // App-specific pinning can still prevent this takeover.
-                                        val trust = LocalCaTrust.inspect(filesDir.absolutePath)
-                                        if (trust.state != "installed_user") {
-                                            error("Fronting is enabled but the exact KTest CA is no longer installed. Check the CA in Settings or disable fronting.")
-                                        }
                                         Mobilebridge.startAndroidProxyWithFronting(mode, upstream,
-                                            applicationInfo.nativeLibraryDir, filesDir.absolutePath)
+                                            applicationInfo.nativeLibraryDir, privateDir)
                                     } else {
                                         Mobilebridge.startAndroidProxyWithXray(mode, upstream,
-                                            applicationInfo.nativeLibraryDir, filesDir.absolutePath)
+                                            applicationInfo.nativeLibraryDir, privateDir)
                                     }
                                 } else {
                                     Mobilebridge.startProxyWithUpstream(mode, upstream)

@@ -41,6 +41,9 @@ func (p *Proxy) verifyExit(ctx context.Context, u *upstreamState) error {
 	if time.Now().UnixNano() < u.verifiedUntil.Load() {
 		return nil
 	}
+	if p.cfg.Frozen != nil {
+		return fmt.Errorf("foreign exit verification expired; disconnect and run an explicit test before reusing this exit")
+	}
 	if time.Now().Before(u.retryAfter) {
 		return u.verifyErr
 	}

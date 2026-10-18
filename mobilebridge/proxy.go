@@ -13,6 +13,7 @@ import (
 	"github.com/Nishef1/ktest/internal/connectionpolicy"
 	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/front"
+	"github.com/Nishef1/ktest/internal/routeplan"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -32,6 +33,7 @@ type proxySession struct {
 	localCores   *localCoreSet
 	xrayError    string
 	fronter      *front.Fronter
+	routeProfile *routeplan.Profile
 }
 
 type proxyDiagnostics struct {
@@ -41,26 +43,28 @@ type proxyDiagnostics struct {
 }
 
 type proxyReport struct {
-	Running       bool   `json:"running"`
-	Mode          string `json:"mode,omitempty"`
-	Socks         string `json:"socks,omitempty"`
-	HTTP          string `json:"http,omitempty"`
-	Coverage      string `json:"coverage"`
-	Detail        string `json:"detail"`
-	Upstream      string `json:"upstream,omitempty"`
-	ExitLocation  string `json:"exit_location,omitempty"`
-	Phase         string `json:"phase"`
-	Error         string `json:"error,omitempty"`
-	DNSFailures   int    `json:"dns_failures"`
-	DNSError      string `json:"dns_error,omitempty"`
-	Native        bool   `json:"native"`
-	Method        string `json:"method,omitempty"`
-	Fronting      bool   `json:"fronting"`
-	FrontAccepted int    `json:"front_accepted,omitempty"`
-	FrontRefused  int    `json:"front_refused,omitempty"`
-	FrontDisabled string `json:"front_disabled,omitempty"`
-	XrayReady     bool   `json:"xray_ready"`
-	XrayError     string `json:"xray_error,omitempty"`
+	Running         bool   `json:"running"`
+	Mode            string `json:"mode,omitempty"`
+	Socks           string `json:"socks,omitempty"`
+	HTTP            string `json:"http,omitempty"`
+	Coverage        string `json:"coverage"`
+	Detail          string `json:"detail"`
+	Upstream        string `json:"upstream,omitempty"`
+	ExitLocation    string `json:"exit_location,omitempty"`
+	Phase           string `json:"phase"`
+	Error           string `json:"error,omitempty"`
+	DNSFailures     int    `json:"dns_failures"`
+	DNSError        string `json:"dns_error,omitempty"`
+	Native          bool   `json:"native"`
+	Method          string `json:"method,omitempty"`
+	Fronting        bool   `json:"fronting"`
+	FrontAccepted   int    `json:"front_accepted,omitempty"`
+	FrontRefused    int    `json:"front_refused,omitempty"`
+	FrontDisabled   string `json:"front_disabled,omitempty"`
+	XrayReady       bool   `json:"xray_ready"`
+	XrayError       string `json:"xray_error,omitempty"`
+	Frozen          bool   `json:"frozen"`
+	SelectedDefault string `json:"selected_default,omitempty"`
 }
 
 type proxyStartup struct {
@@ -112,6 +116,9 @@ func currentReportLocked() proxyReport {
 			select {
 			case <-c.done:
 				report.XrayError = "Xray local core exited; other strategies remain available"
+				if activeProxy.routeProfile != nil {
+					report.XrayError = "Selected Xray core exited; routes remain fixed. Disconnect and run Test manually."
+				}
 			default:
 				report.XrayReady = true
 			}
@@ -121,6 +128,10 @@ func currentReportLocked() proxyReport {
 		report.Fronting = true
 		report.FrontAccepted, report.FrontRefused = activeProxy.fronter.Stats()
 		report.FrontDisabled = activeProxy.fronter.Disabled()
+	}
+	if activeProxy.routeProfile != nil {
+		report.Frozen = true
+		report.SelectedDefault = activeProxy.routeProfile.Default
 	}
 	return report
 }
@@ -164,10 +175,30 @@ func startProxyWithFronting(mode, upstream string, native *nativeOptions, localD
 // localStateDir is explicitly the Android filesDir, not the APK native
 // directory. Xray writes only temporary non-secret config there.
 func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, localDir, frontDir, localStateDir string) (report string, startErr error) {
+	return startProxyConfigured(context.Background(), mode, upstream, native, localDir, frontDir, localStateDir, false)
+}
+
+func startProxyConfigured(parent context.Context, mode, upstream string, native *nativeOptions, localDir, frontDir, localStateDir string, testOnly bool) (report string, startErr error) {
 	// Long upstream validation must never hold proxyMu: Android status polling
 	// calls ProxyStatus on the UI thread. Serialize only start calls here.
 	proxyStartMu.Lock()
 	defer proxyStartMu.Unlock()
+	if localStateDir != "" && (mode == "balanced" || mode == "fast") {
+		scanMu.Lock()
+		scanning := scanState.Running
+		scanMu.Unlock()
+		if scanning {
+			return "", errors.New("stop the CDN scan before testing or connecting")
+		}
+	}
+	if !testOnly {
+		routeTestMu.Lock()
+		manualTest := routeTestState.Running && routeTestState.Manual
+		routeTestMu.Unlock()
+		if manualTest {
+			return "", errors.New("finish or cancel the manual route test before connecting")
+		}
+	}
 	proxyMu.Lock()
 	if activeProxy != nil {
 		proxyMu.Unlock()
@@ -181,7 +212,11 @@ func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, loc
 			budget = 7 * time.Minute
 		}
 	}
-	startContext, startCancel := context.WithTimeout(context.Background(), budget)
+	startContext, startCancel := context.WithTimeout(parent, budget)
+	if localStateDir != "" && (mode == "balanced" || mode == "fast") {
+		startCancel()
+		startContext, startCancel = context.WithCancel(parent)
+	}
 	startup := &proxyStartup{mode: mode, phase: "preparing", cancel: startCancel}
 	pendingProxy, proxyFailure = startup, ""
 	proxyMu.Unlock()
@@ -240,7 +275,7 @@ func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, loc
 	var xrayError string
 	keepLocal := false
 	if localDir != "" {
-		localCores, err = launchAndroidLocalCores(startContext, localDir)
+		localCores, err = launchAndroidLocalCores(startContext, localDir, localStateDir != "")
 		if err != nil {
 			return "", err
 		}
@@ -305,6 +340,12 @@ func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, loc
 		return "", err
 	}
 	config.ExchangeDNS = exchange
+	keepDNS := false
+	defer func() {
+		if !keepDNS {
+			closeDNS()
+		}
+	}()
 	var fronter *front.Fronter
 	if frontDir != "" {
 		if mode != "balanced" && mode != "fast" {
@@ -317,19 +358,56 @@ func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, loc
 		// The same desktop domain-family matcher, hedged front scoring,
 		// TLS upstream verification and reject-after-app-CA-failure are reused.
 		// A public HTTPS status is not proof of reachability for other services.
-		fronter = front.New(front.Config{CA: ca, Families: front.DefaultFamilies(), Resolve: config.Resolve})
-		config.Upstreams = append(config.Upstreams, fronter.Upstream())
-	}
-	keepDNS := false
-	defer func() {
-		if !keepDNS {
-			closeDNS()
+		preferred := map[string][]string{}
+		if localStateDir != "" {
+			for _, provider := range []string{"cloudflare", "google", "fastly"} {
+				preferred[provider] = loadVerifiedCDNEdges(localStateDir, provider)
+			}
 		}
-	}()
+		fronter = front.New(front.Config{CA: ca, Families: front.DefaultFamilies(), Resolve: config.Resolve, PreferredEdges: preferred})
+		if localStateDir != "" {
+			targets, targetErr := loadRouteTargets(localStateDir)
+			if targetErr != nil {
+				return "", targetErr
+			}
+			for _, candidate := range fronter.Upstreams() {
+				u := candidate
+				originalMatch := u.Match
+				u.Match = func(host string) bool {
+					return routeFrontingAllowed(targets, host) && (originalMatch == nil || originalMatch(host))
+				}
+				config.Upstreams = append(config.Upstreams, u)
+			}
+		} else {
+			config.Upstreams = append(config.Upstreams, fronter.Upstream())
+		}
+	}
 	if upstream != "" {
 		config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {
 			_, err := verifyModeUpstream(ctx, mode, upstream)
 			return err
+		}
+	}
+	var routeProfile *routeplan.Profile
+	if localStateDir != "" && (mode == "balanced" || mode == "fast") {
+		proxyMu.Lock()
+		if pendingProxy == startup {
+			startup.phase = "calibrating"
+		}
+		proxyMu.Unlock()
+		routeProfile, err = prepareFrozenRoutes(startContext, &config, localStateDir, testOnly)
+		if err != nil {
+			return "", err
+		}
+		if testOnly {
+			return "{}", nil
+		}
+		if localCores != nil {
+			needed := map[string]bool{config.Frozen.Default: true, config.Frozen.Protected: true}
+			for _, method := range config.Frozen.Targets {
+				needed[method] = true
+			}
+			localCores.retain(needed)
 		}
 	}
 	proxy, err := smartproxy.New(config)
@@ -364,7 +442,7 @@ func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, loc
 		return "", fmt.Errorf("HTTP listener: %w", err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, localCores: localCores, fronter: fronter, xrayError: xrayError}
+	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, localCores: localCores, fronter: fronter, xrayError: xrayError, routeProfile: routeProfile}
 	activeProxy = session
 	keepDNS = true
 	keepManaged = true

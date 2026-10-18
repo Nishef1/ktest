@@ -62,7 +62,7 @@ func StartAndroidProxyWithFronting(mode, upstream, nativeLibraryDir, privateFile
 	return startProxyWithNativeCores(mode, upstream, nil, nativeLibraryDir, privateFilesDir, privateFilesDir)
 }
 
-func launchAndroidLocalCores(ctx context.Context, nativeDir string) (*localCoreSet, error) {
+func launchAndroidLocalCores(ctx context.Context, nativeDir string, frozen bool) (*localCoreSet, error) {
 	bin, err := byedpi.AndroidBinary(nativeDir, runtime.GOARCH)
 	if err != nil {
 		return nil, err
@@ -71,7 +71,38 @@ func launchAndroidLocalCores(ctx context.Context, nativeDir string) (*localCoreS
 	if err != nil {
 		return nil, err
 	}
+	if frozen {
+		strategies = fixedAndroidStrategies(strategies)
+	}
 	return startLocalCores(ctx, bin, strategies)
+}
+
+// A frozen strategy must not hide a second learner inside its child process.
+// The catalog's adaptive entries become their explicit desync technique; the
+// untouched plain method is already measured separately by the Go core.
+func fixedAndroidStrategies(strategies []byedpi.Strategy) []byedpi.Strategy {
+	out := make([]byedpi.Strategy, 0, len(strategies))
+	for _, strategy := range strategies {
+		fixed := byedpi.Strategy{Label: strategy.Label}
+		adaptive := false
+		for i := 0; i < len(strategy.Args); i++ {
+			arg := strategy.Args[i]
+			name, _, attached := strings.Cut(arg, "=")
+			if name == "--auto" || name == "--auto-mode" {
+				adaptive = true
+				if !attached && i+1 < len(strategy.Args) {
+					i++
+				}
+				continue
+			}
+			fixed.Args = append(fixed.Args, arg)
+		}
+		if adaptive {
+			fixed.Label = "fixed: " + strings.Join(fixed.Args, " ")
+		}
+		out = append(out, fixed)
+	}
+	return out
 }
 
 func startLocalCores(ctx context.Context, bin string, strategies []byedpi.Strategy) (set *localCoreSet, err error) {
@@ -140,4 +171,19 @@ func (set *localCoreSet) stop() {
 	for _, core := range set.cores {
 		<-core.done
 	}
+}
+
+// Once preconnection evaluation ends, only selected native methods remain
+// running. Dead selected methods are not silently replaced mid-session.
+func (set *localCoreSet) retain(needed map[string]bool) {
+	var kept []*nativeCore
+	for _, core := range set.cores {
+		if needed[core.method] {
+			kept = append(kept, core)
+			continue
+		}
+		core.cancel()
+		<-core.done
+	}
+	set.cores = kept
 }

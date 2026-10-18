@@ -7,7 +7,7 @@ func TestToolsRejectInvalidInputBeforeNetworkWork(t *testing.T) {
 		provider     string
 		budget, goal int
 	}{
-		{"unknown", 30, 10}, {"cloudflare", 301, 10}, {"cloudflare", 30, 0}, {"cloudflare", 1, 10},
+		{"unknown", 30, 10}, {"cloudflare", -1, 10}, {"cloudflare", 30, -1}, {"cloudflare", 1, 10},
 	} {
 		if err := StartCDNScanForProvider(tc.provider, tc.budget, tc.goal); err == nil {
 			t.Fatalf("invalid scan accepted: %+v", tc)

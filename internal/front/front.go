@@ -22,6 +22,7 @@
 package front
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -29,6 +30,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +50,9 @@ type Config struct {
 	// probing only.
 	CA       *CA
 	Families []Family
+	// PreferredEdges prioritizes measured numeric public edges by family. A
+	// provider control response is never evidence that a target works there.
+	PreferredEdges map[string][]string
 	// Resolve is the trusted resolver used for the address of a site or of a
 	// front's Dial name.
 	Resolve smartproxy.Resolver
@@ -88,6 +95,15 @@ func New(cfg Config) *Fronter {
 	if cfg.Families == nil {
 		cfg.Families = DefaultFamilies()
 	}
+	preferred := make(map[string][]string, len(cfg.PreferredEdges))
+	for family, ips := range cfg.PreferredEdges {
+		for _, s := range ips {
+			if ip := net.ParseIP(s); IsPublicEdgeIP(s) {
+				preferred[family] = append(preferred[family], ip.String())
+			}
+		}
+	}
+	cfg.PreferredEdges = preferred
 	if cfg.dial == nil {
 		cfg.dial = func(ctx context.Context, addr string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
@@ -110,6 +126,71 @@ func (f *Fronter) Upstream() smartproxy.Upstream {
 		Match:    f.handles,
 		Takeover: f.prepare,
 	}
+}
+
+// MethodName identifies one frozen family/front strategy, including its wire
+// SNI or real ECH public name. It does not depend on learned scores or edges.
+func MethodName(family string, fr Front) string {
+	sni, ech := fr.SNI, "off"
+	if sni == "" {
+		sni = "none"
+	}
+	if fr.ECH != "" {
+		sni, ech = fr.ECH, fr.ECH
+	}
+	dial := fr.Dial
+	if dial == "" {
+		dial = "target"
+	}
+	return "Front: " + family + "; SNI=" + sni + "; ECH=" + ech + "; dial=" + dial
+}
+
+// Upstreams is the Android calibration surface: one deterministic candidate per
+// family/front strategy. Takeover prepares exactly that strategy, never a race
+// over different fronts. Windows consumers retain Upstream's learned race.
+func (f *Fronter) Upstreams() []smartproxy.Upstream {
+	var out []smartproxy.Upstream
+	seen := map[string]bool{}
+	protected, _ := smartproxy.NewAIDomainRules("")
+	for _, family := range f.cfg.Families {
+		fam := family
+		for _, front := range fam.Fronts {
+			fr := front
+			method := MethodName(fam.Name, fr)
+			if seen[method] {
+				continue
+			}
+			seen[method] = true
+			allowed := func(host string) bool {
+				return f.cfg.CA != nil && f.cfg.CA.ValidAt(time.Now()) && f.cfg.CA.Permits(host) && fam.Match(host) &&
+					!protected.Match(host) && !(fr.Dial != "" && fam.noStandIn(host)) && f.Disabled() == ""
+			}
+			out = append(out, smartproxy.Upstream{
+				Name: method, Rank: 1, Match: allowed,
+				Takeover: func(ctx context.Context, host, port string, flight []byte) (smartproxy.Session, error) {
+					if !allowed(host) || port != "443" {
+						return nil, errors.New("target is outside this front strategy or CA permissions")
+					}
+					sni, offered, ok := smartproxy.ParseClientHello(flight)
+					name := normalize(sni)
+					if !ok || name == "" || name != normalize(host) || !allowed(name) {
+						return nil, errors.New("ClientHello does not match the permitted fronting target")
+					}
+					protos, err := chooseALPN(&fam, name, offered)
+					if err != nil {
+						return nil, err
+					}
+					conn, err := f.try(ctx, &fam, fr, name, protos)
+					if err != nil {
+						return nil, err
+					}
+					return &session{f: f, up: conn, name: name, protos: protos, fam: &fam, fr: fr}, nil
+				},
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 func (f *Fronter) handles(host string) bool {
@@ -385,6 +466,18 @@ func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, p
 	if dialName == "" {
 		dialName = name
 	}
+	if preferred := f.cfg.PreferredEdges[fam.Name]; len(preferred) > 0 {
+		// Measured edges must get their attempt before a blocked resolver can
+		// consume the budget. A failed target TLS handshake can still fall back
+		// to the ordinary resolver/hints without changing front strategy.
+		conn, err := f.tryOnIPs(ctx, fam, fr, name, protos, preferred, nil)
+		if err == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+	}
 	ips, err := f.addrs(ctx, dialName)
 	if err != nil && fr.Dial == "" && len(fam.Hints) > 0 {
 		f.logf("front: no trusted address for %s (%v); using the family's edge hints", dialName, err)
@@ -393,7 +486,19 @@ func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, p
 	if err != nil {
 		return nil, fmt.Errorf("address of %s: %w", dialName, err)
 	}
-	connect := func() (net.Conn, error) { return f.dialAny(ctx, ips) }
+	return f.tryOnIPs(ctx, fam, fr, name, protos, ips, nil)
+}
+
+// tryOnIPs shares the verified TLS/ECH protocol with ordinary fronting. The
+// optional evidence belongs to one attempt, including ECH retry connections.
+func (f *Fronter) tryOnIPs(ctx context.Context, fam *Family, fr Front, name string, protos, ips []string, tcpConnected *bool) (net.Conn, error) {
+	connect := func() (net.Conn, error) {
+		c, err := f.dialAny(ctx, ips)
+		if err == nil && tcpConnected != nil {
+			*tcpConnected = true
+		}
+		return c, err
+	}
 	if fr.ECH != "" {
 		return f.tryECH(ctx, fr, name, protos, connect)
 	}
@@ -649,12 +754,113 @@ func relay(a, b io.ReadWriteCloser) (up, down int64) {
 // ProbeResult is one front tested against one family without any certificate
 // on the application's side.
 type ProbeResult struct {
-	Family string
-	Site   string
-	Front  Front
-	Status int
-	Took   time.Duration
-	Err    error
+	Family       string
+	Site         string
+	Front        Front
+	Status       int
+	Took         time.Duration
+	Err          error
+	TCPConnected bool
+	TLSVerified  bool
+	BodyBytes    int64
+	BodyComplete bool
+}
+
+// IsPublicEdgeIP validates explicit comparison/preferred edges without DNS.
+// Also exclude non-public special-purpose ranges not covered by Bogus.
+func IsPublicEdgeIP(raw string) bool {
+	ip, err := netip.ParseAddr(raw)
+	if err != nil || ip.Zone() != "" {
+		return false
+	}
+	ip = ip.Unmap()
+	if !ip.IsGlobalUnicast() || smartproxy.Bogus(net.ParseIP(ip.String())) {
+		return false
+	}
+	for _, reserved := range []string{"192.0.0.0/24", "192.88.99.0/24", "198.18.0.0/15", "2001::/23", "2001:db8::/32", "3fff::/20", "64:ff9b::/96", "64:ff9b:1::/48", "100::/64"} {
+		if netip.MustParsePrefix(reserved).Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+// ProbeAtEdge requests the exact target path through each applicable strategy
+// at one numeric public edge. It performs no MITM and needs no local CA. TLS,
+// HTTP status and body transfer are separate evidence; none proves origin
+// identity when fronting changes the verification name. No redirects follow.
+func (f *Fronter) ProbeAtEdge(ctx context.Context, site, path, edgeIP string) []ProbeResult {
+	var routes []route
+	for _, fam := range LookupAll(f.cfg.Families, site) {
+		for _, fr := range fam.Fronts {
+			if fr.Dial != "" && fam.noStandIn(site) {
+				continue
+			}
+			routes = append(routes, route{fam, fr})
+		}
+	}
+	out := make([]ProbeResult, len(routes))
+	ip := net.ParseIP(edgeIP)
+	u, parseErr := url.ParseRequestURI(path)
+	validPath := parseErr == nil && strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//") && u.Host == "" && u.Scheme == "" && !strings.ContainsAny(path, "\r\n")
+	var wg sync.WaitGroup
+	for i, rt := range routes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			began := time.Now()
+			r := ProbeResult{Family: rt.fam.Name, Site: site, Front: rt.fr}
+			defer func() { r.Took = time.Since(began); out[i] = r }()
+			if !IsPublicEdgeIP(edgeIP) || !validPath || strings.ContainsAny(site, "\r\n /:@") {
+				r.Err = errors.New("probe requires a numeric public edge, hostname and origin-form HTTPS path")
+				return
+			}
+			cctx, cancel := context.WithTimeout(ctx, f.cfg.DialTimeout)
+			defer cancel()
+			conn, err := f.tryOnIPs(cctx, rt.fam, rt.fr, site, []string{"http/1.1"}, []string{ip.String()}, &r.TCPConnected)
+			if err != nil {
+				r.Err = err
+				return
+			}
+			r.TLSVerified = true
+			defer conn.Close()
+			stop := context.AfterFunc(cctx, func() { _ = conn.Close() })
+			defer stop()
+			if deadline, ok := cctx.Deadline(); ok {
+				_ = conn.SetDeadline(deadline)
+			}
+			req, err := http.NewRequestWithContext(cctx, http.MethodGet, "https://"+site+path, nil)
+			if err != nil {
+				r.Err = err
+				return
+			}
+			req.Close = true
+			req.Header.Set("User-Agent", "KTest-Connectivity-Check/1.0")
+			req.Header.Set("Cache-Control", "no-store")
+			if err = req.Write(conn); err != nil {
+				r.Err = err
+				return
+			}
+			// Cap the whole response as well as the body. This prevents an edge
+			// sending unbounded headers while preserving normal chunk framing.
+			bounded := &io.LimitedReader{R: conn, N: 96 << 10}
+			response, err := http.ReadResponse(bufio.NewReader(bounded), req)
+			if err != nil {
+				r.Err = err
+				return
+			}
+			defer response.Body.Close()
+			r.Status = response.StatusCode
+			r.BodyBytes, err = io.Copy(io.Discard, io.LimitReader(response.Body, (64<<10)+1))
+			r.BodyComplete = err == nil && r.BodyBytes <= 64<<10 && bounded.N > 0
+			if err == nil && !r.BodyComplete {
+				err = errors.New("response exceeds the diagnostic body/header limit")
+			}
+			r.Err = err
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // Probe fetches path from site through every front of its family, one request

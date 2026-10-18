@@ -76,18 +76,25 @@ internal fun ConnectScreen(
     upstream: String, onUpstream: (String) -> Unit,
     nativeMethod: String, onNativeMethod: (String) -> Unit,
     error: String?, onDismissError: () -> Unit,
+    routePlan: RoutePlanState, connectBlocked: Boolean, scanBusy: Boolean, canTestRoutes: Boolean,
+    onTestRoutes: () -> Unit, onCancelRouteTest: () -> Unit,
     routeReport: JSONObject?, checkingRoute: Boolean, onCheckRoute: () -> Unit,
     coverage: String, vpnActive: Boolean, onCoverage: (String) -> Unit,
     onMode: (String) -> Unit, onPower: () -> Unit, onCopy: (String) -> Unit
 ) {
-    val locked = state == LinkState.Active || state == LinkState.Connecting
+    val locked = state == LinkState.Active || state == LinkState.Connecting || routePlan.busy || connectBlocked
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Hero(activeMode, state, status, upstream, coverage, vpnActive, onPower)
+        Hero(activeMode, state, status, upstream, coverage, vpnActive, connectBlocked, routePlan.manualBusy, onPower)
         AnimatedVisibility(error != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
             Banner(error.orEmpty(), Tone.Danger, onDismissError)
         }
+        if (scanBusy) Note("A CDN scan is running. Stop it in Tools before connecting or testing routes.", Tone.Warn)
         if (state == LinkState.Active) {
             EndpointsPanel(status, routeReport, checkingRoute, onCheckRoute, onCopy)
+        }
+        if (activeMode.id == "balanced" || activeMode.id == "fast") {
+            RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
+                status.optBoolean("frozen"), canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
@@ -104,18 +111,18 @@ internal fun ConnectScreen(
 @Composable
 private fun Hero(
     mode: ConnectionMode, state: LinkState, status: JSONObject, upstream: String,
-    coverage: String, vpnActive: Boolean, onPower: () -> Unit
+    coverage: String, vpnActive: Boolean, connectBlocked: Boolean, manualTesting: Boolean, onPower: () -> Unit
 ) {
     val phase = status.optString("phase")
     Column(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        PowerOrb(state, onPower)
+        PowerOrb(state, connectBlocked, onPower)
         Spacer(Modifier.height(14.dp))
         Text(
             when (state) {
                 LinkState.Active -> "Connected"
                 LinkState.Connecting -> "Connecting…"
                 LinkState.Unavailable -> "Not available yet"
-                LinkState.Idle -> "Tap to connect"
+                LinkState.Idle -> if (manualTesting) "Testing routes…" else "Tap to connect"
             },
             color = K.text, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp
         )
@@ -126,6 +133,7 @@ private fun Hero(
                 when (phase) {
                     "starting_core" -> "Starting ${mode.title}…"
                     "verifying_upstream" -> "Waiting for a tunnel and a verified exit"
+                    "calibrating" -> "Calibrating routes before connection"
                     else -> "Preparing routes and listeners"
                 }, color = K.muted, fontSize = 13.sp, textAlign = TextAlign.Center
             )
@@ -133,7 +141,8 @@ private fun Hero(
                 color = K.amber, fontSize = 13.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 24.dp))
             LinkState.Idle -> Text(
-                "${mode.title} · " + if (coverage == "vpn") "VPN for all apps" else "proxy apps only",
+                if (manualTesting) "Offline manual test · no VPN started"
+                else "${mode.title} · " + if (coverage == "vpn") "VPN for all apps" else "proxy apps only",
                 color = K.muted, fontSize = 13.sp, textAlign = TextAlign.Center
             )
         }
@@ -143,6 +152,7 @@ private fun Hero(
                 add("preparing" to "Prepare")
                 if (native) add("starting_core" to "Start core")
                 if (native || upstream.isNotBlank()) add("verifying_upstream" to "Verify exit")
+                if (mode.id == "balanced" || mode.id == "fast") add("calibrating" to "Calibrate")
             }
             if (steps.size > 1) {
                 Spacer(Modifier.height(16.dp))
@@ -207,12 +217,17 @@ private fun PhaseSteps(steps: List<Pair<String, String>>, phase: String) {
 }
 
 @Composable
-private fun PowerOrb(state: LinkState, onClick: () -> Unit) {
+private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> Unit) {
     val active = state == LinkState.Active
     val busy = state == LinkState.Connecting
-    val enabled = state != LinkState.Unavailable
+    val enabled = active || busy || (state != LinkState.Unavailable && !connectBlocked)
     val iconColor by animateColorAsState(
-        when (state) { LinkState.Active -> K.mint; LinkState.Connecting -> K.cyan; LinkState.Idle -> K.text; else -> K.faint },
+        when (state) {
+            LinkState.Active -> K.mint
+            LinkState.Connecting -> K.cyan
+            LinkState.Idle -> if (connectBlocked) K.faint else K.text
+            else -> K.faint
+        },
         tween(400), label = "orbIcon"
     )
     // Do not keep an infinite animation alive while disconnected.
@@ -225,7 +240,8 @@ private fun PowerOrb(state: LinkState, onClick: () -> Unit) {
         Modifier.size(228.dp)
             .semantics { contentDescription = when (state) {
                 LinkState.Active -> "Disconnect"; LinkState.Connecting -> "Cancel connection"
-                LinkState.Unavailable -> "Mode unavailable"; LinkState.Idle -> "Connect"
+                LinkState.Unavailable -> "Mode unavailable"
+                LinkState.Idle -> if (connectBlocked) "Connect unavailable while route work is pending" else "Connect"
             } }
             .clip(CircleShape)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
@@ -453,9 +469,14 @@ private fun EndpointsPanel(
         if (status.optString("dns_error").isNotBlank()) {
             Note("Last DNS transport failure (${status.optInt("dns_failures")}): ${status.optString("dns_error")}", Tone.Warn)
         }
-        SecondaryButton(if (checking) "Checking HTTPS routes…" else "Verify real HTTPS traffic", onCheckRoute,
-            Modifier.fillMaxWidth(), busy = checking, icon = KIcons.Check)
-        if (routeReport != null) {
+        val frozen = status.optBoolean("frozen")
+        if (frozen) {
+            Note("Routes are fixed for this session. Disconnect and use Test routes to measure them again.")
+        } else {
+            SecondaryButton(if (checking) "Checking HTTPS routes…" else "Verify real HTTPS traffic", onCheckRoute,
+                Modifier.fillMaxWidth(), busy = checking, icon = KIcons.Check)
+        }
+        if (!frozen && routeReport != null) {
             val ok = routeReport.optInt("verified")
             val attempted = routeReport.optInt("attempted")
             Row(verticalAlignment = Alignment.CenterVertically) {

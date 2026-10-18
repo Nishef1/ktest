@@ -6,12 +6,34 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/byedpi"
 	"github.com/Nishef1/ktest/internal/coreprocess"
 )
+
+func TestFrozenAndroidStrategiesCannotAutoSwitchInsideByeDPI(t *testing.T) {
+	strategies, err := byedpi.ParseStrategies(strings.NewReader(byedpi.DefaultStrategies))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := fixedAndroidStrategies(strategies)
+	if len(fixed) != len(strategies) {
+		t.Fatal("a strategy disappeared instead of becoming a fixed candidate")
+	}
+	for _, strategy := range fixed {
+		for _, arg := range strategy.Args {
+			if strings.HasPrefix(arg, "--auto") {
+				t.Fatalf("selected native method could still change techniques live: %+v", strategy)
+			}
+		}
+	}
+	if !strings.Contains(fixed[0].Label, "fixed") || fixed[1].Label != strategies[1].Label {
+		t.Fatal("fixed adaptive variants were not distinguished from unchanged methods")
+	}
+}
 
 // A real child listener exercises process ownership without downloading a core.
 func init() {

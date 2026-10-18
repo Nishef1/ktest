@@ -21,6 +21,7 @@ type Result struct {
 	Reachable bool // verified HTTPS returned an HTTP status, including a refusal
 	Skipped   bool // shared startup budget ended before this target was attempted
 	Took      time.Duration
+	BodyBytes int64
 }
 
 type Target struct {
@@ -106,6 +107,12 @@ func runTargets(parent context.Context, client *http.Client, targets []Target, b
 	return out
 }
 
+// CheckTarget runs one explicit, isolated method/target calibration request.
+// The caller owns its client transport and per-attempt deadline.
+func CheckTarget(ctx context.Context, client *http.Client, target Target) Result {
+	return checkTarget(ctx, client, target)
+}
+
 func checkTarget(ctx context.Context, client *http.Client, target Target) Result {
 	began := time.Now()
 	res := Result{Target: target.Name}
@@ -124,11 +131,14 @@ func checkTarget(ctx context.Context, client *http.Client, target Target) Result
 	} else {
 		res.Reachable = true
 		res.Status = response.StatusCode
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 256))
+		readBytes, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		res.BodyBytes = readBytes
 		_ = response.Body.Close()
-		res.Success = response.StatusCode == target.Want || (target.Want == 0 && response.StatusCode >= 200 && response.StatusCode < 400)
+		res.Success = readErr == nil && (response.StatusCode == target.Want || (target.Want == 0 && response.StatusCode >= 200 && response.StatusCode < 400))
 		if res.Success {
 			res.Detail = fmt.Sprintf("TLS verified; HTTP %d (%s connectivity probe)", res.Status, target.Method)
+		} else if readErr != nil {
+			res.Detail = fmt.Sprintf("TLS verified; HTTP %d; response body incomplete: %v", res.Status, readErr)
 		} else {
 			res.Detail = fmt.Sprintf("TLS verified; HTTP %d; service access not confirmed", res.Status)
 		}

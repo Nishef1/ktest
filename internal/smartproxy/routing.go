@@ -65,6 +65,20 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 		}
 		list = append(list, u)
 	}
+	if pins := p.cfg.Frozen; pins != nil {
+		selected := pins.Default
+		if protected {
+			selected = pins.Protected
+		} else if method, ok := pins.Targets[destinationKey(host, port)]; ok {
+			selected = method
+		}
+		for _, u := range list {
+			if selected != "" && u.Name == selected {
+				return []*upstreamState{u}
+			}
+		}
+		return nil
+	}
 	preferred := p.preferredLocked(host, port)
 	now := time.Now()
 	score := func(u *upstreamState) *routeScore {

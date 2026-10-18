@@ -1,5 +1,4 @@
-# Android preview builds are normally manual and uploaded as Actions artifacts.
-# A workflow-file update also triggers a preview build on main (not production publication).
+# Manual runs and scoped changes on main build previews as Actions artifacts.
 # Production signing and release publication remain separate.
 name: Android APK (ARMv8 preview)
 on:
@@ -14,12 +13,51 @@ on:
       - "internal/front/**"
       - "internal/xraycfg/**"
       - "internal/quickcheck/**"
+      - "internal/routeplan/**"
+      - "internal/smartproxy/**"
+      - "internal/edges/**"
 permissions:
   contents: read
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Require and prepare dedicated preview signer
+        shell: bash
+        env:
+          KTEST_PREVIEW_KEYSTORE_BASE64: ${{ secrets.KTEST_PREVIEW_KEYSTORE_BASE64 }}
+          KTEST_PREVIEW_KEYSTORE_PASSWORD: ${{ secrets.KTEST_PREVIEW_KEYSTORE_PASSWORD }}
+          KTEST_PREVIEW_KEY_ALIAS: ${{ secrets.KTEST_PREVIEW_KEY_ALIAS }}
+          KTEST_PREVIEW_KEY_PASSWORD: ${{ secrets.KTEST_PREVIEW_KEY_PASSWORD }}
+          KTEST_PREVIEW_CERT_SHA256: ${{ secrets.KTEST_PREVIEW_CERT_SHA256 }}
+        run: |
+          set +x
+          set -euo pipefail
+          MISSING=0
+          for NAME in KTEST_PREVIEW_KEYSTORE_BASE64 KTEST_PREVIEW_KEYSTORE_PASSWORD KTEST_PREVIEW_KEY_ALIAS KTEST_PREVIEW_KEY_PASSWORD KTEST_PREVIEW_CERT_SHA256; do
+            if [[ -z "${!NAME:-}" ]]; then
+              printf '::error::Missing required repository secret %s\n' "$NAME"
+              MISSING=1
+            fi
+          done
+          [[ "$MISSING" -eq 0 ]] || exit 1
+          EXPECTED_SHA256="$(printf '%s' "$KTEST_PREVIEW_CERT_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo '::error::Preview certificate fingerprint must be a SHA-256 digest.'
+            exit 1
+          fi
+          umask 077
+          SIGNING_DIR="$(mktemp -d "$RUNNER_TEMP/ktest-preview-signing.XXXXXXXX")"
+          SIGNING_PATH="$SIGNING_DIR/preview.p12"
+          printf 'KTEST_PREVIEW_KEYSTORE_PATH=%s\n' "$SIGNING_PATH" >> "$GITHUB_ENV"
+          if ! printf '%s' "$KTEST_PREVIEW_KEYSTORE_BASE64" | base64 --decode > "$SIGNING_PATH"; then
+            echo '::error::Preview keystore is not valid base64.'
+            exit 1
+          fi
+          if [[ ! -s "$SIGNING_PATH" ]]; then
+            echo '::error::Preview keystore is empty.'
+            exit 1
+          fi
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
@@ -55,17 +93,47 @@ jobs:
         run: bash android/scripts/fetch-hev-aar.sh
       - name: Prepare pinned official native cores
         run: python3 android/scripts/prepare-native-cores.py --abis arm64-v8a
-      - name: Build Android preview APK (debug-signed, internal testing only)
-        run: gradle -p android :app:assembleDebug -PktestAbis=arm64-v8a --no-daemon
+      - name: Build Android preview APK (dedicated preview signer, internal testing only)
+        env:
+          KTEST_REQUIRE_PREVIEW_SIGNING: 'true'
+          KTEST_PREVIEW_KEYSTORE_PASSWORD: ${{ secrets.KTEST_PREVIEW_KEYSTORE_PASSWORD }}
+          KTEST_PREVIEW_KEY_ALIAS: ${{ secrets.KTEST_PREVIEW_KEY_ALIAS }}
+          KTEST_PREVIEW_KEY_PASSWORD: ${{ secrets.KTEST_PREVIEW_KEY_PASSWORD }}
+        run: gradle -p android :app:assembleDebug -PktestAbis=arm64-v8a --no-daemon --no-configuration-cache
+      - name: Verify APK preview signing certificate
+        shell: bash
+        env:
+          KTEST_PREVIEW_CERT_SHA256: ${{ secrets.KTEST_PREVIEW_CERT_SHA256 }}
+        run: |
+          set +x
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          if ! CERT_REPORT="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" 2>&1)"; then
+            echo '::error::Preview APK signature verification failed.'
+            exit 1
+          fi
+          mapfile -t CERT_DIGESTS < <(printf '%s\n' "$CERT_REPORT" | sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p')
+          if [[ "${#CERT_DIGESTS[@]}" -ne 1 ]]; then
+            echo '::error::Preview APK must have exactly one signing certificate.'
+            exit 1
+          fi
+          ACTUAL_SHA256="$(printf '%s' "${CERT_DIGESTS[0]}" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_SHA256="$(printf '%s' "$KTEST_PREVIEW_CERT_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ || "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
+            echo '::error::Preview APK signing certificate does not match the configured signer.'
+            exit 1
+          fi
+          echo 'Preview APK signing certificate matches the configured signer.'
       - name: Verify APK signature, ABIs, and package
         run: |
           set -euo pipefail
           APK=android/app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
           BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK")"
-          echo "$BADGING" | grep -F "versionCode='11'"
-          echo "$BADGING" | grep -F "versionName='0.3.3-preview'"
+          echo "$BADGING" | grep -F "package: name='com.nishef.ktest'"
+          echo "$BADGING" | grep -F "versionCode='12'"
+          echo "$BADGING" | grep -F "versionName='0.4.0-preview'"
           unzip -t "$APK" | tail -n 1
           test "$(unzip -Z1 "$APK" | awk -F/ '/^lib\/[^/]+\/[^/]+$/ {print $2}' | sort -u)" = arm64-v8a
           for ABI in arm64-v8a; do
@@ -85,3 +153,18 @@ jobs:
           path: android/dist/KTest-Connection-android-arm64-v8a-preview.apk
           retention-days: 14
           if-no-files-found: error
+      - name: Remove temporary preview signer
+        if: always()
+        shell: bash
+        run: |
+          set +x
+          set -euo pipefail
+          if [[ -n "${KTEST_PREVIEW_KEYSTORE_PATH:-}" ]]; then
+            case "$KTEST_PREVIEW_KEYSTORE_PATH" in
+              "$RUNNER_TEMP"/ktest-preview-signing.*/preview.p12)
+                rm -f -- "$KTEST_PREVIEW_KEYSTORE_PATH"
+                rmdir -- "$(dirname "$KTEST_PREVIEW_KEYSTORE_PATH")"
+                ;;
+              *) echo '::error::Refusing an unexpected preview signing cleanup path.'; exit 1 ;;
+            esac
+          fi

@@ -1,11 +1,15 @@
 package com.nishef.ktest
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -62,11 +66,12 @@ private val notices = listOf(
 @Composable
 internal fun SettingsScreen(
     s: SettingsState, scope: CoroutineScope, nativeLibraryDir: String,
+    routeTargets: RouteTargetsState, targetsEditable: Boolean, manualTesting: Boolean, onTargetsChanged: () -> Unit,
     vpn: JSONObject, vpnServiceState: String, vpnError: String?,
     onVpnAction: () -> Unit, openUrl: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val privateDir = context.filesDir.absolutePath
+    val privateDir = remember(context) { context.filesDir.canonicalPath }
     val preferences = remember(context) { context.getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE) }
 
     // Storage Access Framework only exports the public certificate. The CA
@@ -97,6 +102,9 @@ internal fun SettingsScreen(
     }
     LaunchedEffect(privateDir) {
         s.frontingEnabled = preferences.getBoolean("fronting_opt_in", false)
+        s.caTrustBusy = true
+        s.caError = null
+        s.caTrust = null
         try {
             s.caReport = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.frontCAStatus(privateDir)) }
             if (s.caReport?.optString("state") == "ready") {
@@ -104,6 +112,8 @@ internal fun SettingsScreen(
             }
         } catch (e: Exception) {
             s.caError = e.message ?: "Could not inspect local CA"
+        } finally {
+            s.caTrustBusy = false
         }
     }
 
@@ -191,7 +201,7 @@ internal fun SettingsScreen(
             vpnError?.let { Note(it, Tone.Danger) }
             if (vpn.optBoolean("available") || vpnServiceState == "tun_running_unverified") {
                 SecondaryButton(if (vpnServiceState == "tun_running_unverified") "Stop VPN" else "Start system VPN",
-                    onVpnAction, Modifier.fillMaxWidth())
+                    onVpnAction, Modifier.fillMaxWidth(), enabled = vpnServiceState == "tun_running_unverified" || !manualTesting)
             }
         }
 
@@ -212,19 +222,30 @@ internal fun SettingsScreen(
             )
             val caState = s.caReport?.optString("state") ?: "loading"
             KeyValue("Certificate", when (caState) {
-                "ready" -> "Generated; Android trust not checked"
+                "ready" -> "Generated locally"
                 "outdated" -> "Outdated; do not install"
                 "invalid" -> "Invalid or incomplete files"
                 "missing" -> "Not generated"
                 else -> "Checking…"
             })
-            s.caReport?.optString("fingerprint")?.takeIf { it.isNotBlank() }?.let {
-                KeyValue("SHA-1 fingerprint", it, mono = true)
+            s.caReport?.optString("fingerprint")?.takeIf { it.isNotBlank() }?.let { fingerprint ->
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("SHA-1 fingerprint", color = K.muted, fontSize = 13.sp)
+                    SelectionContainer(Modifier.fillMaxWidth()) {
+                        Text(fingerprint.replace(":", "").chunked(4).joinToString(" "),
+                            modifier = Modifier.fillMaxWidth(), color = K.text, fontFamily = K.mono,
+                            fontSize = 13.sp, lineHeight = 21.sp, softWrap = true)
+                    }
+                    SecondaryButton("Copy fingerprint", {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("KTest CA SHA-1 fingerprint", fingerprint))
+                    }, Modifier.fillMaxWidth(), icon = KIcons.Copy)
+                }
             }
             s.caReport?.optString("expires")?.takeIf { it.isNotBlank() }?.let {
                 KeyValue("Valid until", it, mono = true)
             }
-            s.caReport?.optString("detail")?.takeIf { it.isNotBlank() }?.let {
+            s.caReport?.optString("detail")?.takeIf { caState != "ready" && it.isNotBlank() }?.let {
                 Note(it, if (caState == "invalid" || caState == "outdated") Tone.Danger else Tone.Info)
             }
             if (caState == "missing") {
@@ -232,11 +253,13 @@ internal fun SettingsScreen(
                     s.caBusy = true
                     s.caError = null
                     s.caMessage = null
+                    s.caTrust = null
                     scope.launch {
                         try {
                             s.caReport = withContext(Dispatchers.IO) {
                                 JSONObject(Mobilebridge.generateFrontCA(privateDir))
                             }
+                            s.caTrust = withContext(Dispatchers.IO) { LocalCaTrust.inspect(privateDir) }
                             s.caMessage = "CA generated on this phone. Export the public certificate to install it manually."
                         } catch (e: Exception) {
                             s.caError = e.message ?: "CA generation failed"
@@ -254,32 +277,42 @@ internal fun SettingsScreen(
             if (caState == "ready") {
                 SecondaryButton(if (s.caTrustBusy) "Checking…" else "Check Android CA installation", {
                     s.caTrustBusy = true
+                    s.caTrust = null
+                    s.caError = null
                     scope.launch {
                         try {
                             s.caTrust = withContext(Dispatchers.IO) { LocalCaTrust.inspect(privateDir) }
+                        } catch (e: Exception) {
+                            s.caError = e.message ?: "Could not inspect Android CA installation"
                         } finally {
                             s.caTrustBusy = false
                         }
                     }
                 }, Modifier.fillMaxWidth(), busy = s.caTrustBusy, icon = KIcons.Shield)
+                KeyValue("Android user CA", when {
+                    s.caTrustBusy -> "Checking…"
+                    s.caTrust?.state == "installed_user" -> "Exact CA installed"
+                    s.caTrust?.state == "not_found" -> "Not installed"
+                    s.caTrust == null -> "Not checked"
+                    else -> "Unable to check"
+                })
                 s.caTrust?.let { trust ->
-                    KeyValue("Android user CA", when (trust.state) {
-                        "installed_user" -> "Exact CA installed"
-                        "not_found" -> "Not installed"
-                        else -> "Unable to check"
-                    })
                     Note(trust.detail, if (trust.state == "installed_user") Tone.Good else Tone.Warn)
                 }
-                if (s.caTrust?.state == "installed_user") {
+                Note(if (s.caTrust?.state == "installed_user")
+                    "App trust is checked separately by each app. Installation does not prove another app accepts user CAs; certificate pinning can still reject this CA."
+                    else "App trust is not verified. Generate and manually install this exact CA, then check its installation; each app still decides whether to trust it.")
+                if (s.caTrust?.state == "installed_user" || s.frontingEnabled) {
                     SecondaryButton(
                         if (s.frontingEnabled) "Disable optional domain fronting" else "Enable optional domain fronting",
                         {
                             s.frontingEnabled = !s.frontingEnabled
                             preferences.edit().putBoolean("fronting_opt_in", s.frontingEnabled).apply()
                             s.caMessage = if (s.frontingEnabled)
-                                "Opted in. Restart Balanced/Fast to try learned fronting, with local fallback on unsupported sites."
-                            else "Domain fronting disabled for future connections."
-                        }, Modifier.fillMaxWidth(), icon = KIcons.Route
+                                "Opted in for the next Balanced/Fast calibration. Run Test while offline; connected routes stay fixed."
+                            else "Domain fronting disabled for future connections. Run Test while offline to update the saved profile."
+                            onTargetsChanged()
+                        }, Modifier.fillMaxWidth(), enabled = !manualTesting && !routeTargets.busy, icon = KIcons.Route
                     )
                 }
             }
@@ -296,9 +329,13 @@ internal fun SettingsScreen(
                     "Installing this CA alone does not activate domain fronting in KTest.",
                 color = K.muted, fontSize = 12.sp, lineHeight = 17.sp
             )
-            Note("If you uninstall KTest, its private key is deleted. " +
+            Note("Normal app updates preserve this CA and its private key in app storage. " +
+                "A full uninstall or clearing app data removes the private key. " +
                 "Remove the user CA manually from Android's trusted credentials too.")
         }
+
+        RouteTargetsPanel(routeTargets, scope, privateDir, targetsEditable,
+            s.caReport?.optString("fingerprint").orEmpty(), onTargetsChanged)
 
         Panel {
             SectionLabel("Privacy")

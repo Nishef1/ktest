@@ -12,21 +12,25 @@ import (
 )
 
 type Preset struct {
-	Provider   string
-	URL        string
-	IPs        []string
-	Origin     string
-	UpdatedUTC string
-	Source     string
+	Provider      string
+	URL           string
+	IPs           []string
+	Origin        string
+	UpdatedUTC    string
+	Source        string
+	InventorySize int // Actual source inventory before applying a scan budget.
 }
 
 // ScanCandidates is the candidate/source policy shared by CLI and Android.
 func ScanCandidates(ctx context.Context, provider string, limit int) (Preset, error) {
-	if limit < 1 || limit > 300 {
-		return Preset{}, errors.New("candidate budget must be 1..300")
+	if limit < 0 {
+		return Preset{}, errors.New("candidate budget must be nonnegative")
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "cloudflare" {
+		if limit == 0 {
+			return Preset{}, errors.New("continuous Cloudflare scans require ScanCandidateSource")
+		}
 		ips, err := CloudflareCandidates(limit)
 		return Preset{Provider: provider, URL: "https://www.cloudflare.com/cdn-cgi/trace", IPs: ips,
 			Source: "https://www.cloudflare.com/ips/", Origin: "Provider HTTPS candidates; arbitrary fronting is unverified"}, err
@@ -35,10 +39,58 @@ func ScanCandidates(ctx context.Context, provider string, limit int) (Preset, er
 	if err != nil {
 		return Preset{}, err
 	}
-	if len(preset.IPs) > limit {
+	if limit > 0 && len(preset.IPs) > limit {
 		preset.IPs = preset.IPs[:limit]
 	}
 	return preset, nil
+}
+
+// ScanCandidateSource keeps Cloudflare's official range enumeration lazy.
+// Other providers terminate at their actual attributed/DNS inventory; no new
+// third-party prefixes or repeated DNS answers are invented to fill a budget.
+func ScanCandidateSource(ctx context.Context, provider string, budget int) (Preset, CandidateIterator, error) {
+	if budget < 0 {
+		return Preset{}, nil, errors.New("candidate budget must be nonnegative")
+	}
+	if err := ctx.Err(); err != nil {
+		return Preset{}, nil, err
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "cloudflare" {
+		next, err := cloudflareIterator(budget)
+		inventory := 0
+		for _, raw := range cloudflareIPv4 {
+			p, parseErr := netip.ParsePrefix(raw)
+			if parseErr != nil {
+				return Preset{}, nil, parseErr
+			}
+			size := 1 << uint(32-p.Bits())
+			if size >= 256 {
+				inventory += size / 256 * 254
+			} else if size > 2 {
+				inventory += size - 2
+			}
+		}
+		return Preset{Provider: provider, URL: "https://www.cloudflare.com/cdn-cgi/trace",
+			Source: "https://www.cloudflare.com/ips/", Origin: "Provider HTTPS only; target fronting is unverified", InventorySize: inventory}, next, err
+	}
+	preset, err := PresetCandidates(ctx, provider)
+	if err != nil {
+		return Preset{}, nil, err
+	}
+	preset.InventorySize = len(preset.IPs)
+	i := 0
+	return preset, func(ctx context.Context) (string, bool, error) {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
+		if i == len(preset.IPs) || (budget > 0 && i >= budget) {
+			return "", false, nil
+		}
+		ip := preset.IPs[i]
+		i++
+		return ip, true, nil
+	}, nil
 }
 
 // PresetCandidates only selects a small source-backed seed set. Reachability,
@@ -82,9 +134,6 @@ func PresetCandidates(ctx context.Context, provider string) (Preset, error) {
 			}
 		}
 		sort.Strings(candidates)
-		if len(candidates) > 8 {
-			candidates = candidates[:8]
-		}
 		if len(candidates) == 0 {
 			return Preset{}, errors.New("resolver returned no usable addresses; do not trust a poisoned DNS result")
 		}
