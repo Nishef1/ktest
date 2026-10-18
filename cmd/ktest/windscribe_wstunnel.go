@@ -513,30 +513,101 @@ func wsSpreadSNIs(cs []wsCarrier, attempt uint64) []wsCarrier {
 	return result
 }
 
-func wsDiversify(candidates []wsCarrier, attempt uint64) []wsCarrier {
-	var groups [4][]wsCarrier
-	for _, candidate := range candidates {
-		group := wsCarrierFamily(candidate.name)
-		groups[group] = append(groups[group], candidate)
+// A method is the user-visible ByeDPI/Xray/TLS technique, not the outer
+// WStunnel/Stealth transport. A candidate with no method metadata (primarily
+// test fixtures) falls back to its transport family.
+func wsMethodKey(c wsCarrier) string {
+	if c.method != "" {
+		return c.method
 	}
-	for i := range groups {
-		groups[i] = wsSpreadSNIs(groups[i], attempt)
+	return fmt.Sprintf("transport-%d", wsCarrierFamily(c.name))
+}
+
+// Balance wrapper families and SNI variants *within* a method. The outer
+// scheduler below then takes one candidate per method per round.
+func wsSpreadTransports(cs []wsCarrier, attempt uint64) []wsCarrier {
+	var families [4][]wsCarrier
+	for _, c := range cs {
+		family := wsCarrierFamily(c.name)
+		families[family] = append(families[family], c)
 	}
-	result := make([]wsCarrier, 0, len(candidates))
-	for len(result) < len(candidates) {
-		for i := range 4 {
-			group := 3
-			if i < 3 {
-				group = (i + int(attempt%3)) % 3
-			}
-			if len(groups[group]) == 0 {
+	for i := range families {
+		families[i] = wsSpreadSNIs(families[i], attempt)
+	}
+	var out []wsCarrier
+	for len(out) < len(cs) {
+		for i := range families {
+			family := (i + int(attempt%4)) % 4
+			if len(families[family]) == 0 {
 				continue
 			}
-			result = append(result, groups[group][0])
-			groups[group] = groups[group][1:]
+			out = append(out, families[family][0])
+			families[family] = families[family][1:]
+		}
+	}
+	return out
+}
+
+// Round-robin by actual anti-DPI method, not by contiguous sets of 19
+// variants. Within each method untried candidates precede previously tried
+// ones. On the next CONNECT, rotate the first method and each method's SNI,
+// entry IP and outer transport so the 64-candidate cap does not starve them.
+func wsDiversifyTiered(untried, tried []wsCarrier, attempt uint64) []wsCarrier {
+	type methodCandidates struct {
+		untried []wsCarrier
+		tried   []wsCarrier
+		queue   []wsCarrier
+	}
+	byMethod := make(map[string]*methodCandidates)
+	var methods []string
+	add := func(cs []wsCarrier, first bool) {
+		for _, c := range cs {
+			key := wsMethodKey(c)
+			m := byMethod[key]
+			if m == nil {
+				m = &methodCandidates{}
+				byMethod[key] = m
+				methods = append(methods, key)
+			}
+			if first {
+				m.untried = append(m.untried, c)
+			} else {
+				m.tried = append(m.tried, c)
+			}
+		}
+	}
+	add(untried, true)
+	add(tried, false)
+	if len(methods) == 0 {
+		return nil
+	}
+	for _, name := range methods {
+		m := byMethod[name]
+		m.queue = append(wsSpreadTransports(m.untried, attempt), wsSpreadTransports(m.tried, attempt)...)
+	}
+	offset := int(attempt % uint64(len(methods)))
+	methods = append(append([]string(nil), methods[offset:]...), methods[:offset]...)
+	result := make([]wsCarrier, 0, len(untried)+len(tried))
+	for len(result) < cap(result) {
+		progress := false
+		for _, name := range methods {
+			m := byMethod[name]
+			if len(m.queue) == 0 {
+				continue
+			}
+			result = append(result, m.queue[0])
+			m.queue = m.queue[1:]
+			progress = true
+		}
+		if !progress {
+			break
 		}
 	}
 	return result
+}
+
+func wsDiversify(candidates []wsCarrier, attempt uint64) []wsCarrier {
+	return wsDiversifyTiered(candidates, nil, attempt)
 }
 
 func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
@@ -562,8 +633,9 @@ func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
 			fresh = append(fresh, c)
 		}
 	}
-	ordered := append(preferred, wsDiversify(untried, attempt)...)
-	ordered = append(ordered, wsDiversify(fresh, attempt)...)
+	// Prioritize each method's unexplored variant, then round-robin across
+	// methods. Do not exhaust 19 variants of one method before reaching others.
+	ordered := append(preferred, wsDiversifyTiered(untried, fresh, attempt)...)
 	if len(ordered) > 0 || len(cooling) == 0 {
 		// Merely launching failed handshakes later still lets their quick
 		// reset packets beat a slower healthy handshake on every retry.
