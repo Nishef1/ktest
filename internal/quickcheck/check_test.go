@@ -139,8 +139,8 @@ func TestTikTokAndTelegramWebAreDistinctOptInTargets(t *testing.T) {
 		seen[target.Name] = target
 	}
 	for name, site := range map[string]string{
-		"TikTok": "www.tiktok.com",
-		"Telegram": "telegram.org",
+		"TikTok":       "www.tiktok.com",
+		"Telegram":     "telegram.org",
 		"Telegram Web": "web.telegram.org",
 	} {
 		target, ok := seen[name]
