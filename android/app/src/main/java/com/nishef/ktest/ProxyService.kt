@@ -96,8 +96,8 @@ class ProxyService : Service() {
                                         Mobilebridge.startAndroidProxyWithFronting(mode, upstream,
                                             applicationInfo.nativeLibraryDir, filesDir.absolutePath)
                                     } else {
-                                        Mobilebridge.startAndroidProxy(mode, upstream,
-                                            applicationInfo.nativeLibraryDir)
+                                        Mobilebridge.startAndroidProxyWithXray(mode, upstream,
+                                            applicationInfo.nativeLibraryDir, filesDir.absolutePath)
                                     }
                                 } else {
                                     Mobilebridge.startProxyWithUpstream(mode, upstream)
