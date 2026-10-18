@@ -100,8 +100,10 @@ private fun KTestApp() {
     val routeStatusReady = routePlan.report != null && routePlan.readError == null
     val scanBusy = tools.cdnStarting || tools.cdnStatus.optBoolean("running")
     val scanStatusReady = tools.cdnStatusLoaded && tools.cdnStatusError == null
+    // Failure to read a diagnostic status must not make Fast unusable.
+    // Go independently checks whether an active scan is incompatible with startup.
     val connectBlocked = (activeMode.id == "balanced" && (routePlan.busy || !routeStatusReady)) ||
-        routeTargets.busy || scanBusy || !scanStatusReady
+        routeTargets.busy || scanBusy
     val canTestRoutes = offline && routeStatusReady && !routeTargets.busy && !settings.caBusy &&
         !scanBusy && scanStatusReady && activeMode.id == "balanced"
     val linkState = when {
