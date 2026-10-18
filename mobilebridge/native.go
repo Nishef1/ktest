@@ -114,11 +114,18 @@ func verifyModeUpstream(ctx context.Context, mode, address string) (observedExit
 }
 
 func waitNative(ctx context.Context, mode string, n *nativeCore) (observedExit, error) {
+	return waitNativeWithProbe(ctx, mode, n, verifyModeUpstream)
+}
+
+// The probe can complete just as an owned Aether process exits. Never accept
+// the observed foreign IP alone as evidence of an *active* local transport.
+func waitNativeWithProbe(ctx context.Context, mode string, n *nativeCore, probe func(context.Context, string, string) (observedExit, error)) (observedExit, error) {
 	var lastErr error
 	for {
+		if err := ctx.Err(); err != nil {
+			return observedExit{}, fmt.Errorf("native startup canceled or timed out; the selected method or verification endpoint may be unreachable (last check: %v): %w", lastErr, err)
+		}
 		select {
-		case <-ctx.Done():
-			return observedExit{}, fmt.Errorf("native startup canceled or timed out; the selected method or verification endpoint may be unreachable (last check: %v): %w", lastErr, ctx.Err())
 		case <-n.done:
 			if n.err != nil {
 				return observedExit{}, fmt.Errorf("Aether core exited before verification: %w", n.err)
@@ -126,9 +133,22 @@ func waitNative(ctx context.Context, mode string, n *nativeCore) (observedExit, 
 			return observedExit{}, errors.New("Aether core exited before verification")
 		default:
 		}
-		checked, err := verifyModeUpstream(ctx, mode, n.address)
+		checked, err := probe(ctx, mode, n.address)
 		if err == nil {
-			return checked, nil
+			// A completed HTTPS exit check can race cancellation and a native
+			// process exit. Both conditions must still be false at promotion.
+			if ctx.Err() != nil {
+				return observedExit{}, ctx.Err()
+			}
+			select {
+			case <-n.done:
+				if n.err != nil {
+					return observedExit{}, fmt.Errorf("Aether core exited during verification: %w", n.err)
+				}
+				return observedExit{}, errors.New("Aether core exited during verification")
+			default:
+				return checked, nil
+			}
 		}
 		lastErr = err
 		timer := time.NewTimer(2 * time.Second)
