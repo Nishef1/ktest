@@ -362,3 +362,25 @@ func TestWindscribeTwoColumnPanelPinsNineteenMethodsInShortTerminal(t *testing.T
 		t.Fatal("logging did not retain the live panel")
 	}
 }
+
+func TestWindscribeZeroCarriersExplainsMissingMappingInsteadOfFailedSearch(t *testing.T) {
+	var out bytes.Buffer
+	v := &wsProgressView{t: plainTerm(&out)}
+	s := wsProgressSnapshot{
+		key: "68.67.118.163:443", incomplete: true,
+		mappingReason: "node not found in 2 fresh provider source(s)",
+	}
+	v.show(s, true)
+	for _, want := range []string{"NO WRAPPED CARRIERS", "zero tests were run", "node not found in 2 fresh provider source(s)", "no IP guessing"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing diagnostic %q in %s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "all variants failed") {
+		t.Fatal("missing discovery is not an anti-DPI failure")
+	}
+	v.summary(s)
+	if !strings.Contains(out.String(), "No carrier variants were generated or tested") {
+		t.Fatalf("end-of-session summary concealed missing catalog: %s", out.String())
+	}
+}
