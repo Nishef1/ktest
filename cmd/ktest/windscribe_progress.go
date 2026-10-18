@@ -322,15 +322,33 @@ func wsLiveDetail(s wsProgressSnapshot, width int) string {
 	if width < 60 {
 		return fmt.Sprintf("%d/%d checked | %d live | %s", s.tried, s.total, s.running, status)
 	}
+	if width < 110 {
+		phase := "CHECKING"
+		switch {
+		case s.connected > 0:
+			phase = "VPN OK"
+		case s.active > 0:
+			phase = "OPENVPN?"
+		case s.incomplete:
+			phase = "DISCOVERY"
+		case s.running == 0:
+			phase = "IDLE"
+		}
+		detail := fmt.Sprintf("%d/%d | %d live | %s", s.tried, s.total, s.running, phase)
+		if method != "" {
+			detail += " | " + wsShortMethod(method, 15)
+		}
+		return detail
+	}
 	detail := fmt.Sprintf("%d/%d checked | %d live | %s", s.tried, s.total, s.running, status)
 	if method != "" {
-		maxMethod := 16
-		if width >= 120 {
+		maxMethod := 22
+		if width >= 145 {
 			maxMethod = 30
 		}
 		detail += " | " + wsShortMethod(method, maxMethod)
 	}
-	if width >= 105 {
+	if width >= 145 {
 		if failures := wsFailureStages(s); failures != "" {
 			detail += " | failed " + failures
 		}
