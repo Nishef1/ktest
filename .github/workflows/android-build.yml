@@ -12,6 +12,7 @@ on:
       - "android/scripts/**"
       - "mobilebridge/**"
       - "internal/front/**"
+      - "internal/xraycfg/**"
       - "internal/quickcheck/**"
 permissions:
   contents: read
