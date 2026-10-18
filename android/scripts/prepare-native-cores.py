@@ -152,6 +152,15 @@ def prepare(manifest, cache, destination, abis, verify_only):
                     staged_path.replace(output)
                 finally:
                     staged_path.unlink(missing_ok=True)
+        if not verify_only and manifest["repository"] == "https://github.com/XTLS/Xray-core":
+            # The exact pinned official archive supplies the license verbatim.
+            with zipfile.ZipFile(archive) as xray_archive:
+                license_text = xray_archive.read("LICENSE")
+            if len(license_text) == 0 or len(license_text) > 1 << 20:
+                raise ValueError("invalid official Xray license payload")
+            license_path = ROOT / "android/app/src/main/assets/third_party/Xray-MPL-2.0.txt"
+            license_path.parent.mkdir(parents=True, exist_ok=True)
+            license_path.write_bytes(license_text)
         print(f'{name}: verified {len(payloads)} official {manifest["version"]} executables; '
               f'{"not packaged" if verify_only else "packaged into jniLibs"}')
 
