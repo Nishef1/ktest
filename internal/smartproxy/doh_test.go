@@ -219,3 +219,23 @@ func TestDoHCanUseTheEndpointsOwnTLSDialer(t *testing.T) {
 		t.Fatalf("own dialer used %d times", dialed.Load())
 	}
 }
+
+func TestDoHRejectsNonSuccessStatusWithAddressAnswers(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Some malformed resolver responses still include plausible addresses.
+		// NXDOMAIN must never be treated as a successful A-record lookup.
+		_, _ = fmt.Fprint(w, `{"Status":3,"Answer":[{"type":1,"TTL":60,"data":"142.250.1.1"}]}`)
+	}))
+	defer srv.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}
+	resolve := NewDoH([]DoHEndpoint{{URL: "https://example.com/resolve"}}, dial, roots)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if ips, err := resolve(ctx, "blocked.example"); err == nil || len(ips) != 0 {
+		t.Fatalf("NXDOMAIN answer was accepted as %v: %v", ips, err)
+	}
+}
