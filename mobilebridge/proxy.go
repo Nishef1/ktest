@@ -40,23 +40,23 @@ type proxyDiagnostics struct {
 }
 
 type proxyReport struct {
-	Running      bool   `json:"running"`
-	Mode         string `json:"mode,omitempty"`
-	Socks        string `json:"socks,omitempty"`
-	HTTP         string `json:"http,omitempty"`
-	Coverage     string `json:"coverage"`
-	Detail       string `json:"detail"`
-	Upstream     string `json:"upstream,omitempty"`
-	ExitLocation string `json:"exit_location,omitempty"`
-	Phase        string `json:"phase"`
-	Error        string `json:"error,omitempty"`
-	DNSFailures  int    `json:"dns_failures"`
-	DNSError     string `json:"dns_error,omitempty"`
-	Native       bool   `json:"native"`
-	Method       string `json:"method,omitempty"`
-	Fronting     bool   `json:"fronting"`
-	FrontAccepted int   `json:"front_accepted,omitempty"`
-	FrontRefused int    `json:"front_refused,omitempty"`
+	Running       bool   `json:"running"`
+	Mode          string `json:"mode,omitempty"`
+	Socks         string `json:"socks,omitempty"`
+	HTTP          string `json:"http,omitempty"`
+	Coverage      string `json:"coverage"`
+	Detail        string `json:"detail"`
+	Upstream      string `json:"upstream,omitempty"`
+	ExitLocation  string `json:"exit_location,omitempty"`
+	Phase         string `json:"phase"`
+	Error         string `json:"error,omitempty"`
+	DNSFailures   int    `json:"dns_failures"`
+	DNSError      string `json:"dns_error,omitempty"`
+	Native        bool   `json:"native"`
+	Method        string `json:"method,omitempty"`
+	Fronting      bool   `json:"fronting"`
+	FrontAccepted int    `json:"front_accepted,omitempty"`
+	FrontRefused  int    `json:"front_refused,omitempty"`
 	FrontDisabled string `json:"front_disabled,omitempty"`
 }
 
