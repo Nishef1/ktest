@@ -344,7 +344,7 @@ func (s *siteEvents) print(e smartproxy.Event) {
 				s.detail(e.Err)
 			} else if failed == 1 || failed%25 == 0 || time.Since(s.failedAt["ws-latency-overview"]) >= 30*time.Second {
 				s.failedAt["ws-latency-overview"] = time.Now()
-				t.Line(toneWarn, "Windscribe latency probes: %d failures (port 6464; not VPN handshake)", failed)
+				t.Line(toneWarn, "Windscribe LATENCY PROBE FAILED: %d %s (port 6464; not VPN handshake)", failed, plural(int(failed), "failure", "failures"))
 				t.Note("Individual destinations and failures available with -v.")
 			}
 		}
