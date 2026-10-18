@@ -33,9 +33,10 @@ func Targets() []Target {
 	return []Target{
 		{"YouTube", "https://www.youtube.com/generate_204", http.MethodGet, 204},
 		{"Google", "https://www.google.com/generate_204", http.MethodGet, 204},
-		{"Wikipedia", "https://www.wikipedia.org/", http.MethodHead, 0},
+		{"Instagram", "https://www.instagram.com/", http.MethodHead, 0},
 		{"Telegram", "https://telegram.org/", http.MethodHead, 0},
 		{"Discord", "https://discord.com/", http.MethodHead, 0},
+		{"X", "https://x.com/", http.MethodHead, 0},
 	}
 }
 
