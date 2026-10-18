@@ -185,7 +185,7 @@ func TestWindscribeSummaryRetainsFullMethodDetails(t *testing.T) {
 	v := &wsProgressView{t: plainTerm(&out)}
 	snapshot := wsProgressSnapshot{
 		key: "203.0.113.100:443", total: 2, tried: 1, remaining: 1,
-		methods: []wsMethodProgress{{name: "ByeDPI", tried: 1, total: 2, last: "TLS reset"}},
+		methods:      []wsMethodProgress{{name: "ByeDPI", tried: 1, total: 2, last: "TLS reset"}},
 		inapplicable: []string{"IPv6-only"},
 	}
 	v.show(snapshot, true)
