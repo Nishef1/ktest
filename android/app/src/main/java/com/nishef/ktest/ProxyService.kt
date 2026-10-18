@@ -82,6 +82,9 @@ class ProxyService : Service() {
                                     Mobilebridge.startNativeProxy(mode, method,
                                         applicationInfo.nativeLibraryDir,
                                         File(filesDir, "aether").absolutePath)
+                                } else if (mode == "balanced" || mode == "fast") {
+                                    Mobilebridge.startAndroidProxy(mode, upstream,
+                                        applicationInfo.nativeLibraryDir)
                                 } else {
                                     Mobilebridge.startProxyWithUpstream(mode, upstream)
                                 }

@@ -28,6 +28,7 @@ type proxySession struct {
 	closeDNS     func()
 	diagnostics  *proxyDiagnostics
 	native       *nativeCore
+	localCores   *localCoreSet
 }
 
 type proxyDiagnostics struct {
@@ -112,9 +113,8 @@ func ProxyStatus() string {
 }
 
 // StartProxy starts real in-process Go SOCKS5 and HTTP listeners.
-// Balanced and fast mirror only the built-in plain + ClientHello splitting
-// paths from the desktop CLI. External Xray/Aether/Psiphon/Tor/Windscribe
-// processes are deliberately NOT emulated or reported as connected.
+// This low-level entry point uses built-in plain + ClientHello splitting paths.
+// Android uses StartAndroidProxy to include its packaged native ByeDPI routes.
 func StartProxy(mode string) (string, error) {
 	return StartProxyWithUpstream(mode, "")
 }
@@ -122,10 +122,10 @@ func StartProxy(mode string) (string, error) {
 // StartProxyWithUpstream adds a separately started local SOCKS5 transport.
 // This adapts the existing CLI -exit-socks route; it does not create another core.
 func StartProxyWithUpstream(mode, upstream string) (report string, startErr error) {
-	return startProxy(mode, upstream, nil)
+	return startProxy(mode, upstream, nil, "")
 }
 
-func startProxy(mode, upstream string, native *nativeOptions) (report string, startErr error) {
+func startProxy(mode, upstream string, native *nativeOptions, localDir string) (report string, startErr error) {
 	// Long upstream validation must never hold proxyMu: Android status polling
 	// calls ProxyStatus on the UI thread. Serialize only start calls here.
 	proxyStartMu.Lock()
@@ -197,6 +197,20 @@ func startProxy(mode, upstream string, native *nativeOptions) (report string, st
 	var upstreams []smartproxy.Upstream
 	if mode == "balanced" || mode == "fast" {
 		upstreams = append(smartproxy.PlainUpstreams(), smartproxy.DesyncUpstreams()...)
+	}
+	var localCores *localCoreSet
+	keepLocal := false
+	if localDir != "" {
+		localCores, err = launchAndroidLocalCores(startContext, localDir)
+		if err != nil {
+			return "", err
+		}
+		defer func() {
+			if !keepLocal {
+				localCores.stop()
+			}
+		}()
+		upstreams = append(upstreams, localCores.upstreams...)
 	}
 	location := ""
 	if upstream != "" {
@@ -289,10 +303,22 @@ func startProxy(mode, upstream string, native *nativeOptions) (report string, st
 		return "", fmt.Errorf("HTTP listener: %w", err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed}
+	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, localCores: localCores}
 	activeProxy = session
 	keepDNS = true
 	keepManaged = true
+	keepLocal = true
+	if localCores != nil {
+		for _, child := range localCores.cores {
+			go func() {
+				select {
+				case <-ctx.Done():
+				case <-child.done:
+					proxy.Remove(child.method)
+				}
+			}()
+		}
+	}
 	if managed != nil {
 		go func() {
 			select {
@@ -343,6 +369,9 @@ func stopLocked() {
 	s.cancel()
 	s.core.Stop()
 	s.closeDNS()
+	if s.localCores != nil {
+		s.localCores.stop()
+	}
 	if s.native != nil {
 		s.native.stop()
 	}

@@ -1,0 +1,30 @@
+{
+  "version": "v0.17.3",
+  "repository": "https://github.com/hufrea/byedpi",
+  "abis": {
+    "arm64-v8a": {
+      "archive": "byedpi-17.3-aarch64.tar.gz",
+      "sha256": "d5806504e159e8119ede5af1164a609251b0520cd4483a7db611b6d238b9404b",
+      "machine": 183,
+      "bits": 64,
+      "min_load_alignment": 16384,
+      "files": [{"source": "ciadpi-aarch64", "name": "libciadpi.so", "sha256": "a1a27de042a46084c78db34cfd9ca2a0dff7c9b3d0574942480f268d54569ca4"}]
+    },
+    "armeabi-v7a": {
+      "archive": "byedpi-17.3-armv7l.tar.gz",
+      "sha256": "d231b95fc130a40994ef593ac87498ad8614e003b263e3a453bd62af096abb0c",
+      "machine": 40,
+      "bits": 32,
+      "min_load_alignment": 4096,
+      "files": [{"source": "ciadpi-armv7l", "name": "libciadpi.so", "sha256": "130813d0182aba1fa5c03218a192e4f4a662d0a00ddd7a92cf397498dac5755c"}]
+    },
+    "x86_64": {
+      "archive": "byedpi-17.3-x86_64.tar.gz",
+      "sha256": "98f73c32eacb571ebd88d790f6376ed9e70f02d44c1fe862472ecea75cd7117d",
+      "machine": 62,
+      "bits": 64,
+      "min_load_alignment": 4096,
+      "files": [{"source": "ciadpi-x86_64", "name": "libciadpi.so", "sha256": "c70e87c6168af1832b21641a98bb53e3500b1daf6a5df8bfd22fac4a9294abda"}]
+    }
+  }
+}

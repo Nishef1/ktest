@@ -36,7 +36,7 @@ android {
         jniLibs.useLegacyPackaging = true
         // Runtime hashes refer to the unmodified upstream executables.
         jniLibs.keepDebugSymbols += setOf(
-            "**/libaether.so", "**/libpsiphon-tunnel-core.so", "**/liblyrebird.so"
+            "**/libaether.so", "**/libpsiphon-tunnel-core.so", "**/liblyrebird.so", "**/libciadpi.so"
         )
     }
 

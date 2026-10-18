@@ -42,7 +42,7 @@ jobs:
           gomobile bind -target=android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
       - name: Fetch pinned HEV Android tun2socks adapter
         run: bash android/scripts/fetch-hev-aar.sh
-      - name: Prepare pinned official Aether Android cores
+      - name: Prepare pinned official native cores
         run: python3 android/scripts/prepare-native-cores.py --abis arm64-v8a
       - name: Build Android preview APK (debug-signed, internal testing only)
         run: gradle -p android :app:assembleDebug -PktestAbis=arm64-v8a --no-daemon
@@ -57,7 +57,7 @@ jobs:
           for ABI in arm64-v8a; do
             unzip -Z1 "$APK" | grep -Fx "lib/$ABI/libgojni.so"
             unzip -Z1 "$APK" | grep -Fx "lib/$ABI/libhev-socks5-tunnel.so"
-            for CORE in aether psiphon-tunnel-core lyrebird; do
+            for CORE in aether psiphon-tunnel-core lyrebird ciadpi; do
               unzip -Z1 "$APK" | grep -Fx "lib/$ABI/lib$CORE.so"
             done
           done

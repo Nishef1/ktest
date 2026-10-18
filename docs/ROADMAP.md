@@ -28,7 +28,7 @@ The pinned Aether v2.3.0 release already builds Tor support with `--features tor
 | --- | --- | --- |
 | Shared lifecycle | Shared SOCKS/HTTP lifecycle plus managed Android native-core launch/cancel/exit handling | Complete device lifecycle/reconnect evidence; no wholesale CLI supervisor port |
 | Native bundle | Pinned payloads, runtime verification and observed Aether/Psiphon execution under the app UID on emulator-5554 | Validate each backend and ARM devices; distribution notices |
-| Balanced / Fast | Existing Go direct/splitting subset and shared routing policy | Wire existing native local strategies and validate mode behavior on a device |
+| Balanced / Fast | Go direct/splitting routes plus the original packaged ByeDPI and shared desktop strategy catalog; YouTube, Discord and Wikipedia HTTPS data observed through the VPN on KTest_API_35 / emulator-5558 | Xray integration, automatic foreign-exit fallback and physical-device validation; Telegram website still failed on both tested clients |
 | Aether | Packaged core launch and method selection wired to Android; external SOCKS retained as an optional Aether path | Verified live foreign egress and sustained traffic for selected native methods |
 | Tor / Psiphon | Android selects existing Aether backends; shared Tor identity check and foreign-exit verification; Psiphon child launch observed | Real Tor/Psiphon egress and sustained traffic; process startup is not a successful connection |
 | Windscribe / through Aether | Local-only / WARP-carrier policies and a shared carrier probe exist | Android bootstrap and supported Windscribe integration; authenticated end-to-end data |

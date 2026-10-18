@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify/package unmodified official Aether Android executables; never build APK/AAR.
+"""Verify/package unmodified official native executables; never build APK/AAR.
 
 The APK extracts these files to nativeLibraryDir. They must be executed from
 that read-only package directory, never copied into the writable app home.
@@ -16,7 +16,8 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "internal/aether/android-cores.json"
+MANIFESTS = [ROOT / "internal/aether/android-cores.json",
+             ROOT / "internal/byedpi/android-cores.json"]
 
 
 def digest(data):
@@ -143,17 +144,20 @@ def main():
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--verify-apk", type=Path, help="check an existing APK; never build one")
     args = parser.parse_args()
-    manifest = json.loads(MANIFEST.read_text())
     if args.verify_apk:
         with zipfile.ZipFile(args.verify_apk) as apk:
-            for abi in args.abis:
-                for item in manifest["abis"][abi]["files"]:
-                    name = f'lib/{abi}/{item["name"]}'
-                    if digest(apk.read(name)) != item["sha256"]:
-                        raise ValueError(f"APK changed or stripped pinned executable: {name}")
-                print(f"{abi}: APK native executable hashes verified")
+            for path in MANIFESTS:
+                manifest = json.loads(path.read_text())
+                for abi in args.abis:
+                    for item in manifest["abis"][abi]["files"]:
+                        name = f'lib/{abi}/{item["name"]}'
+                        if digest(apk.read(name)) != item["sha256"]:
+                            raise ValueError(f"APK changed or stripped pinned executable: {name}")
+                    print(f"{abi}: {manifest['repository']} APK native executable hashes verified")
         return
-    prepare(manifest, args.cache_dir, args.output, args.abis, args.verify_only)
+    for path in MANIFESTS:
+        manifest = json.loads(path.read_text())
+        prepare(manifest, args.cache_dir, args.output, args.abis, args.verify_only)
 
 
 if __name__ == "__main__":

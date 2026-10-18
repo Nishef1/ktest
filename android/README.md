@@ -23,8 +23,8 @@ The Go policy catalog has all seven desktop modes, but **not every launcher is a
 
 | Original CLI mode | Android status |
 | --- | --- |
-| Balanced | Go in-process plain and ClientHello-splitting proxy subset |
-| Fast | Same Go subset with shared Fast policy |
+| Balanced | Go direct/ClientHello routes plus the original packaged ByeDPI and shared desktop strategy catalog |
+| Fast | Same native/local routes with the shared Fast policy |
 | Aether | Managed packaged core with native method selection; optional existing loopback SOCKS path |
 | Aether to Tor | Managed Aether Tor-only backend; Tor Project and foreign-exit checks required before connection is active |
 | Windscribe | Disabled pending portable original WStunnel / Xray / ByeDPI orchestration |
@@ -101,10 +101,30 @@ read-only `ApplicationInfo.nativeLibraryDir`; the app must never copy them into
 writable app storage to execute them. The manual workflow verifies their hashes
 again inside the final APK. It has **not** been dispatched as part of this work.
 
+Balanced/Fast also package the unmodified ByeDPI v0.17.3 static executable as
+`libciadpi.so`, pinned by archive and executable hashes in
+`internal/byedpi/android-cores.json`. The same preparation script checks its ELF
+architecture/alignment and final APK bytes. The original strategy list and
+parser live in `internal/byedpi` and are shared with the CLI. Go starts private
+loopback SOCKS listeners, races these paths alongside direct routes, removes
+exited children and reaps all owned processes on disconnect. No executable is
+downloaded or copied to writable app storage at runtime. ByeDPI is a local
+anti-DPI transport, so protected AI domains still require a separately verified
+foreign exit; it does not change the public exit IP.
+
 The shipped ABI set remains ARMv7 and arm64; x86_64 is an optional native-check
 target. The pinned arm64 executables meet at least 16 KiB ELF load alignment.
 The x86_64 helper executables have 4 KiB alignment and are not a claim of 16 KiB
 emulator/device support.
+
+On `KTest_API_35` / `emulator-5558`, both Balanced and Fast now carry
+certificate-verified HTTPS to the main YouTube, Discord and Wikipedia pages
+through the actual VPN/TUN, with HTTP 200 responses and response-body bytes.
+The in-app checks passed 4 of 5 targets after identifying the probe's User-Agent
+(Wikipedia rejects the generic Go client). The Telegram website still failed
+on the tested Android and Windows paths. Disconnect removed the TUN and all
+app-owned ByeDPI children. These observations do not establish foreign egress,
+video playback, Telegram app traffic or physical ARM-device acceptance.
 
 Native help/version commands initially ran in the emulator shell. Later
 validation builds launched Aether and its Psiphon helper under the app UID on
@@ -126,7 +146,7 @@ Before calling this an Android port complete: wire the smallest required native-
 | Area | Implemented in source | Still required |
 | --- | --- | --- |
 | Shared Go connection | Shared SOCKS/HTTP lifecycle and managed native launch/cancel/exit handling | Full lifecycle/reconnect device evidence; no wholesale supervisor port |
-| Balanced / Fast | Existing Go TCP routes, packet DNS and verified-exit UDP | Xray/ByeDPI/native strategy bundle and device evidence |
+| Balanced / Fast | Go TCP routes, original ByeDPI with shared desktop strategies, packet DNS and verified-exit UDP | Xray integration, automatic foreign-exit fallback and physical-device evidence |
 | Aether | Packaged core launch, method selection and optional external SOCKS; native scans/reconnect reused | Verified native egress and sustained traffic |
 | Tor / Psiphon | Existing Aether backends connected to Android, shared Tor verification and foreign-exit checks | Real egress and sustained traffic; process launch alone is insufficient |
 | Windscribe / through Aether | Shared carrier probe exposed to Android | Operational native bridge, catalog/profile integration and authenticated data |

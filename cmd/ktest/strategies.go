@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,76 +12,22 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/Nishef1/ktest/internal/byedpi"
 	"github.com/Nishef1/ktest/internal/dnscheck"
 )
 
-// defaultStrategies is written next to the profiles by `ktest strategies -write`
-// and used when that editable file does not exist.
-//
-//go:embed byedpi-strategies.txt
-var defaultStrategies string
+// Keep the editable CLI file and Android on the same built-in catalog.
+var defaultStrategies = byedpi.DefaultStrategies
 
 // strategiesFile is the editable ByeDPI strategy list inside the portable folder.
 func strategiesFile(base string) string {
 	return filepath.Join(base, "profiles", "byedpi-strategies.txt")
 }
 
-// byeDPIStrategy is one candidate command line for ciadpi (without the listen
-// address, which ktest always supplies).
-type byeDPIStrategy struct {
-	Label string
-	Args  []string
-}
+type byeDPIStrategy = byedpi.Strategy
 
-// forbiddenStrategyFlags would move or detach the listener, which ktest has to
-// control to verify the right proxy and to stop it cleanly.
-var forbiddenStrategyFlags = map[string]bool{
-	"-i": true, "--ip": true, "-p": true, "--port": true,
-	"-D": true, "--daemon": true, "-w": true, "--pidfile": true,
-}
-
-// parseStrategies reads "label | arguments" lines. Blank lines and lines
-// starting with # are ignored. A line without "|" uses its arguments as label.
 func parseStrategies(r io.Reader) ([]byeDPIStrategy, error) {
-	var out []byeDPIStrategy
-	seen := map[string]bool{}
-	sc := bufio.NewScanner(r)
-	for n := 1; sc.Scan(); n++ {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		label, argText := line, line
-		if i := strings.Index(line, "|"); i >= 0 {
-			label, argText = strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:])
-		}
-		args := strings.Fields(argText)
-		if len(args) == 0 {
-			return nil, fmt.Errorf("line %d: no arguments", n)
-		}
-		for _, a := range args {
-			name := a
-			if i := strings.Index(a, "="); i > 0 {
-				name = a[:i]
-			}
-			if forbiddenStrategyFlags[name] {
-				return nil, fmt.Errorf("line %d: %s is set by ktest and not allowed in a strategy", n, name)
-			}
-		}
-		key := strings.Join(args, " ")
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, byeDPIStrategy{Label: label, Args: args})
-	}
-	if err := sc.Err(); err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, errors.New("no strategies found")
-	}
-	return out, nil
+	return byedpi.ParseStrategies(r)
 }
 
 // loadStrategies uses the editable file when present, else the built-in list.

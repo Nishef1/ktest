@@ -34,6 +34,8 @@ private data class Notice(val name: String, val detail: String, val license: Str
 // Distribution notices for the unmodified native executables shipped in the APK.
 // Keep in sync with docs/THIRD_PARTY_NOTICES.md and internal/aether/android-cores.json.
 private val notices = listOf(
+    Notice("ByeDPI v0.17.3", "hufrea · local anti-DPI strategies shared with desktop", "MIT",
+        "https://github.com/hufrea/byedpi/tree/v0.17.3"),
     Notice("Aether v2.3.0", "CluvexStudio · MASQUE / WireGuard core with Tor (Arti)", "AGPL-3.0",
         "https://github.com/CluvexStudio/Aether/tree/v2.3.0"),
     Notice("psiphon-tunnel-core", "CluvexStudio fork, shirokhorshid @ 83aa73b", "GPL-3.0",

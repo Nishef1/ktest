@@ -33,7 +33,7 @@ func StartNativeProxy(mode, method, libraryDir, stateDir string) (string, error)
 	if mode != "aether" && mode != "tor" && mode != "psiphon" {
 		return "", errors.New("managed native startup requires Aether, Tor or Psiphon mode")
 	}
-	return startProxy(mode, "", &nativeOptions{method, libraryDir, stateDir})
+	return startProxy(mode, "", &nativeOptions{method, libraryDir, stateDir}, "")
 }
 
 func nativeProfile(mode, method string) (aether.Profile, error) {

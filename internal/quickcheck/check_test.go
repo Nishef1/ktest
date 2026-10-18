@@ -7,10 +7,27 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestProbeIdentifiesItselfToServicesThatRejectGenericGoClients(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua := r.UserAgent()
+		if !strings.Contains(ua, "KTest") || !strings.Contains(ua, "https://github.com/Nishef1/ktest") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	r := checkTarget(context.Background(), srv.Client(), Target{"identified probe", srv.URL, http.MethodHead, 204})
+	if !r.Success || r.Status != 204 {
+		t.Fatalf("probe was refused because it did not identify itself: %+v", r)
+	}
+}
 
 func TestClosedProxyFailsRatherThanClaimingAccess(t *testing.T) {
 	// A closed loopback SOCKS listener must never produce an apparent success.

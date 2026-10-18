@@ -112,6 +112,9 @@ func checkTarget(ctx context.Context, client *http.Client, target Target) Result
 		return res
 	}
 	req.Header.Set("Cache-Control", "no-store")
+	// Wikimedia and other services reject the generic Go client User-Agent.
+	// Identify the diagnostic instead of misreporting that refusal as a bad route.
+	req.Header.Set("User-Agent", "KTest-Connectivity-Check/1.0 (+https://github.com/Nishef1/ktest)")
 	response, err := client.Do(req)
 	if err != nil {
 		res.Detail = err.Error()

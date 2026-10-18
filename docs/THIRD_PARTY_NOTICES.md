@@ -24,6 +24,16 @@ release, not the Windows or generic Linux Aether binary. Archive and per-file
 SHA-256 values are recorded in `internal/aether/android-cores.json`; the native
 packaging script verifies both levels before copying any file into `jniLibs`.
 
+Android also bundles the unmodified static ByeDPI v0.17.3 executables from
+[the official upstream release](https://github.com/hufrea/byedpi/releases/tag/v0.17.3)
+as `libciadpi.so`. Archive and executable SHA-256 values are pinned in
+`internal/byedpi/android-cores.json`; the packager verifies architecture and ELF
+load alignment, and the runtime checks the packaged executable hash before
+starting it. These static binaries require no host Linux dynamic linker. The
+upstream MIT license is retained at `THIRD_PARTY/ByeDPI-MIT.txt` and attributed
+in the app's notices. The original source is
+https://github.com/hufrea/byedpi/tree/v0.17.3; KTest does not modify it.
+
 The x86_64 Psiphon executable's Go build metadata identifies the source revision
 `83aa73b9b982e7421e00117f5b0c5aceb5dda452`, with `vcs.modified=false`; Aether's
 pinned build script uses the CluvexStudio/psiphon-tunnel-core fork's
