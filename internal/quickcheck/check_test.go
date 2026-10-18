@@ -155,14 +155,14 @@ func TestTikTokAndTelegramWebAreDistinctOptInTargets(t *testing.T) {
 }
 
 func TestRedirectIsNotProofThatFinalServiceOpened(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
-		http.Redirect(w,r,"/login",http.StatusFound)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/login", http.StatusFound)
 	}))
 	defer srv.Close()
 	client := srv.Client()
-	client.CheckRedirect = func(*http.Request,[]*http.Request) error { return http.ErrUseLastResponse }
-	got := CheckTarget(context.Background(),client,Target{Name:"media",URL:srv.URL,Method:http.MethodGet})
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	got := CheckTarget(context.Background(), client, Target{Name: "media", URL: srv.URL, Method: http.MethodGet})
 	if got.Success || !got.Reachable || got.Status != http.StatusFound {
-		t.Fatalf("redirect was counted as final service access: %+v",got)
+		t.Fatalf("redirect was counted as final service access: %+v", got)
 	}
 }
