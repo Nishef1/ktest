@@ -30,7 +30,7 @@ as `libciadpi.so`. Archive and executable SHA-256 values are pinned in
 `internal/byedpi/android-cores.json`; the packager verifies architecture and ELF
 load alignment, and the runtime checks the packaged executable hash before
 starting it. These static binaries require no host Linux dynamic linker. The
-upstream MIT license is retained at `THIRD_PARTY/ByeDPI-MIT.txt` and attributed
+upstream MIT license is included in the APK at `assets/third_party/ByeDPI-MIT.txt` and attributed
 in the app's notices. The original source is
 https://github.com/hufrea/byedpi/tree/v0.17.3; KTest does not modify it.
 
