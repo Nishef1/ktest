@@ -12,8 +12,9 @@ android {
         // Pinned HEV 2.19.0 requires Android 10; do not override its manifest.
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "8.0.0-preview.1"
+        // Monotonic Android package revision; not a CPU architecture version.
+        versionCode = 9
+        versionName = "0.3.1-preview"
         // The default device build remains ARM. Explicit x86_64 selection is
         // for emulator validation against the same packaged upstream cores.
         ndk { abiFilters += (providers.gradleProperty("ktestAbis").orNull
