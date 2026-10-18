@@ -93,6 +93,8 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or $got -ne $f.blob) {
               throw "Zapret2 upstream Git blob mismatch: $($f.dest)"
             }
+            $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+            Write-Host "PINNED_ZAPRET_SHA256 $($f.dest) $digest"
           }
           $driver = Get-AuthenticodeSignature -FilePath "$destination/WinDivert64.sys"
           if ($driver.Status -ne "Valid") { throw "WinDivert64.sys driver signature is not valid: $($driver.Status)" }
