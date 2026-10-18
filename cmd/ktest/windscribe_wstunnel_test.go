@@ -624,7 +624,7 @@ func TestWindscribeRoundRobinOnePerMethodBeforeRepeats(t *testing.T) {
 		for variant := range 19 {
 			name := fmt.Sprintf("WStunnel sni=s%d entry=192.0.2.%d hello=chrome", variant%3, variant+1)
 			candidates = append(candidates, wsCarrier{
-				name: fmt.Sprintf("%s m%d v%d", name, method, variant),
+				name:   fmt.Sprintf("%s m%d v%d", name, method, variant),
 				method: fmt.Sprintf("method-%02d", method),
 			})
 		}
@@ -668,7 +668,7 @@ func TestWindscribeUntriedPriorityIsPerMethodNotWholeInventory(t *testing.T) {
 	for method := range 4 {
 		for variant := range 3 {
 			cs = append(cs, wsCarrier{
-				name: fmt.Sprintf("WStunnel sni=a method%d variant%d", method, variant),
+				name:   fmt.Sprintf("WStunnel sni=a method%d variant%d", method, variant),
 				method: fmt.Sprintf("method-%d", method),
 			})
 		}
