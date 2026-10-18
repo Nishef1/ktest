@@ -57,10 +57,17 @@ type wsNodeCatalog struct {
 	readyOnce sync.Once
 	changed   chan struct{} // broadcast on provider updates and finished fetches
 	fetching  int
+	// Retain discovery diagnostics in memory; never persist transient errors.
+	sourceErrors map[string]string
+	unresolved   map[string]struct{} // requested exact OpenVPN IPs without a trusted mapping
 }
 
 func newWSNodeCatalog() *wsNodeCatalog {
-	return &wsNodeCatalog{lists: make(map[string]wsCatalogList), ready: make(chan struct{}), changed: make(chan struct{})}
+	return &wsNodeCatalog{
+		lists: make(map[string]wsCatalogList), ready: make(chan struct{}),
+		changed: make(chan struct{}), sourceErrors: make(map[string]string),
+		unresolved: make(map[string]struct{}),
+	}
 }
 
 // A cached or newly fetched *valid* source unblocks OpenVPN carrier discovery.
@@ -96,9 +103,13 @@ func (c *wsNodeCatalog) waitForTarget(ctx context.Context, tcp string, budget ti
 		pending, changed := c.fetching > 0, c.changed
 		c.mu.RUnlock()
 		if len(c.endpoints(tcp)) > 0 {
+			c.mu.Lock()
+			delete(c.unresolved, tcp)
+			c.mu.Unlock()
 			return true
 		}
 		if !pending {
+			c.markUnresolved(tcp)
 			return false
 		}
 		select {
@@ -106,9 +117,54 @@ func (c *wsNodeCatalog) waitForTarget(ctx context.Context, tcp string, budget ti
 		case <-ctx.Done():
 			return false
 		case <-timer.C:
+			if ctx.Err() == nil {
+				c.markUnresolved(tcp)
+			}
 			return false
 		}
 	}
+}
+
+func (c *wsNodeCatalog) markUnresolved(tcp string) {
+	c.mu.Lock()
+	if c.unresolved == nil {
+		c.unresolved = make(map[string]struct{})
+	}
+	c.unresolved[tcp] = struct{}{}
+	c.mu.Unlock()
+}
+
+func (c *wsNodeCatalog) hasUnresolvedTargets() bool {
+	c.mu.RLock()
+	keys := make([]string, 0, len(c.unresolved))
+	for key := range c.unresolved {
+		keys = append(keys, key)
+	}
+	c.mu.RUnlock()
+	for _, key := range keys {
+		if len(c.endpoints(key)) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// A diagnostic for the actual requested TCP destination, rather than a
+// misleading 0/0 as if every eligible anti-DPI method had been exhausted.
+func (c *wsNodeCatalog) diagnostic(tcp string) string {
+	reason := c.missingReason(tcp)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var errorsBySource []string
+	for _, source := range wsCatalogURLs {
+		if err := c.sourceErrors[source.name]; err != "" {
+			errorsBySource = append(errorsBySource, source.name+": "+err)
+		}
+	}
+	if len(errorsBySource) == 0 {
+		return reason
+	}
+	return reason + "; fetch errors: " + strings.Join(errorsBySource, "; ")
 }
 
 func (c *wsNodeCatalog) signalReady() {
@@ -198,6 +254,7 @@ func (c *wsNodeCatalog) replace(source string, body []byte, fetched time.Time) e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lists[source] = wsCatalogList{Fetched: fetched, Body: append(json.RawMessage(nil), body...), nodes: nodes}
+	delete(c.sourceErrors, source)
 	c.notifyLocked()
 	c.signalReady()
 	return nil
@@ -418,6 +475,12 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 			defer c.finishFetch()
 			err := c.updateFromSource(ctx, client, source)
 			if err != nil {
+				c.mu.Lock()
+				if c.sourceErrors == nil {
+					c.sourceErrors = make(map[string]string)
+				}
+				c.sourceErrors[source.name] = err.Error()
+				c.mu.Unlock()
 				logf("Windscribe node list %s unavailable: %v; retaining fresh cache", source.name, err)
 			} else {
 				updated <- struct{}{}
@@ -435,10 +498,22 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 func (c *wsNodeCatalog) run(ctx context.Context, client *http.Client, path string, logf func(string, ...any)) {
 	refreshed := c.refresh(ctx, client, path, logf)
 	c.signalReady() // no source succeeded: unblock with explicit missing mapping
+	// Successful downloads do not imply that the exact Windscribe TCP node
+	// was present. Retry a missing target early, then back off to avoid
+	// repeatedly downloading the provider's large catalog.
+	missingRetries := 0
 	for {
 		delay := 30 * time.Minute
 		if !refreshed {
 			delay = 30 * time.Second // bootstrap paths may become ready after startup
+		} else if c.hasUnresolvedTargets() {
+			delay = 45 * time.Second
+			if missingRetries > 0 {
+				delay = 5 * time.Minute
+			}
+			missingRetries++
+		} else {
+			missingRetries = 0
 		}
 		timer := time.NewTimer(delay)
 		select {
