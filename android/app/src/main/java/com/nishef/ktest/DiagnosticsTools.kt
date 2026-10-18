@@ -140,6 +140,14 @@ private fun DiagnoseTool(s: ToolsState, scope: CoroutineScope) {
     Segmented(listOf("tcp" to "Automatic", "tcp4" to "IPv4", "tcp6" to "IPv6"), s.diagNetwork,
         { s.diagNetwork = it }, enabled = !s.diagBusy)
     KField(s.diagTarget, { s.diagTarget = it }, "Destination URL", enabled = !s.diagBusy, keyboardType = KeyboardType.Uri)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SecondaryButton("TikTok", {
+            s.diagTarget = "https://www.tiktok.com/"
+        }, Modifier.weight(1f), busy = s.diagBusy)
+        SecondaryButton("Telegram Web", {
+            s.diagTarget = "https://web.telegram.org/a/"
+        }, Modifier.weight(1f), busy = s.diagBusy)
+    }
     PrimaryButton(if (s.diagBusy) "Testing…" else "Run diagnosis", {
         scope.runTool({ s.diagBusy = it }, { s.diagError = it }, "Diagnostic failed",
             { Mobilebridge.diagnoseNetwork(s.diagTarget.trim(), s.diagNetwork) }) { s.diagReport = it }
