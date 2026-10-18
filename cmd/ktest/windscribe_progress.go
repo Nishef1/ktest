@@ -278,7 +278,7 @@ func (v *wsProgressView) show(s wsProgressSnapshot, force bool) {
 		}
 		return
 	}
-	v.t.Line(k, "Windscribe %s | %d/%d tried, %d left, %d running | %s", title, s.tried, s.total, s.remaining, s.running, verdict)
+	v.t.Line(k, "%s | Windscribe %s | %d/%d tried, %d left, %d running", verdict, title, s.tried, s.total, s.remaining, s.running)
 }
 
 func (v *wsProgressView) summary(s wsProgressSnapshot) {
