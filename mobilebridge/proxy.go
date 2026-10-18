@@ -370,7 +370,13 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			if targetErr != nil {
 				return "", targetErr
 			}
-			for _, candidate := range fronter.Upstreams() {
+			// Balanced tests deterministic individual strategies; Fast retains the
+			// legacy in-family hedging, subject to the same exact-host opt-in.
+			candidates := fronter.Upstreams()
+			if mode == "fast" {
+				candidates = []smartproxy.Upstream{fronter.Upstream()}
+			}
+			for _, candidate := range candidates {
 				u := candidate
 				originalMatch := u.Match
 				u.Match = func(host string) bool {
