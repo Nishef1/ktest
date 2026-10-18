@@ -146,7 +146,7 @@ private fun KTestApp() {
                     putExtra(ProxyService.EXTRA_TITLE, activeMode.title)
                     putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
                     putExtra(ProxyService.EXTRA_METHOD, nativeMethod)
-                    putExtra(ProxyService.EXTRA_VPN, coverage == "vpn")
+                    putExtra(ProxyService.EXTRA_VPN, coverage != "proxy")
                 })
         } catch (e: Exception) {
             error = e.message ?: "Unable to start the connection"
@@ -311,7 +311,7 @@ private fun KTestApp() {
                                     })
                                     connecting = false
                                 } else if (activeMode.available && !connectBlocked) {
-                                    val consent = if (coverage == "vpn") VpnService.prepare(context) else null
+                                    val consent = if (coverage != "proxy") VpnService.prepare(context) else null
                                     if (consent != null) {
                                         connectAfterConsent = true
                                         vpnConsent.launch(consent)

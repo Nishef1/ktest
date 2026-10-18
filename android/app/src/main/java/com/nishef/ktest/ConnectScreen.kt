@@ -97,6 +97,7 @@ internal fun ConnectScreen(
                 status.optBoolean("frozen"), canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
         if (activeMode.id == "fast") Note("Fast connects without route calibration and adaptively compares the existing methods during use. Protected services still require a verified exit.")
+        PublicIpPanel(state == LinkState.Active)
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
         if (activeMode.id in nativeModes) {
@@ -143,7 +144,7 @@ private fun Hero(
                 modifier = Modifier.padding(horizontal = 24.dp))
             LinkState.Idle -> Text(
                 if (manualTesting) "Offline manual test · no VPN started"
-                else "${mode.title} · " + if (coverage == "vpn") "VPN for all apps" else "proxy apps only",
+                else "${mode.title} · " + when (coverage) { "vpn" -> "VPN for all apps"; "both" -> "VPN + local proxy"; else -> "proxy apps only" },
                 color = K.muted, fontSize = 13.sp, textAlign = TextAlign.Center
             )
         }
@@ -164,7 +165,7 @@ private fun Hero(
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Tag(mode.title, K.mint)
-                if (coverage == "vpn") Tag(if (vpnActive) "VPN · all apps" else "VPN starting…", if (vpnActive) K.cyan else K.amber)
+                if (coverage != "proxy") Tag(if (vpnActive) "VPN · all apps" else "VPN starting…", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
                 status.optString("exit_location").takeIf { it.isNotBlank() }?.let { Tag("Exit · $it", K.text) }
             }
@@ -277,25 +278,81 @@ private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> U
 
 @Composable
 private fun CoverageCard(coverage: String, onCoverage: (String) -> Unit, enabled: Boolean) {
+    val vpn = coverage != "proxy"
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconTile(if (coverage == "vpn") KIcons.Shield else KIcons.Phone, if (coverage == "vpn") K.cyan else K.muted)
+            IconTile(if (vpn) KIcons.Shield else KIcons.Phone, if (vpn) K.cyan else K.muted)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text("Coverage", color = K.muted, fontSize = 12.sp)
-                Text(if (coverage == "vpn") "VPN · whole device" else "Proxy apps only", color = K.text,
-                    fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text(when (coverage) { "vpn" -> "VPN · whole device"; "both" -> "VPN + proxy"; else -> "Proxy apps only" },
+                    color = K.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             }
-            if (coverage == "vpn") Tag("Beta", K.cyan)
+            if (vpn) Tag("Beta", K.cyan)
         }
-        Segmented(listOf("vpn" to "VPN", "proxy" to "Proxy only"), coverage, onCoverage, enabled = enabled)
+        Segmented(listOf("vpn" to "VPN", "both" to "Both", "proxy" to "Proxy"), coverage, onCoverage, enabled = enabled)
         Text(
-            if (coverage == "vpn") "Every app is routed through the selected mode. Android asks for VPN permission the first time. UDP other than DNS only passes through a verified foreign exit; apps fall back to TCP otherwise."
-            else "Only apps you point at the local SOCKS5 or HTTP address use KTest.",
+            when (coverage) {
+                "vpn" -> "Every app is routed through the selected mode. Android asks for VPN permission the first time. UDP other than DNS only passes through a verified foreign exit; apps fall back to TCP otherwise."
+                "both" -> "The VPN covers every app, and the local SOCKS5/HTTP addresses stay available for apps or devices you point at them."
+                else -> "Only apps you point at the local SOCKS5 or HTTP address use KTest."
+            },
             color = K.muted, fontSize = 12.sp, lineHeight = 17.sp
         )
     }
 }
+
+/** Regional-indicator emoji for an ISO country code, e.g. "GB" -> 🇬🇧. */
+internal fun flagOf(country: String): String =
+    if (country.length != 2 || !country.all { it in 'A'..'Z' }) "🌐"
+    else String(Character.toChars(0x1F1E6 + (country[0] - 'A'))) + String(Character.toChars(0x1F1E6 + (country[1] - 'A')))
+
+@Composable
+private fun PublicIpPanel(connected: Boolean) {
+    // "Before" is the plain network, kept from the last disconnected check.
+    var before by remember { mutableStateOf(lastDirectIp) }
+    var after by remember { mutableStateOf<JSONObject?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var refresh by remember { mutableIntStateOf(0) }
+    LaunchedEffect(connected, refresh) {
+        busy = true; error = null
+        val result = runCatching {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { JSONObject(Mobilebridge.publicIP(connected)) }
+        }
+        result.onSuccess { if (connected) after = it else { before = it; lastDirectIp = it; after = null } }
+            .onFailure { error = it.message }
+        busy = false
+    }
+    Panel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionLabel("Public IP")
+            Spacer(Modifier.weight(1f))
+            if (busy) CircularProgressIndicator(Modifier.size(16.dp), color = K.mint, strokeWidth = 2.dp)
+            else IconButton(onClick = { refresh++ }, modifier = Modifier.size(28.dp)) {
+                Icon(KIcons.Search, "Check IP again", tint = K.muted, modifier = Modifier.size(16.dp))
+            }
+        }
+        IpRow("Before", before, K.muted)
+        if (connected) IpRow("Now", after, K.mint)
+        error?.let { Note(it, Tone.Warn) }
+    }
+}
+
+@Composable
+private fun IpRow(label: String, info: JSONObject?, tint: androidx.compose.ui.graphics.Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = K.muted, fontSize = 13.sp, modifier = Modifier.width(64.dp))
+        Text(info?.optString("country")?.let(::flagOf) ?: "·", fontSize = 20.sp)
+        Spacer(Modifier.width(10.dp))
+        Text(info?.optString("ip") ?: "checking…", color = if (info != null) tint else K.faint,
+            fontSize = 15.sp, fontFamily = K.mono, modifier = Modifier.weight(1f))
+        info?.optString("country")?.takeIf { it.isNotBlank() }?.let { Tag(it, tint) }
+    }
+}
+
+/** Survives tab switches/recomposition within the process. */
+internal var lastDirectIp: JSONObject? = null
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
