@@ -277,10 +277,9 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		return b.carrierLocal(ctx, h, p)
 	}
 	type wsLeg struct {
-		suffix  string
-		method  string
-		tlsOnly bool
-		dial    func(context.Context, string) (net.Conn, error)
+		suffix string
+		method string
+		dial   func(context.Context, string) (net.Conn, error)
 	}
 	legs := []wsLeg{{method: "direct", dial: directDial}}
 	if b.methods == nil {
@@ -290,7 +289,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 			if method.IPv6Only {
 				continue
 			} // provider carrier entries are IPv4
-			legs = append(legs, wsLeg{suffix: " +" + method.Name, method: method.Name, tlsOnly: method.TLSOnly, dial: func(ctx context.Context, addr string) (net.Conn, error) {
+			legs = append(legs, wsLeg{suffix: " +" + method.Name, method: method.Name, dial: func(ctx context.Context, addr string) (net.Conn, error) {
 				h, p, err := net.SplitHostPort(addr)
 				if err != nil {
 					return nil, err
