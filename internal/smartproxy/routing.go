@@ -11,6 +11,7 @@ type routeScore struct {
 	wins, fails, failures, earlyFailures int
 	ewmaMS                               float64
 	coolUntil                            time.Time
+	rejected                             bool
 }
 
 type destinationMemory struct {
@@ -49,6 +50,7 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 	defer p.mu.Unlock()
 	var list []*upstreamState
 	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
+	m := p.memoryLocked(host, port)
 	for _, u := range p.ups {
 		if u.Match != nil && !u.Match(host) {
 			continue
@@ -56,9 +58,14 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 		if protected && (!u.Exit || !u.AIEligible || (p.aiPinned != "" && u.Name != p.aiPinned)) {
 			continue
 		}
+		if m != nil && u.Takeover != nil {
+			if s := m.routes[u.Name]; s != nil && s.rejected {
+				continue
+			}
+		}
 		list = append(list, u)
 	}
-	m, preferred := p.memoryLocked(host, port), p.preferredLocked(host, port)
+	preferred := p.preferredLocked(host, port)
 	now := time.Now()
 	score := func(u *upstreamState) *routeScore {
 		if m != nil {
@@ -141,6 +148,9 @@ func (p *Proxy) record(u *upstreamState, host, port string, ok bool, took time.D
 	}
 	m := p.historyLocked(host, port)
 	s := m.score(u.Name)
+	if ok && u.Takeover != nil && s.rejected {
+		return false // another connection's preparation cannot undo a client refusal
+	}
 	if !ok {
 		u.fails++
 		s.fails++
@@ -195,15 +205,16 @@ func (p *Proxy) rememberedName(host, port string) string {
 	return p.preferredLocked(host, port)
 }
 
-// An application refusal is definitive for this connection. Prefer another
-// route on its next attempt; never replay bytes after takeover has begun.
+// A client refusal makes this takeover ineligible while the exact destination's
+// history is live. A cooldown alone would still let it win a fallback hedge
+// before a slower end-to-end route. Never replay bytes after takeover has begun.
 func (p *Proxy) rejectTakeover(host, port, path string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	m := p.historyLocked(host, port)
 	s := m.score(path)
 	s.fails++
-	s.coolUntil = time.Now().Add(time.Minute)
+	s.rejected = true
 	if m.winner == path {
 		m.winner = ""
 	}

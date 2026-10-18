@@ -121,8 +121,13 @@ func TestRejectedTakeoverUsesAnAlternativeOnTheNextConnection(t *testing.T) {
 	events := make(chan Event, 8)
 	p, _ := New(Config{Upstreams: []Upstream{
 		{Name: "front", Takeover: func(context.Context, string, string, []byte) (Session, error) { return rejectedSession{}, nil }},
-		{Name: "end-to-end", Addr: fakeSocks(t, destination(t), true, &hits), Rank: 1},
-	}, OnEvent: func(e Event) { events <- e }})
+		{Name: "end-to-end", Addr: fakeSocks(t, destination(t), true, &hits), Rank: 1,
+			Send: func(c net.Conn, flight []byte) error {
+				time.Sleep(120 * time.Millisecond)
+				_, err := c.Write(flight)
+				return err
+			}},
+	}, Stagger: 40 * time.Millisecond, OnEvent: func(e Event) { events <- e }})
 	l, _ := net.Listen("tcp", "127.0.0.1:0")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -151,12 +156,35 @@ func TestRejectedTakeoverUsesAnAlternativeOnTheNextConnection(t *testing.T) {
 			}
 			defer w.release()
 			if w.path != "end-to-end" {
-				t.Fatalf("next connection chose %s", w.path)
+				t.Fatalf("rejected takeover beat the slower healthy route on the next connection: %s", w.path)
 			}
 			return
 		case <-time.After(2 * time.Second):
 			t.Fatal("no refusal event")
 		}
+	}
+}
+
+func TestRejectedTakeoverCannotBeRelearnedByAnInFlightAttempt(t *testing.T) {
+	p, _ := New(Config{Upstreams: []Upstream{
+		{Name: "front", Takeover: func(context.Context, string, string, []byte) (Session, error) { return rejectedSession{}, nil }},
+		{Name: "end-to-end", Rank: 1},
+	}})
+	front, direct := p.ups[0], p.ups[1]
+	p.record(front, "api.example.org", "443", true, time.Millisecond)
+	p.rejectTakeover("api.example.org", "443", "front")
+	p.record(direct, "api.example.org", "443", true, 300*time.Millisecond)
+	if p.record(front, "api.example.org", "443", true, time.Millisecond) {
+		t.Fatal("a concurrently prepared takeover was accepted after the client rejected it")
+	}
+	if got := p.rememberedName("api.example.org", "443"); got != "end-to-end" {
+		t.Fatalf("refused takeover replaced the healthy winner: %s", got)
+	}
+	if got := p.order("api.example.org", "443"); len(got) != 1 || got[0].Name != "end-to-end" {
+		t.Fatal("refused takeover is still a fallback candidate")
+	}
+	if got := p.order("assets.example.org", "443"); len(got) != 2 {
+		t.Fatal("one destination's refusal disabled fronting for another destination")
 	}
 }
 

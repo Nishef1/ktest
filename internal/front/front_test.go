@@ -467,8 +467,9 @@ func TestFrontSwitchesItselfOffWhenTheCAIsNotTrusted(t *testing.T) {
 	})
 	proxy := startProxy(t, f, make(chan smartproxy.Event, 16))
 	for i := 0; i < 4; i++ {
-		// The application trusts nothing of ours (empty pool).
-		conn, err := socksVia(t, proxy, "www.youtube.com", x509.NewCertPool())
+		// A refused destination is no longer retried. Independent destinations
+		// still establish whether the CA is generally untrusted by this client.
+		conn, err := socksVia(t, proxy, fmt.Sprintf("refusal-%d.youtube.com", i), x509.NewCertPool())
 		if err == nil {
 			conn.Close()
 			t.Fatal("handshake unexpectedly succeeded")

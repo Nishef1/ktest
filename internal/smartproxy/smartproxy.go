@@ -809,7 +809,7 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 			}
 			if !p.record(r.u, host, port, true, r.took) {
 				r.win.release()
-				lastErr = errors.New("another connection pinned a different foreign exit")
+				lastErr = errors.New("route became ineligible while connecting")
 				refill()
 				continue
 			}
