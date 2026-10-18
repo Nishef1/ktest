@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -40,12 +41,12 @@ func TestAndroidFrontCACreatesOnlyOnRequestAndExportsPublicCert(t *testing.T) {
 		t.Fatalf("generated CA must be explicitly untrusted: %+v", report)
 	}
 	dir := filepath.Join(root, androidFrontCADirectory)
-	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0700 {
+	if info, err := os.Stat(dir); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0700) {
 		t.Fatalf("CA directory is not private: %+v %v", info, err)
 	}
 	keyPath := filepath.Join(dir, front.KeyFile)
 	info, err := os.Stat(keyPath)
-	if err != nil || info.Mode().Perm() != 0600 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0600) {
 		t.Fatalf("CA private key permissions: %+v %v", info, err)
 	}
 	keyBefore, err := os.ReadFile(keyPath)
