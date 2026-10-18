@@ -729,8 +729,8 @@ func TestWindscribeRaceCapsCandidateCountWhileRotatingRetries(t *testing.T) {
 		return cs
 	}
 	_, _, _ = b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
-	if n := attempted.Load(); n != 24 {
-		t.Fatalf("unbounded carrier race: attempted %d of 80, want 24", n)
+	if n := attempted.Load(); n != 64 {
+		t.Fatalf("unbounded carrier race: attempted %d of 80, want 64", n)
 	}
 	// A second call advances the rotation rather than launching the same
 	// first candidate from the provider's list every time.
@@ -738,6 +738,44 @@ func TestWindscribeRaceCapsCandidateCountWhileRotatingRetries(t *testing.T) {
 	second := b.ordered("68.67.118.163:443", b.carriersFor("68.67.118.163"))[0].name
 	if first == second {
 		t.Fatalf("retries did not explore new SNI/IP candidates: %q", first)
+	}
+}
+
+// Fast failures should refill the queue within one Windscribe CONNECT,
+// without exceeding the outer-socket concurrency limit.
+func TestWindscribeRaceRefillsBoundedParallelQueue(t *testing.T) {
+	b := testBridge(&dialLog{})
+	b.stagger = time.Millisecond
+	var active, peak, attempted atomic.Int32
+	b.candidates = func(string) []wsCarrier {
+		var cs []wsCarrier
+		for i := range 80 {
+			cs = append(cs, wsCarrier{
+				name: fmt.Sprintf("WStunnel index=%d", i),
+				open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					attempted.Add(1)
+					n := active.Add(1)
+					for {
+						old := peak.Load()
+						if n <= old || peak.CompareAndSwap(old, n) {
+							break
+						}
+					}
+					defer active.Add(-1)
+					select {
+					case <-time.After(8 * time.Millisecond):
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					return nil, errors.New("simulated TLS failure")
+				},
+			})
+		}
+		return cs
+	}
+	_, _, _ = b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
+	if attempted.Load() != 64 || peak.Load() > 8 || peak.Load() < 2 {
+		t.Fatalf("queue did not refill with bounded parallelism: attempted=%d peak=%d", attempted.Load(), peak.Load())
 	}
 }
 
