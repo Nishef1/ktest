@@ -51,6 +51,7 @@ const usageText = `ktest: free access toolkit
   ktest doctor             diagnose this network and the package; changes nothing
     -mode windscribe       Windscribe-specific prerequisites/status; no reconnects
   ktest windscribe-test    fixed-entry SNI comparison (-target location-or-TCP-IP)
+    -zapret fake|split     opt-in Windows single-entry packet desync A/B (Administrator)
     -verify-vpn            CLI + one system HTTPS exit-IP check; no reconnects
   ktest aether-test        bounded per-network comparison (-budget 3m; optional -speed)
 
