@@ -7,6 +7,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.IBinder
 import android.os.SystemClock
 import kotlinx.coroutines.CancellationException
@@ -81,6 +84,46 @@ class ProxyService : Service() {
     private var startup: Job? = null
     @Volatile private var wanted = false
     @Volatile private var stopping = false
+    @Volatile private var networkWatch: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var networkInvalidated = false
+
+    // Balanced has immutable route selections. Rather than silently reuse a
+    // Wi-Fi route after a cellular handover, stop and require a fresh Connect.
+    private fun watchBalancedNetwork(expectedHandle: Long) {
+        clearNetworkWatch()
+        networkInvalidated = false
+        val manager = getSystemService(ConnectivityManager::class.java)
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (network.networkHandle != expectedHandle &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    invalidateBalancedNetwork()
+                }
+            }
+            override fun onLost(network: Network) {
+                if (network.networkHandle == expectedHandle) invalidateBalancedNetwork()
+            }
+        }
+        manager.registerDefaultNetworkCallback(cb)
+        networkWatch = cb
+    }
+
+    private fun invalidateBalancedNetwork() {
+        if (!wanted || networkInvalidated) return
+        networkInvalidated = true
+        lastError = "Underlying network changed. Balanced routes are stale; reconnect to recalibrate."
+        runCatching {
+            startService(Intent(this, ProxyService::class.java).apply { action = ACTION_STOP })
+        }
+    }
+
+    private fun clearNetworkWatch() {
+        val callback = networkWatch
+        networkWatch = null
+        if (callback != null) {
+            runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -115,7 +158,12 @@ class ProxyService : Service() {
                                         File(filesDir, "aether").absolutePath)
                                 } else if (mode == "balanced" || mode == "fast") {
                                     val privateDir = filesDir.canonicalPath
-                                    if (mode == "balanced") prepareBalancedNetwork(this@ProxyService)
+                                    if (mode == "balanced") {
+                                        prepareBalancedNetwork(this@ProxyService)
+                                        val net = getSystemService(ConnectivityManager::class.java).activeNetwork
+                                            ?: error("Underlying network disappeared before calibration")
+                                        watchBalancedNetwork(net.networkHandle)
+                                    }
                                     val enabled = checkedFrontingOptIn(this@ProxyService, privateDir)
                                     if (enabled) {
                                         // The user must explicitly opt in, and the exact CA must
@@ -176,6 +224,7 @@ class ProxyService : Service() {
                         wanted = false
                     } finally {
                         if (!wanted) {
+                            clearNetworkWatch()
                             connectedAt = 0
                             withContext(NonCancellable + Dispatchers.Main) { stopVpn() }
                             withContext(NonCancellable + Dispatchers.IO) {
@@ -190,6 +239,7 @@ class ProxyService : Service() {
                 }
             }
             ACTION_STOP -> {
+                clearNetworkWatch()
                 wanted = false
                 connectedAt = 0
                 stopVpn()
@@ -212,6 +262,7 @@ class ProxyService : Service() {
     }
 
     override fun onDestroy() {
+        clearNetworkWatch()
         wanted = false
         connectedAt = 0
         stopVpn()
