@@ -191,6 +191,11 @@ func NewDoHType(endpoints []DoHEndpoint, dial DialFunc, roots *x509.CertPool, qt
 		if err := json.Unmarshal(body, &ans); err != nil {
 			return nil, 0, err
 		}
+		// A DNS error response must never be accepted as a successful lookup,
+		// even if its Answer section contains parseable addresses.
+		if ans.Status != 0 {
+			return nil, 0, fmt.Errorf("%s: DoH response status %d from %s", host, ans.Status, u.Host)
+		}
 		var out []string
 		ttl := 300
 		for _, a := range ans.Answer {
