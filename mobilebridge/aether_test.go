@@ -2,6 +2,7 @@ package mobilebridge
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +47,34 @@ func TestAetherCatalogPreservesAndroidModeAndIdentityBoundaries(t *testing.T) {
 		if _, err := AetherProfileCatalog(tc[0], tc[1]); err == nil {
 			t.Fatalf("invalid mode/method accepted: %v", tc)
 		}
+	}
+}
+
+func TestAndroidAutomaticAetherMethodIsNotAdvertisedAsCrossMethodRace(t *testing.T) {
+	raw, err := AetherProfileCatalog("aether", "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Methods []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"methods"`
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, choice := range result.Methods {
+		if choice.ID == "auto" {
+			found = true
+			if choice.Title != "Automatic (first compatible profile)" {
+				t.Fatalf("Android claims to compare methods without implementing it: %q", choice.Title)
+			}
+		}
+	}
+	if !found || !strings.Contains(result.Note, "first compatible profile") {
+		t.Fatalf("inaccurate automatic method description: %+v", result)
 	}
 }
