@@ -80,6 +80,14 @@ Passing it establishes Java/Kotlin source compatibility, including callback sign
 - Selection and verification are distinct: Tor requires an authenticated Tor egress check; Psiphon and Aether require a verified foreign exit. A native process launch, SOCKS listener, UI `Auto`, or VPN adapter does not by itself prove any of these. Android `Auto` currently chooses the *first compatible profile*, then the Aether core handles native gateway selection; it does **not** compare multiple Aether methods in parallel. The UI describes that explicitly.
 - Android still needs device/ISP-based checks for sustained Tor, Psiphon and Aether traffic, native-helper crashes, reconnect and resource usage. Neither the APK hashes nor desktop CI prove this.
 
+## Optional local CA generator (manual Android trust)
+
+Settings → **Local certificate generator** now reuses the **same Go `internal/front` CA generator as the Windows CLI**. The user taps **Generate local CA** to create an ECDSA P-256, two-year, name-constrained CA in `Context.filesDir/fronting-ca/`. The private key (`ktest-ca.key`) remains in app-private storage and is **never returned through the Go/Java bridge, saved by the Android document picker, included in an APK, or installed into the Android trust store**. Generation never silently overwrites an existing or partial CA.
+
+**Save public certificate (.crt)** uses Android's `ACTION_CREATE_DOCUMENT` picker and exports only `ktest-ca.crt` in PEM form. To trust it manually, find **Android Settings → Security & privacy → More security settings → Encryption & credentials → Install a certificate → CA certificate** (menu names vary by vendor and Android version), select the exported file, and approve Android's security prompt. It may be necessary to choose a screen lock. The in-app status means only *created and locally validated*: it intentionally never claims Android system trust, domain-fronting availability or access to a site. Android 7+ apps generally do **not** automatically trust user-installed CAs, and TLS-pinning apps can refuse them even if they are installed.
+
+This feature does **not** activate the desktop domain-fronting MITM route on Android. Installing a CA alone cannot enable packet processing or bypass filtering. To reverse trust, remove the user-installed CA via the Android system credential settings. Uninstalling KTest deletes the private key but **does not remove a manually installed Android trust anchor**; users should remove it separately. Do not export/share the key file or install CAs from untrusted sources.
+
 ## Native Aether packaging
 
 The official v2.3.0 release includes dedicated Android arm64, ARMv7 and x86_64
