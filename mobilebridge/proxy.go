@@ -213,9 +213,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 	}
 	startContext, startCancel := context.WithTimeout(parent, budget)
-	if localStateDir != "" && (mode == "balanced" || mode == "fast") {
+	if localStateDir != "" && mode == "balanced" {
 		startCancel()
-		startContext, startCancel = context.WithCancel(parent)
+		startContext, startCancel = context.WithTimeout(parent, 3*time.Minute)
 	}
 	startup := &proxyStartup{mode: mode, phase: "preparing", cancel: startCancel}
 	pendingProxy, proxyFailure = startup, ""
@@ -275,7 +275,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	var xrayError string
 	keepLocal := false
 	if localDir != "" {
-		localCores, err = launchAndroidLocalCores(startContext, localDir, localStateDir != "")
+		localCores, err = launchAndroidLocalCores(startContext, localDir, localStateDir != "" && mode == "balanced")
 		if err != nil {
 			return "", err
 		}
@@ -389,7 +389,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 	}
 	var routeProfile *routeplan.Profile
-	if localStateDir != "" && (mode == "balanced" || mode == "fast") {
+	if localStateDir != "" && mode == "balanced" {
 		proxyMu.Lock()
 		if pendingProxy == startup {
 			startup.phase = "calibrating"
