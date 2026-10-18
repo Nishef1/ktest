@@ -77,17 +77,19 @@ internal fun ConnectScreen(
     nativeMethod: String, onNativeMethod: (String) -> Unit,
     error: String?, onDismissError: () -> Unit,
     routeReport: JSONObject?, checkingRoute: Boolean, onCheckRoute: () -> Unit,
+    coverage: String, vpnActive: Boolean, onCoverage: (String) -> Unit,
     onMode: (String) -> Unit, onPower: () -> Unit, onCopy: (String) -> Unit
 ) {
     val locked = state == LinkState.Active || state == LinkState.Connecting
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Hero(activeMode, state, status, upstream, onPower)
+        Hero(activeMode, state, status, upstream, coverage, vpnActive, onPower)
         AnimatedVisibility(error != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
             Banner(error.orEmpty(), Tone.Danger, onDismissError)
         }
         if (state == LinkState.Active) {
             EndpointsPanel(status, routeReport, checkingRoute, onCheckRoute, onCopy)
         }
+        CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
         if (activeMode.id in nativeModes) {
             NativeMethodPanel(activeMode.id, nativeMethod, onNativeMethod, !locked)
@@ -95,12 +97,15 @@ internal fun ConnectScreen(
         if (activeMode.available && activeMode.id in listOf("balanced", "fast", "aether")) {
             UpstreamPanel(activeMode.id, upstream, onUpstream, !locked)
         }
-        UsagePanel()
+        if (coverage != "vpn") UsagePanel()
     }
 }
 
 @Composable
-private fun Hero(mode: ConnectionMode, state: LinkState, status: JSONObject, upstream: String, onPower: () -> Unit) {
+private fun Hero(
+    mode: ConnectionMode, state: LinkState, status: JSONObject, upstream: String,
+    coverage: String, vpnActive: Boolean, onPower: () -> Unit
+) {
     val phase = status.optString("phase")
     Column(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         PowerOrb(state, onPower)
@@ -128,9 +133,7 @@ private fun Hero(mode: ConnectionMode, state: LinkState, status: JSONObject, ups
                 color = K.amber, fontSize = 13.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 24.dp))
             LinkState.Idle -> Text(
-                if (mode.id in nativeModes && (mode.id != "aether" || upstream.isBlank()))
-                    "${mode.title} · packaged core · proxy apps only"
-                else "${mode.title} · local SOCKS5 + HTTP proxy",
+                "${mode.title} · " + if (coverage == "vpn") "VPN for all apps" else "proxy apps only",
                 color = K.muted, fontSize = 13.sp, textAlign = TextAlign.Center
             )
         }
@@ -150,6 +153,7 @@ private fun Hero(mode: ConnectionMode, state: LinkState, status: JSONObject, ups
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Tag(mode.title, K.mint)
+                if (coverage == "vpn") Tag(if (vpnActive) "VPN · all apps" else "VPN starting…", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
                 status.optString("exit_location").takeIf { it.isNotBlank() }?.let { Tag("Exit · $it", K.text) }
             }
@@ -251,6 +255,28 @@ private fun PowerOrb(state: LinkState, onClick: () -> Unit) {
             drawCircle(if (active) K.mint.copy(alpha = .35f) else K.strokeStrong, r * .6f, style = Stroke(1.dp.toPx()))
         }
         Icon(KIcons.Power, null, tint = iconColor, modifier = Modifier.size(64.dp))
+    }
+}
+
+@Composable
+private fun CoverageCard(coverage: String, onCoverage: (String) -> Unit, enabled: Boolean) {
+    Panel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconTile(if (coverage == "vpn") KIcons.Shield else KIcons.Phone, if (coverage == "vpn") K.cyan else K.muted)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Coverage", color = K.muted, fontSize = 12.sp)
+                Text(if (coverage == "vpn") "VPN · whole device" else "Proxy apps only", color = K.text,
+                    fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            }
+            if (coverage == "vpn") Tag("Beta", K.cyan)
+        }
+        Segmented(listOf("vpn" to "VPN", "proxy" to "Proxy only"), coverage, onCoverage, enabled = enabled)
+        Text(
+            if (coverage == "vpn") "Every app is routed through the selected mode. Android asks for VPN permission the first time. UDP other than DNS only passes through a verified foreign exit; apps fall back to TCP otherwise."
+            else "Only apps you point at the local SOCKS5 or HTTP address use KTest.",
+            color = K.muted, fontSize = 12.sp, lineHeight = 17.sp
+        )
     }
 }
 

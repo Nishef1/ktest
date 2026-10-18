@@ -83,6 +83,9 @@ private fun KTestApp() {
     var checkingRoute by remember { mutableStateOf(false) }
     var routeReport by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var coverage by rememberSaveable { mutableStateOf(prefs.getString("coverage", "vpn") ?: "vpn") }
+    var vpnState by remember { mutableStateOf(KTestVpnService.state) }
+    var connectAfterConsent by remember { mutableStateOf(false) }
     val tools = remember { ToolsState() }
     val settings = remember { SettingsState() }
     val running = status.optBoolean("running")
@@ -106,11 +109,37 @@ private fun KTestApp() {
             error = e.message ?: "Unable to start the Android VPN adapter"
         }
     }
+    val launchConnect: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED) {
+            notificationConsent.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        connecting = true
+        routeReport = null
+        ProxyService.lastError = null
+        try {
+            ContextCompat.startForegroundService(context,
+                Intent(context, ProxyService::class.java).apply {
+                    action = ProxyService.ACTION_CONNECT
+                    putExtra(ProxyService.EXTRA_MODE, activeMode.id)
+                    putExtra(ProxyService.EXTRA_TITLE, activeMode.title)
+                    putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
+                    putExtra(ProxyService.EXTRA_METHOD, nativeMethod)
+                    putExtra(ProxyService.EXTRA_VPN, coverage == "vpn")
+                })
+        } catch (e: Exception) {
+            error = e.message ?: "Unable to start the connection"
+            connecting = false
+        }
+    }
     val vpnConsent = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) startVpn()
-        else error = "Android VPN permission was not granted"
+        val resume = connectAfterConsent
+        connectAfterConsent = false
+        if (result.resultCode == Activity.RESULT_OK) { if (resume) launchConnect() else startVpn() }
+        else error = "Android VPN permission was not granted. Choose \"Proxy apps only\" to connect without a VPN."
     }
     val copy: (String) -> Unit = { text ->
         (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
@@ -132,6 +161,8 @@ private fun KTestApp() {
                 error = status.optString("error")
             }
             if (ProxyService.lastError != null) error = ProxyService.lastError
+            vpnState = KTestVpnService.state
+            if (vpnState == "failed" && KTestVpnService.lastError != null && running) error = "VPN: ${KTestVpnService.lastError}"
             delay(900)
         }
     }
@@ -189,6 +220,8 @@ private fun KTestApp() {
                                     ProxyService.lastError = null
                                 }
                             },
+                            coverage = coverage, vpnActive = vpnState == "tun_running_unverified",
+                            onCoverage = { coverage = it; prefs.edit().putString("coverage", it).apply() },
                             onPower = {
                                 error = null
                                 if (running || connecting) {
@@ -197,27 +230,11 @@ private fun KTestApp() {
                                     })
                                     connecting = false
                                 } else if (activeMode.available) {
-                                    if (Build.VERSION.SDK_INT >= 33 &&
-                                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
-                                        != PackageManager.PERMISSION_GRANTED) {
-                                        notificationConsent.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    }
-                                    connecting = true
-                                    routeReport = null
-                                    ProxyService.lastError = null
-                                    try {
-                                        ContextCompat.startForegroundService(context,
-                                            Intent(context, ProxyService::class.java).apply {
-                                                action = ProxyService.ACTION_CONNECT
-                                                putExtra(ProxyService.EXTRA_MODE, activeMode.id)
-                                                putExtra(ProxyService.EXTRA_TITLE, activeMode.title)
-                                                putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
-                                                putExtra(ProxyService.EXTRA_METHOD, nativeMethod)
-                                            })
-                                    } catch (e: Exception) {
-                                        error = e.message ?: "Unable to start the connection"
-                                        connecting = false
-                                    }
+                                    val consent = if (coverage == "vpn") VpnService.prepare(context) else null
+                                    if (consent != null) {
+                                        connectAfterConsent = true
+                                        vpnConsent.launch(consent)
+                                    } else launchConnect()
                                 }
                             },
                             onCopy = copy

@@ -73,12 +73,13 @@ var vpnMu sync.Mutex
 var packetAdapter AndroidVpnPacketAdapter
 var vpnActive bool
 
-// SOCKS UDP and encrypted wire DNS now exist and have loopback integration
-// coverage. These gates mean validated end-to-end Android readiness: a
-// live dual-stack foreign UDP exit and HEV/TUN path are still required.
-// Protocol implementation alone must not reroute the user's entire device.
-const coreSOCKSUDPReady = false
-const coreIPv6VPNReady = false
+// The Android packet path (HEV tun2socks -> Go SOCKS with UDP ASSOCIATE and
+// encrypted packet DNS) is enabled as a user-consented beta. Non-DNS UDP is
+// still only relayed through a verified foreign exit and never sent directly,
+// so apps fall back to TCP where a mode cannot carry UDP. These remain
+// variables so tests and future regressions can close the gate again.
+var coreSOCKSUDPReady = true
+var coreIPv6VPNReady = true
 
 // SetAndroidVpnPacketAdapter registers an OS-only packet adapter. No transport
 // or policy is implemented here. Once a native driver exists, Android calls
@@ -127,7 +128,7 @@ func vpnReportLocked() vpnReport {
 				state.Reason = "Packet adapter is running; verify actual traffic and DNS before claiming connectivity."
 			}
 		} else {
-			state.Reason = "Packet routing prerequisites met; Android VPN permission is required."
+			state.Reason = "Packet routing is available (beta); Android VPN permission is required."
 		}
 	}
 	return state

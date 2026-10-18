@@ -17,9 +17,11 @@ func (d *fakePacketAdapter) IsRunning() bool        { return d.starts > d.stops 
 func (d *fakePacketAdapter) SupportsUDP() bool      { return true }
 func (d *fakePacketAdapter) SupportsIPv6() bool     { return true }
 
-func TestVpnPortRefusesUnvalidatedAndroidPacketPath(t *testing.T) {
+func TestVpnPortRefusesWhenPacketGateIsClosed(t *testing.T) {
 	StopVpnTun()
 	defer SetAndroidVpnPacketAdapter(nil)
+	coreSOCKSUDPReady = false
+	defer func() { coreSOCKSUDPReady = true }()
 	d := &fakePacketAdapter{}
 	SetAndroidVpnPacketAdapter(d)
 	if _, err := StartProxy("balanced"); err != nil {
@@ -30,20 +32,40 @@ func TestVpnPortRefusesUnvalidatedAndroidPacketPath(t *testing.T) {
 	if err := json.Unmarshal([]byte(VpnCapability()), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Available || report.Active || !report.ProxyRunning ||
-		!report.SOCKSUDPImplemented || !report.PacketDNSImplemented ||
-		!strings.Contains(report.Reason, "not validated") {
-		t.Fatalf("protocol implementation must not be advertised as device VPN readiness: %+v", report)
+	if report.Available || report.Active || !strings.Contains(report.Reason, "not validated") {
+		t.Fatalf("closed gate advertised VPN readiness: %+v", report)
 	}
-	if err := AttachVpnTun(5); err == nil {
-		t.Fatal("native backend was allowed to attach an unsupported Go transport")
+	if err := AttachVpnTun(5); err == nil || d.starts != 0 {
+		t.Fatalf("closed gate attached the packet adapter: %v starts=%d", err, d.starts)
 	}
-	if d.starts != 0 {
-		t.Fatalf("native driver was called despite missing UDP support: %d", d.starts)
-	}
+}
+
+func TestVpnAttachesAdapterToLiveSOCKSAndStopsWithProxy(t *testing.T) {
 	StopVpnTun()
-	if d.stops != 0 {
-		t.Fatal("stop was called despite no active native session")
+	defer SetAndroidVpnPacketAdapter(nil)
+	d := &fakePacketAdapter{}
+	SetAndroidVpnPacketAdapter(d)
+	if err := AttachVpnTun(5); err == nil {
+		t.Fatal("VPN attached without a running proxy")
+	}
+	if _, err := StartProxy("balanced"); err != nil {
+		t.Fatal(err)
+	}
+	var report vpnReport
+	_ = json.Unmarshal([]byte(VpnCapability()), &report)
+	if !report.Available {
+		t.Fatalf("VPN unavailable with proxy and adapter: %+v", report)
+	}
+	if err := AttachVpnTun(5); err != nil || d.starts != 1 {
+		t.Fatalf("attach failed: %v starts=%d", err, d.starts)
+	}
+	_ = json.Unmarshal([]byte(VpnCapability()), &report)
+	if !report.Active {
+		t.Fatalf("attached VPN not reported active: %+v", report)
+	}
+	StopProxy()
+	if d.stops != 1 {
+		t.Fatalf("proxy stop left the packet adapter running: stops=%d", d.stops)
 	}
 }
 

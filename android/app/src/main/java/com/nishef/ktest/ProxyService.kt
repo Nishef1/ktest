@@ -37,6 +37,7 @@ class ProxyService : Service() {
         const val EXTRA_UPSTREAM = "upstream"
         const val EXTRA_METHOD = "method"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_VPN = "vpn"
         private const val CHANNEL = "ktest_proxy"
         private const val NOTIFICATION_ID = 42
         @Volatile var lastError: String? = null
@@ -67,6 +68,7 @@ class ProxyService : Service() {
                 val upstream = intent.getStringExtra(EXTRA_UPSTREAM).orEmpty()
                 val method = intent.getStringExtra(EXTRA_METHOD) ?: "auto"
                 val title = intent.getStringExtra(EXTRA_TITLE) ?: mode.replaceFirstChar { it.uppercase() }
+                val vpn = intent.getBooleanExtra(EXTRA_VPN, false)
                 wanted = true
                 lastError = null
                 connectedAt = 0
@@ -87,6 +89,9 @@ class ProxyService : Service() {
                         }
                         if (wanted) {
                             connectedAt = SystemClock.elapsedRealtime()
+                            // Whole-device coverage: Android consent was obtained by the UI;
+                            // the VPN service attaches HEV to this verified SOCKS listener.
+                            if (vpn) withContext(Dispatchers.Main) { startVpn() }
                             getSystemService(NotificationManager::class.java)
                                 .notify(NOTIFICATION_ID, notification(title, true))
                         }
@@ -107,6 +112,7 @@ class ProxyService : Service() {
                     } finally {
                         if (!wanted) {
                             connectedAt = 0
+                            withContext(NonCancellable + Dispatchers.Main) { stopVpn() }
                             withContext(NonCancellable + Dispatchers.IO) {
                                 mutex.withLock { Mobilebridge.stopProxy() }
                                 withContext(Dispatchers.Main) {
@@ -121,6 +127,7 @@ class ProxyService : Service() {
             ACTION_STOP -> {
                 wanted = false
                 connectedAt = 0
+                stopVpn()
                 stopping = true
                 startup?.cancel()
                 // Invalidate a blocked/slow Go startup immediately.
@@ -142,6 +149,7 @@ class ProxyService : Service() {
     override fun onDestroy() {
         wanted = false
         connectedAt = 0
+        stopVpn()
         startup?.cancel()
         Mobilebridge.cancelProxyStart()
         worker.launch(NonCancellable) {
@@ -149,6 +157,23 @@ class ProxyService : Service() {
         }
         worker.cancel()
         super.onDestroy()
+    }
+
+    private fun startVpn() {
+        try {
+            startForegroundService(Intent(this, KTestVpnService::class.java).apply {
+                action = KTestVpnService.ACTION_START
+            })
+        } catch (e: Exception) {
+            lastError = e.message ?: "Unable to start the Android VPN"
+        }
+    }
+
+    private fun stopVpn() {
+        if (KTestVpnService.state == "disconnected") return
+        runCatching {
+            startService(Intent(this, KTestVpnService::class.java).apply { action = KTestVpnService.ACTION_STOP })
+        }
     }
 
     private fun notification(title: String, active: Boolean = false): Notification {

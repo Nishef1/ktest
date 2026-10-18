@@ -17,6 +17,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import mobilebridge.Mobilebridge
 import org.json.JSONObject
 
@@ -82,17 +84,24 @@ class KTestVpnService : VpnService() {
                         // Excluding only this UID prevents accidental recursion
                         // through its TUN; it does NOT bypass unrelated apps.
                         val plan = JSONObject(Mobilebridge.vpnTunPlan())
-                        val tunDevice = Builder()
+                        val builder = Builder()
                             .setSession("KTest")
                             .setMtu(plan.getInt("mtu"))
                             .addAddress(plan.getString("ipv4_address"), plan.getInt("ipv4_prefix"))
-                            .addAddress(plan.getString("ipv6_address"), plan.getInt("ipv6_prefix"))
                             .addRoute(plan.getString("ipv4_route"), 0)
-                            .addRoute(plan.getString("ipv6_route"), 0)
                             .addDnsServer(plan.getString("ipv4_dns"))
-                            .addDnsServer(plan.getString("ipv6_dns"))
                             .addDisallowedApplication(packageName)
-                            .establish() ?: error("Android did not establish the TUN interface")
+                        // The proxy acknowledges SOCKS CONNECT before dialing, so an IPv6
+                        // route without real IPv6 egress makes apps hang on dead v6
+                        // destinations. Without a v6 route Android fails IPv6 inside the
+                        // VPN immediately (no leak) and apps fall back to IPv4.
+                        if (underlyingHasGlobalIpv6()) {
+                            builder.addAddress(plan.getString("ipv6_address"), plan.getInt("ipv6_prefix"))
+                                .addRoute(plan.getString("ipv6_route"), 0)
+                                .addDnsServer(plan.getString("ipv6_dns"))
+                        }
+                        val tunDevice = builder.establish()
+                            ?: error("Android did not establish the TUN interface")
 
                         tun = tunDevice
                         // Go, not this Android service, must drive a real
@@ -104,8 +113,23 @@ class KTestVpnService : VpnService() {
                         }
                         state = "tun_running_unverified"
                         startForeground(NOTIFICATION_ID, notification(
-                            "Packet adapter running; destination traffic not yet verified"
+                            "All apps are routed through KTest"
                         ))
+                        // Fail closed: if the Go proxy or HEV stops, tear the TUN down
+                        // instead of leaving a black-holed interface behind.
+                        while (isActive) {
+                            delay(1500)
+                            if (!JSONObject(Mobilebridge.vpnCapability()).optBoolean("active")) {
+                                lastError = "Connection stopped; VPN closed"
+                                break
+                            }
+                        }
+                        withContext(NonCancellable + Dispatchers.Main) {
+                            closeTunnel()
+                            state = "disconnected"
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelfResult(startId)
+                        }
                     } catch (e: CancellationException) {
                         // User or Android revoked the service while checking.
                         throw e
@@ -150,6 +174,17 @@ class KTestVpnService : VpnService() {
         super.onDestroy()
     }
 
+    private fun underlyingHasGlobalIpv6(): Boolean = runCatching {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java)
+        val props = cm.getLinkProperties(cm.activeNetwork) ?: return false
+        val global = props.linkAddresses.any { la ->
+            val a = la.address
+            a is java.net.Inet6Address && !a.isLinkLocalAddress && !a.isSiteLocalAddress &&
+                !a.isLoopbackAddress && (a.address[0].toInt() and 0xfe) != 0xfc
+        }
+        global && props.routes.any { it.isDefaultRoute && it.destination.address is java.net.Inet6Address }
+    }.getOrDefault(false)
+
     private fun closeTunnel() {
         Mobilebridge.stopVpnTun()
         runCatching { tun?.close() }
@@ -165,11 +200,11 @@ class KTestVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_ktest)
-            .setContentTitle("KTest · Go VPN adapter")
+            .setContentTitle("KTest VPN")
             .setContentText(detail)
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Disconnect VPN", stop).build())
+            .addAction(Notification.Action.Builder(null, "Stop VPN", stop).build())
             .build()
     }
 }
