@@ -164,3 +164,36 @@ func TestWindscribeProgressRenderingNeverRunsInsideCarrierWorkers(t *testing.T) 
 		t.Fatal("queued progress could not be rendered by the live feed")
 	}
 }
+
+func TestWindscribeCompactProgressDeduplicatesForcedEvents(t *testing.T) {
+	var out bytes.Buffer
+	v := &wsProgressView{t: plainTerm(&out)}
+	snapshot := wsProgressSnapshot{key: "203.0.113.100:443", total: 281, tried: 0, remaining: 281}
+	for i := 0; i < 20; i++ {
+		v.show(snapshot, true)
+	}
+	if got := strings.Count(out.String(), "Windscribe 203.0.113.100:443"); got != 1 {
+		t.Fatalf("unchanged events generated %d duplicate panels:\n%s", got, out.String())
+	}
+	if strings.Contains(out.String(), "ByeDPI") {
+		t.Fatal("method inventory should appear only in final summary")
+	}
+}
+
+func TestWindscribeSummaryRetainsFullMethodDetails(t *testing.T) {
+	var out bytes.Buffer
+	v := &wsProgressView{t: plainTerm(&out)}
+	snapshot := wsProgressSnapshot{
+		key: "203.0.113.100:443", total: 2, tried: 1, remaining: 1,
+		methods: []wsMethodProgress{{name: "ByeDPI", tried: 1, total: 2, last: "TLS reset"}},
+		inapplicable: []string{"IPv6-only"},
+	}
+	v.show(snapshot, true)
+	if strings.Contains(out.String(), "TLS reset") {
+		t.Fatal("live feed printed the full method table")
+	}
+	v.summary(snapshot)
+	if !strings.Contains(out.String(), "ByeDPI: 1/2 tried | TLS reset") || !strings.Contains(out.String(), "Not applicable to IPv4") {
+		t.Fatalf("final summary lost diagnostic detail: %s", out.String())
+	}
+}
