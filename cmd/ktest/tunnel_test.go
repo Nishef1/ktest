@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -40,5 +41,15 @@ func TestSystemRouteProofRequiresTheTunnelSource(t *testing.T) {
 		if got := parseSystemRouteResult("https://example.com", c.output, nil); got.ok != c.ok {
 			t.Fatalf("%q: %+v", c.output, got)
 		}
+	}
+}
+
+func TestTunnelRestoresResolverOnceEvenAfterNativeExitAndManualStop(t *testing.T) {
+	var calls atomic.Int32
+	tn := &tunnel{restore: func() { calls.Add(1) }}
+	tn.restoreDNS()
+	tn.restoreDNS()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("resolver cleanup executed %d times", got)
 	}
 }
