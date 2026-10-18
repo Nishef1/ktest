@@ -242,9 +242,13 @@ func (b *wsBridge) progressSnapshot(key string) wsProgressSnapshot {
 		}
 	}
 	// Missing provider mapping is incomplete discovery, not exhausted coverage.
-	s.incomplete = b.opts.direct && b.opts.serverIP == "" && b.catalog != nil && len(b.catalog.endpoints(wsProgressHost(key))) == 0
+	s.incomplete = b.opts.direct && b.opts.serverIP == "" && (b.catalog == nil || len(b.catalog.endpoints(wsProgressHost(key))) == 0)
 	if s.incomplete {
-		s.mappingReason = b.catalog.diagnostic(wsProgressHost(key))
+		if b.catalog == nil {
+			s.mappingReason = "catalog disabled"
+		} else {
+			s.mappingReason = b.catalog.diagnostic(wsProgressHost(key))
+		}
 	}
 	return s
 }
