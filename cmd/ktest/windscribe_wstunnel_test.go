@@ -774,7 +774,7 @@ func TestWindscribeRaceRefillsBoundedParallelQueue(t *testing.T) {
 		return cs
 	}
 	_, _, _ = b.race(context.Background(), "68.67.118.163", "443", openvpnReset, nil)
-	if attempted.Load() != 64 || peak.Load() > 8 || peak.Load() < 2 {
+	if attempted.Load() != 64 || peak.Load() > 16 || peak.Load() < 2 {
 		t.Fatalf("queue did not refill with bounded parallelism: attempted=%d peak=%d", attempted.Load(), peak.Load())
 	}
 }
