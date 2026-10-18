@@ -23,8 +23,8 @@ import (
 func TestUnknownWindscribeNodeDoesNotInventNeighbourAddresses(t *testing.T) {
 	b := newWSBridge(wsOptions{direct: true, sni: "www.speedtest.net"}, nil, nil, func(string, ...any) {})
 	cs := b.carriersFor("203.0.113.101")
-	if len(cs) != 1 || cs[0].name != "raw OpenVPN +anti-DPI" {
-		t.Fatalf("unknown node must keep only its original raw destination; got %+v", cs)
+	if len(cs) != 0 {
+		t.Fatalf("unknown node must not invent neighbors or fall back to raw OpenVPN: %+v", cs)
 	}
 }
 
@@ -589,13 +589,16 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 		names = append(names, c.name)
 	}
 	all := strings.Join(names, "\n")
-	for _, want := range []string{"CDN ws.example.com entry=ws.example.com:443", "WStunnel sni=a.example", "Stealth sni=b.example +anti-DPI", "raw OpenVPN +anti-DPI"} {
+	for _, want := range []string{"CDN ws.example.com entry=ws.example.com:443", "WStunnel sni=a.example", "Stealth sni=b.example +anti-DPI"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}
 	}
-	if len(names) != 2+2*2*(2+1)*2+1 {
+	if len(names) != 2+2*2*(2+1)*2 {
 		t.Fatalf("%d carriers:\n%s", len(names), all)
+	}
+	if strings.Contains(all, "raw OpenVPN") {
+		t.Fatalf("raw OpenVPN must never be included in automatic carrier discovery: %s", all)
 	}
 }
 
@@ -618,6 +621,76 @@ func TestSniffConnCloseBeforeWriteDoesNotHang(t *testing.T) {
 // An inventory with nineteen variants per method must launch one from each
 // method in the first pass, then the next variant of each method, and so on.
 // The first 64 slots may not be monopolized by the first few method families.
+func TestWindscribeHeavyMethodsLeadButRoundRobinRemainsFair(t *testing.T) {
+	// The setup deliberately begins with the lightest methods. Sorting by
+	// their actual technique must take precedence over the inventory order.
+	candidates := []wsCarrier{
+		{name: "WStunnel light A", method: "direct"},
+		{name: "WStunnel plain-first", method: "ByeDPI adaptive (plain first, slices only after a reset)"},
+		{name: "WStunnel tls", method: "ByeDPI TLS record slicing"},
+		{name: "WStunnel combo A", method: "ByeDPI disorder + fake packet"},
+		{name: "Stealth combo B", method: "ByeDPI split + disorder (Windows default)"},
+		{name: "Stealth fake", method: "ByeDPI fake packet, low TTL"},
+	}
+	for _, method := range []string{"direct", "ByeDPI TLS record slicing", "ByeDPI disorder + fake packet"} {
+		candidates = append(candidates, wsCarrier{name: "WStunnel second " + method, method: method})
+	}
+	for attempt := uint64(0); attempt < 8; attempt++ {
+		ordered := wsDiversify(candidates, attempt)
+		if len(ordered) != len(candidates) {
+			t.Fatalf("lost method variants: %d", len(ordered))
+		}
+		firstRound := ordered[:6]
+		seen := map[string]bool{}
+		lastTier := -1
+		for _, c := range firstRound {
+			tier := wsMethodPriority(c.method)
+			if tier < lastTier {
+				t.Fatalf("heavy-to-light order broken: %+v", firstRound)
+			}
+			lastTier = tier
+			if seen[c.method] {
+				t.Fatalf("method repeated before all had one attempt: %+v", firstRound)
+			}
+			seen[c.method] = true
+		}
+		if wsMethodPriority(firstRound[0].method) != 0 || firstRound[len(firstRound)-1].method != "direct" {
+			t.Fatalf("first attempt must start with composites, and unconfirmed baseline be last: %+v", firstRound)
+		}
+	}
+}
+
+func TestWindscribeRealCarriersExcludeRawAcrossAllWrappers(t *testing.T) {
+	b := newWSBridge(wsOptions{direct: true, sni: "www.speedtest.net", cdnHost: "ws.example.com"}, nil, nil, func(string, ...any) {})
+	b.methods = func() []smartproxy.WindscribeMethod {
+		return []smartproxy.WindscribeMethod{
+			{Name: "ByeDPI disorder + fake packet"},
+			{Name: "Xray local TCP fragment B"},
+			{Name: "self: TLS records and TCP segments", TLSOnly: true},
+		}
+	}
+	b.catalog = newWSNodeCatalog()
+	if err := b.catalog.replace("global", []byte(`{"data":[{"nodes":[{"ip":"192.0.2.10","ip2":"203.0.113.12","ip3":"192.0.2.11","hostname":"node.example.com"}]}]}`), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cs := b.carriersFor("203.0.113.12")
+	if len(cs) == 0 {
+		t.Fatal("wrapped carriers vanished")
+	}
+	methods := map[string]bool{}
+	for _, c := range cs {
+		if strings.HasPrefix(c.name, "raw OpenVPN") {
+			t.Fatalf("a raw OpenVPN carrier remains: %+v", c)
+		}
+		methods[c.method] = true
+	}
+	for _, name := range []string{"direct", "ByeDPI disorder + fake packet", "Xray local TCP fragment B", "self: TLS records and TCP segments"} {
+		if !methods[name] {
+			t.Fatalf("lost wrapped technique %q", name)
+		}
+	}
+}
+
 func TestWindscribeRoundRobinOnePerMethodBeforeRepeats(t *testing.T) {
 	var candidates []wsCarrier
 	for method := range 15 {
@@ -719,7 +792,6 @@ func TestWindscribeCarrierRetriesExploreOtherIPAndWrapper(t *testing.T) {
 		{name: "WStunnel sni=c entry=152.233.50.130"},
 		{name: "Stealth sni=a entry=152.233.50.178"},
 		{name: "Stealth sni=b entry=152.233.50.146"},
-		{name: "raw OpenVPN +anti-DPI"},
 	}
 	first := make(map[string]bool)
 	for range 4 {
