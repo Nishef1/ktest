@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/packetdesync"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 	"github.com/Nishef1/ktest/internal/wstunnel"
 )
@@ -967,6 +968,22 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			defer stopProbe()
 			conn, err := b.openCarrier(probeCtx, host, port, c)
 			if err != nil {
+				var staged *wstunnel.StageError
+				if errors.As(err, &staged) && staged.Stage == "zapret" {
+					if probeCtx.Err() != nil && errors.Is(err, probeCtx.Err()) && !errors.Is(err, packetdesync.ErrCleanupUnconfirmed) {
+						return // confirmed cleanup; retain this contender for a later attempt
+					}
+					// A local controller failure never tested this remote
+					// transport. Stop this race instead of exhausting every IP.
+					errMu.Lock()
+					lastErr = err
+					errMu.Unlock()
+					cancel()
+					if b.note != nil {
+						b.note("Windscribe %s: local Zapret2 controller failed; remote carrier not tested: %v", key, err)
+					}
+					return
+				}
 				if ctx.Err() == nil && rctx.Err() == nil {
 					fail(c, err)
 					completed = true
@@ -1039,6 +1056,13 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			if err == nil {
 				err = errors.New("no carrier")
 			}
+		}
+		var setupErr *wstunnel.StageError
+		if errors.As(err, &setupErr) && setupErr.Stage == "zapret" {
+			if summary != "" {
+				summary += "; "
+			}
+			summary += "local Zapret2 setup error (not a remote TCP failure)"
 		}
 		if b.catalog != nil && len(b.catalog.endpoints(host)) == 0 && b.opts.serverIP == "" {
 			summary = b.catalog.missingReason(host) + "; " + summary

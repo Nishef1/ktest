@@ -91,9 +91,14 @@ func Target(ip string, strategy Strategy) (string, []string, error) {
 }
 
 type Trial struct {
+	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan error
 }
+
+// ErrCleanupUnconfirmed means the owned process has not been observed exiting.
+// A caller may retry a canceled attempt only when cleanup was confirmed.
+var ErrCleanupUnconfirmed = errors.New("Zapret2 process cleanup unconfirmed")
 
 func Start(ctx context.Context, base, ip string, strategy Strategy, log io.Writer) (*Trial, error) {
 	if runtime.GOOS != "windows" {
@@ -117,35 +122,43 @@ func Start(ctx context.Context, base, ip string, strategy Strategy, log io.Write
 	cmd := coreprocess.Command(runCtx, filepath.Join(dir, "winws2.exe"), args...)
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = log, log
-	trial := &Trial{cancel: cancel, done: make(chan error, 1)}
+	trial := &Trial{ctx: runCtx, cancel: cancel, done: make(chan error, 1)}
 	go func() {
 		trial.done <- coreprocess.Run(cmd)
 	}()
+	if err := trial.awaitStartup(ctx); err != nil {
+		return nil, err
+	}
+	return trial, nil
+}
+
+func (t *Trial) awaitStartup(ctx context.Context) error {
 	timer := time.NewTimer(1100 * time.Millisecond)
 	defer timer.Stop()
 	select {
-	case err := <-trial.done:
-		cancel()
+	case err := <-t.done:
+		t.cancel()
+		if ctx.Err() != nil {
+			return ctx.Err() // process exit is already confirmed
+		}
 		if err == nil {
 			err = errors.New("winws2 stopped before the probe started")
 		}
-		return nil, fmt.Errorf("Zapret2 failed at startup: %w", err)
+		return fmt.Errorf("Zapret2 failed at startup: %w", err)
 	case <-ctx.Done():
-		cancel()
-		select {
-		case <-trial.done:
-		case <-time.After(4 * time.Second):
-		}
-		return nil, ctx.Err()
+		return errors.Join(ctx.Err(), t.stopAndWait(4*time.Second))
 	case <-timer.C:
 		// Stable process existence is necessary, not evidence the driver is
 		// intercepting. The paired experiment must measure actual reachability.
 		select {
-		case err := <-trial.done:
-			cancel()
-			return nil, fmt.Errorf("Zapret2 exited during startup: %v", err)
+		case err := <-t.done:
+			t.cancel()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("Zapret2 exited during startup: %v", err)
 		default:
-			return trial, nil
+			return nil
 		}
 	}
 }
@@ -158,17 +171,25 @@ func (t *Trial) Stop() error {
 	// packet-shaped trial merely because the outbound probe continued.
 	select {
 	case err := <-t.done:
+		interrupted := t.ctx != nil && t.ctx.Err() != nil
 		t.cancel()
+		if interrupted {
+			return nil // canceled and reaped, so another attempt may safely start
+		}
 		return fmt.Errorf("Zapret2 stopped before trial cleanup: %v", err)
 	default:
 	}
+	return t.stopAndWait(6 * time.Second)
+}
+
+func (t *Trial) stopAndWait(timeout time.Duration) error {
 	t.cancel()
-	timer := time.NewTimer(6 * time.Second)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-t.done:
 		return nil // expected cancellation
 	case <-timer.C:
-		return errors.New("Zapret2 process cleanup not confirmed within 6 seconds")
+		return fmt.Errorf("%w within %s", ErrCleanupUnconfirmed, timeout)
 	}
 }

@@ -1,11 +1,61 @@
 package packetdesync
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCanceledStartupWaitsForOwnedProcessExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopping := make(chan struct{})
+	trial := &Trial{ctx: ctx, cancel: func() { close(stopping) }, done: make(chan error, 1)}
+	result := make(chan error, 1)
+	go func() { result <- trial.awaitStartup(ctx) }()
+	cancel()
+	<-stopping
+	select {
+	case err := <-result:
+		t.Fatalf("startup returned before its process exited: %v", err)
+	default:
+	}
+	trial.done <- errors.New("process killed")
+	if err := <-result; !errors.Is(err, context.Canceled) || errors.Is(err, ErrCleanupUnconfirmed) {
+		t.Fatalf("confirmed cancellation was treated as unsafe cleanup: %v", err)
+	}
+}
+
+func TestStopAcceptsReapedProcessAfterContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	trial := &Trial{ctx: ctx, cancel: cancel, done: make(chan error, 1)}
+	trial.done <- errors.New("process killed")
+	if err := trial.Stop(); err != nil {
+		t.Fatalf("reaped cancellation blocked future trials: %v", err)
+	}
+}
+
+func TestStopRejectsUnexpectedProcessExitWithLiveContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	trial := &Trial{ctx: ctx, cancel: cancel, done: make(chan error, 1)}
+	trial.done <- errors.New("driver failed")
+	if err := trial.Stop(); err == nil {
+		t.Fatal("unexpected driver exit accepted as intentional cancellation")
+	}
+}
+
+func TestCleanupTimeoutIsDistinguishableFromCancellation(t *testing.T) {
+	trial := &Trial{cancel: func() {}, done: make(chan error, 1)}
+	if err := trial.stopAndWait(time.Millisecond); !errors.Is(err, ErrCleanupUnconfirmed) {
+		t.Fatalf("unconfirmed cleanup cannot be distinguished from a safe cancellation: %v", err)
+	}
+}
 
 func TestTargetExactPacketFilterAndPresets(t *testing.T) {
 	for _, preset := range []Strategy{Fake, Split, Combo} {

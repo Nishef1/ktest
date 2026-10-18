@@ -10,6 +10,7 @@ import (
 
 	"github.com/Nishef1/ktest/internal/packetdesync"
 	"github.com/Nishef1/ktest/internal/systemtun"
+	"github.com/Nishef1/ktest/internal/wstunnel"
 )
 
 // wsPacketDesync serializes outer TLS/WebSocket handshakes. A filter exists
@@ -46,26 +47,29 @@ func newWSPacketDesync(base, strategy string, note func(string, ...any)) *wsPack
 func (p *wsPacketDesync) open(ctx context.Context, ip string, open func() (net.Conn, error)) (net.Conn, error) {
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, &wstunnel.StageError{Stage: "zapret", Err: ctx.Err()}
 	case p.gate <- struct{}{}:
 	}
 	defer func() { <-p.gate }()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, &wstunnel.StageError{Stage: "zapret", Err: err}
 	}
 	if p.blocked != nil {
 		return nil, p.blocked
 	}
 	stop, err := p.start(ctx, ip)
 	if err != nil {
-		// Startup may have failed during driver/process cleanup. Do not
-		// launch a second filter without a fresh, explicit session.
-		p.blocked = fmt.Errorf("Zapret2 did not start; restart the session after checking the cause: %w", err)
+		// A per-attempt timeout or a canceled losing contender does not
+		// disable the session once the native process is confirmed gone.
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) && !errors.Is(err, packetdesync.ErrCleanupUnconfirmed) {
+			return nil, &wstunnel.StageError{Stage: "zapret", Err: err}
+		}
+		p.blocked = &wstunnel.StageError{Stage: "zapret", Err: fmt.Errorf("Zapret2 did not start; restart the session after checking the cause: %w", err)}
 		return nil, p.blocked
 	}
 	conn, dialErr := open()
 	if cleanupErr := stop(); cleanupErr != nil {
-		p.blocked = fmt.Errorf("Zapret2 cleanup unconfirmed; stop this session and check WinDivert: %w", cleanupErr)
+		p.blocked = &wstunnel.StageError{Stage: "zapret", Err: fmt.Errorf("Zapret2 cleanup unconfirmed; stop this session and check WinDivert: %w", cleanupErr)}
 		if conn != nil {
 			_ = conn.Close()
 		}
@@ -80,7 +84,7 @@ func (b *wsBridge) openCarrier(ctx context.Context, host, port string, c wsCarri
 	}
 	ip, carrierPort, err := net.SplitHostPort(c.addr)
 	if err != nil || port != "443" || carrierPort != "443" || b.packet == nil {
-		return nil, errors.New("Zapret2 requires a prepared controller and an exact provider TCP 443 entry")
+		return nil, &wstunnel.StageError{Stage: "zapret", Err: errors.New("Zapret2 requires a prepared controller and an exact provider TCP 443 entry")}
 	}
 	verified := false
 	for _, endpoint := range b.catalog.endpoints(host) {
@@ -90,10 +94,10 @@ func (b *wsBridge) openCarrier(ctx context.Context, host, port string, c wsCarri
 		}
 	}
 	if !verified {
-		return nil, errors.New("Zapret2 refused an entry without a fresh mapping to Windscribe's requested TCP node")
+		return nil, &wstunnel.StageError{Stage: "zapret", Err: errors.New("Zapret2 refused an entry without a fresh mapping to Windscribe's requested TCP node")}
 	}
 	if _, _, err := packetdesync.Target(ip, packetdesync.Strategy(b.opts.zapret)); err != nil {
-		return nil, err
+		return nil, &wstunnel.StageError{Stage: "zapret", Err: err}
 	}
 	return b.packet.open(ctx, ip, func() (net.Conn, error) { return c.open(ctx, host, port) })
 }
