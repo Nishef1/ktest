@@ -873,6 +873,9 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			}
 			b.carrierProgress(key, c.name, "start")
 			started = true
+			if b.logf != nil {
+				b.logf("Windscribe attempt=%d carrier-start method=%s variant=%s entry=%s source=%s", attemptID, c.method, c.name, c.addr, c.source)
+			}
 			advance() // Admit the next method only after this one has started.
 			probeCtx, stopProbe := context.WithTimeout(rctx, b.replyTimeout)
 			defer stopProbe()
