@@ -4,9 +4,8 @@ package packetdesync
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
-	"errors"
+	"crypto/sha256"
+		"errors"
 	"fmt"
 	"io"
 	"net"
@@ -28,14 +27,15 @@ const (
 
 // Source files are pinned to the official zapret-win-bundle Git tree at
 // 6eb463a6758fb48cd101bc55dfd057e6e9d98af1, carrying Zapret2 1.0.5.2.
-// Check Git object IDs for all files, not only the presence of a DLL/driver.
+// Pinned SHA-256 digests were obtained from the Git-blob-verified Windows
+// artifact in CI. Verify at runtime too, not merely file presence.
 var pinned = map[string]string{
-	"winws2.exe":             "8ffd2def2df7dc3e8b1623fdb9a67a94e916fa21",
-	"cygwin1.dll":            "1bb2e05c6d5458ad7987859a17172b635e87b9c5",
-	"WinDivert.dll":          "2c55eeb6921351a6cad292a900f4b8d7d41c4bcc",
-	"WinDivert64.sys":        "218ccaf423ef0a67696226f9ef3a09149e4441d0",
-	"lua/zapret-lib.lua":     "c954afd0718534f2eb49d67f08a291e325f68cb1",
-	"lua/zapret-antidpi.lua": "80f372a63774ca10ce85fd7dcd5d1e95c3f5bfb7",
+	"winws2.exe":             "eb9807972c15f05a00416b0549d766a71c9186f8101d406e3cc6c16278164d9e",
+	"cygwin1.dll":            "103104a52e5293ce418944725df19e2bf81ad9269b9a120d71d39028e821499b",
+	"WinDivert.dll":          "16abd6a029e65557c6a309bea7b13bf81fff4e193567582e1cddbf6719f323e0",
+	"WinDivert64.sys":        "8da085332782708d8767bcace5327a6ec7283c17cfb85e40b03cd2323a90ddc2",
+	"lua/zapret-lib.lua":     "cb21ddedd08fa78f87c091de33bdd7e5c0bd24adfff4868078f77197c5992137",
+	"lua/zapret-antidpi.lua": "31c9dd75b0bd55e98e5306293f2be81e9d2ecadcbbf9157394ff37dcff7dc85a",
 }
 
 func VerifyBundle(dir string) error {
@@ -45,11 +45,8 @@ func VerifyBundle(dir string) error {
 		if err != nil {
 			return fmt.Errorf("Zapret2 required file %s: %w", name, err)
 		}
-		h := sha1.New()
-		_, _ = fmt.Fprintf(h, "blob %d\x00", len(data))
-		_, _ = h.Write(data)
-		if got := hex.EncodeToString(h.Sum(nil)); got != want {
-			return fmt.Errorf("Zapret2 %s differs from pinned upstream Git blob", name)
+		if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
+			return fmt.Errorf("Zapret2 %s SHA-256 differs from the pinned official bundle", name)
 		}
 	}
 	return nil
