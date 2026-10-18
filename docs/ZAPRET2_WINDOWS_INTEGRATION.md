@@ -1,6 +1,6 @@
 # Zapret2 Windows integration decision (reviewed 2026-10-18)
 
-Status: **design decision only, not implemented or enabled**. This document is a source review and a bounded implementation contract. It does not establish success on any Iranian ISP.
+Status: **Windows single-target A/B pilot implemented and packaged (2026-10-18), but no real ISP/device packet-capture result has been measured.** The normal `connect` session remains unchanged; promotion of packet manipulation into automatic Windscribe routing is still gated on real Windows/ISP validation. This document is a source review and a bounded implementation contract. It does not establish success on any Iranian ISP.
 
 Upstream: https://github.com/bol-van/zapret2 (latest release verified 2026-10-18: v1.0.5.2). The original zapret1 is EOL and must not be chosen for new integration. Official docs:
 - https://github.com/bol-van/zapret2/blob/master/docs/readme.md
