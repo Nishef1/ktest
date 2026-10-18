@@ -20,11 +20,11 @@ import (
 // Connect proxy, which carries it over whichever path works. It runs only while
 // Connect runs; stopping Connect stops it and Windows restores its routes.
 type tunnel struct {
-	cancel  context.CancelFunc
-	done    chan struct{}
-	restore func()
+	cancel      context.CancelFunc
+	done        chan struct{}
+	restore     func()
 	restoreOnce sync.Once
-	logs    *tailBuffer
+	logs        *tailBuffer
 }
 
 // startTunnel brings the tunnel up in front of the proxy on socksPort and
