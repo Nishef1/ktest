@@ -319,3 +319,18 @@ func TestLegacyCachedPlanMigrationRequiresExactSameTargets(t *testing.T) {
 		t.Fatal("incomplete cached target coverage was accepted")
 	}
 }
+
+func TestFailedRepresentativeHostUsesVerifiedGenericRatherThanEmptyPin(t *testing.T) {
+	dir := t.TempDir()
+	targets,err := loadRouteTargets(dir)
+	if err != nil { t.Fatal(err) }
+	config := smartproxy.Config{Upstreams: []smartproxy.Upstream{{Name:"working",Addr:"127.0.0.1:1"}}}
+	profile := &routeplan.Profile{Version:1,CompletedAt:time.Now().UTC(),Default:"working",TargetsKey:routeProfileKey(targets,config,dir),
+		Selections:[]routeplan.Selection{{TargetID:"default-x-photos",URL:"https://pbs.twimg.com/",Method:"",Assessment:"unreachable"}}}
+	if err := routeplan.Save(dir,profile); err != nil { t.Fatal(err) }
+	if _,err := prepareFrozenRoutes(context.Background(),&config,dir,false); err != nil { t.Fatal(err) }
+	if config.Frozen == nil || config.Frozen.Default != "working" { t.Fatalf("generic route missing: %+v",config.Frozen) }
+	if _,ok := config.Frozen.Targets["pbs.twimg.com:443"]; ok {
+		t.Fatal("unverified image-root probe incorrectly blackholed the entire media hostname")
+	}
+}
