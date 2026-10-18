@@ -217,32 +217,6 @@ func TestCtrlCAtNestedToolPromptReturnsToToolBeforeMainMenu(t *testing.T) {
 	}
 }
 
-func TestCtrlCInSubmenuGoesBackWhileMainMenuExits(t *testing.T) {
-	menu := &terminal{}
-	back, quit := make(chan struct{}, 1), make(chan struct{})
-	if menu.handleInterrupt(back, quit) {
-		t.Fatal("submenu interrupt exited application")
-	}
-	in := &input{back: back}
-	if _, ok := in.read(); ok || !in.interrupted {
-		t.Fatal("submenu did not receive Back")
-	}
-	select {
-	case <-quit:
-		t.Fatal("application quit channel closed from submenu")
-	default:
-	}
-	menu.mainMenuActive = true
-	if !menu.handleInterrupt(back, quit) {
-		t.Fatal("idle main menu did not exit")
-	}
-	select {
-	case <-quit:
-	default:
-		t.Fatal("main menu did not close application")
-	}
-}
-
 func TestMenuKeysAreUniqueAndContiguous(t *testing.T) {
 	want := 1
 	for _, s := range menuSections {
@@ -356,27 +330,6 @@ func TestElevationPreservesEffectivePolicyAcrossUserProfiles(t *testing.T) {
 	}
 	if err := validateConnectOptions(child); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestEnterOnListMenusGoesBack(t *testing.T) {
-	t.Setenv("KTEST_CA_DIR", t.TempDir())
-	t.Setenv("KTEST_WARP_DIR", t.TempDir())
-	for _, tc := range []struct{ name, input, screen string }{
-		{"aether", "3\n\n0\n", "Aether >"},
-		{"windscribe", "5\n\n0\n", "Windscribe >"},
-		{"windscribe tests", "11\n\n0\n", "Location or TCP IP"},
-		{"setup", "9\n\n0\n", "Certificate health and optional exit components."},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			out := menuOutput(t, tc.input)
-			if tc.name == "windscribe tests" {
-				return // its first screen is a prompt with its own stated Enter default
-			}
-			if strings.Count(out, tc.screen) != 1 || strings.Count(out, "Free access toolkit") != 2 || strings.Contains(out, "Unknown option") || strings.Contains(out, "Policy:") {
-				t.Fatal("Enter did not simply go back:", out)
-			}
-		})
 	}
 }
 
@@ -512,46 +465,6 @@ func TestCtrlCAtTheIdleMainMenuExitsCleanly(t *testing.T) {
 	s.expectExit()
 }
 
-func TestCtrlCWalksBackOneLevelAtATimeThenExits(t *testing.T) {
-	s := startSession(t)
-	s.waitFor("Select >", 1)
-	s.send("5") // Windscribe
-	s.waitFor("Windscribe >", 1)
-	s.send("3") // Windscribe tests
-	s.waitFor("Windscribe test >", 1)
-	s.ctrlC()
-	s.waitFor("Windscribe >", 2) // back in Windscribe, not the main menu
-	s.expectRunning()
-	s.ctrlC()
-	s.waitFor("Select >", 2) // back in the main menu
-	s.expectRunning()
-	s.ctrlC()
-	s.expectExit()
-}
-
-func TestCtrlCInsideANestedPromptReturnsToItsMenu(t *testing.T) {
-	s := startSession(t)
-	s.waitFor("Select >", 1)
-	s.send("10") // CDN scan
-	s.waitFor("Provider: cloudflare", 1)
-	s.ctrlC()
-	s.waitFor("Select >", 2)
-	s.expectRunning()
-	s.send("0")
-	s.expectExit()
-}
-
-func TestCtrlCAtTheMainMenuAfterABackExits(t *testing.T) {
-	s := startSession(t)
-	s.waitFor("Select >", 1)
-	s.send("8") // Diagnose
-	s.waitFor("Diagnose (Enter", 1)
-	s.ctrlC()
-	s.waitFor("Select >", 2)
-	s.ctrlC() // exits; must not be consumed as another Back
-	s.expectExit()
-}
-
 func TestPersianAndArabicDigitsSelectMenuOptions(t *testing.T) {
 	s := startSession(t)
 	s.waitFor("Select >", 1)
@@ -611,4 +524,40 @@ func TestLongMenuNoticeUsesScrollableScreen(t *testing.T) {
 	if !strings.Contains(out.String(), "A detailed connection warning.") {
 		t.Fatal("notice disappeared when the scrollable fallback was selected")
 	}
+}
+
+func TestCtrlCQuitsFromAnywhereInTheMenus(t *testing.T) {
+	for _, tc := range []struct {
+		name, wait string
+		keys       []string
+	}{
+		{"main menu", "Select >", nil},
+		{"submenu", "Windscribe >", []string{"5"}},
+		{"nested submenu", "Windscribe test >", []string{"5", "3"}},
+		{"nested prompt", "Provider: cloudflare", []string{"10"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := startSession(t)
+			s.waitFor("Select >", 1)
+			for _, k := range tc.keys {
+				s.send(k)
+			}
+			s.waitFor(tc.wait, 1)
+			s.ctrlC()
+			s.expectExit()
+		})
+	}
+}
+
+func TestEnterKeepsItsMeaningInMenus(t *testing.T) {
+	s := startSession(t)
+	s.waitFor("Select >", 1)
+	s.send("5")
+	s.waitFor("Windscribe >", 1)
+	s.send("") // Enter is not Back
+	s.waitFor("Select 1-3, or 0", 1)
+	s.send("0")
+	s.waitFor("Select >", 2)
+	s.send("0")
+	s.expectExit()
 }

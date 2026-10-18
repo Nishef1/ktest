@@ -84,11 +84,11 @@ func (t *terminal) aetherMenu(base string, in *input) bool {
 		if !ok {
 			return false
 		}
-		if answer == "" || isBackChoice(answer) {
+		if isBackChoice(answer) {
 			return true
 		}
 		switch answer {
-		case "1":
+		case "", "1":
 			if !t.connectFromMenu(base, in, ModeAether) {
 				if in.interrupted {
 					in.interrupted = false

@@ -140,7 +140,7 @@ func TestWindscribeStatusIssueDoesNotEchoCredentials(t *testing.T) {
 		t.Fatalf("unrecognized connection treated as trusted: %q", message)
 	}
 	message = windscribeStatusIssue("Login state: Error: SSL error\n", windscribeUnknown, false)
-	if strings.Contains(message, "not logged in") || !strings.Contains(message, "API") {
+	if strings.Contains(message, "not logged in") || strings.Contains(message, "SSL error") || strings.Contains(message, "account") {
 		t.Fatalf("account API failure misreported as a logout: %q", message)
 	}
 }

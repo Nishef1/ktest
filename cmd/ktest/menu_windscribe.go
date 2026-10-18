@@ -23,7 +23,7 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 		if !ok {
 			return false
 		}
-		if answer == "" || isBackChoice(answer) {
+		if isBackChoice(answer) {
 			return true
 		}
 		switch answer {
@@ -81,7 +81,7 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 		if !ok {
 			return false
 		}
-		if answer == "" || isBackChoice(answer) {
+		if isBackChoice(answer) {
 			return true
 		}
 		alive := true

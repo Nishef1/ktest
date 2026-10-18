@@ -2,56 +2,18 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
+	"github.com/Nishef1/ktest/internal/egresscheck"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
 const torOnlyPort = 18991
 
-// A SOCKS server on a local port is not proof that it carries Tor.
-// check.torproject.org is queried THROUGH the proxy and over verified HTTPS.
-func probeTorExit(parent context.Context, socks string) error {
-	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
-	defer cancel()
-	tr := &http.Transport{
-		Proxy: nil, DisableKeepAlives: true, TLSHandshakeTimeout: 10 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
-		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			return smartproxy.DialVia(ctx, socks, "check.torproject.org", "443", 10*time.Second)
-		},
-	}
-	defer tr.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://check.torproject.org/api/ip", nil)
-	if err != nil {
-		return err
-	}
-	resp, err := (&http.Client{Transport: tr, Timeout: 14 * time.Second}).Do(req)
-	if err != nil {
-		return fmt.Errorf("Tor status request: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Tor status HTTP %d", resp.StatusCode)
-	}
-	var v struct {
-		IsTor bool
-		IP    string
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&v); err != nil {
-		return err
-	}
-	if !v.IsTor {
-		return errors.New("exit is not verified as Tor by the Tor Project")
-	}
-	return nil
+func probeTorExit(ctx context.Context, socks string) error {
+	return egresscheck.ProbeTorExit(ctx, socks)
 }
 
 // startTor boots the bundled Aether Tor-only feature, with bridge discovery

@@ -128,6 +128,7 @@ func (o wsOptions) validate() error {
 // wsCarrier is one way to carry a Windscribe OpenVPN TCP stream.
 type wsCarrier struct {
 	name   string
+	method string // actual local technique, shared by its transport/SNI variants
 	open   func(ctx context.Context, host, port string) (net.Conn, error)
 	addr   string
 	source string
@@ -158,6 +159,9 @@ type wsBridge struct {
 	stagger      time.Duration
 	replyTimeout time.Duration // TCP, TLS/upgrade and initial OpenVPN reply per carrier
 	catalog      *wsNodeCatalog
+	methods      func() []smartproxy.WindscribeMethod
+	view         *wsProgressView
+	onProgress   func(string, bool) // nonblocking notification; rendering belongs to the live feed
 	// candidates overrides the carrier list (tests).
 	candidates func(host string) []wsCarrier
 
@@ -169,6 +173,7 @@ type wsBridge struct {
 	active      map[*wsActiveCarrier]bool       // streams awaiting CLI state correlation
 	shortEnds   map[string]int                  // consecutive short unexpected ends of correlated sessions
 	nextAttempt uint64
+	targets     map[string]*wsTargetProgress
 }
 
 // CLI authentication is attributed only if a single OpenVPN stream is
@@ -176,7 +181,13 @@ type wsBridge struct {
 // Concurrent candidate streams are ambiguous, so none is credited.
 func (b *wsBridge) observeCLIConnected() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	key := ""
+	defer func() {
+		b.mu.Unlock()
+		if key != "" {
+			b.publishProgress(key, true)
+		}
+	}()
 	if len(b.active) != 1 {
 		if b.logf != nil {
 			b.logf("Windscribe CLI Connected correlation ambiguous: active-carriers=%d; no carrier promoted", len(b.active))
@@ -191,6 +202,12 @@ func (b *wsBridge) observeCLIConnected() {
 			return
 		}
 		active.confirmed = true
+		key = active.key
+		if target := b.targets[key]; target != nil {
+			if p := target.paths[active.name]; p != nil {
+				p.last, p.updated = "connected (Windscribe CLI)", time.Now()
+			}
+		}
 		if b.logf != nil {
 			b.logf("Windscribe attempt=%d target=%s carrier=%s correlated with CLI TCP Connected (not cryptographically attributable)", active.id, active.key, active.name)
 		}
@@ -256,10 +273,26 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		}
 		return b.carrierLocal(ctx, h, p)
 	}
-	legs := []struct {
-		suffix string
-		dial   func(context.Context, string) (net.Conn, error)
-	}{{"", directDial}, {" +anti-DPI", viaLocal}}
+	type wsLeg struct {
+		suffix  string
+		method  string
+		tlsOnly bool
+		dial    func(context.Context, string) (net.Conn, error)
+	}
+	legs := []wsLeg{{method: "direct", dial: directDial}}
+	if b.methods == nil {
+		legs = append(legs, wsLeg{suffix: " +anti-DPI", method: "local anti-DPI rotation", dial: viaLocal})
+	} else {
+		for _, method := range b.methods() {
+			legs = append(legs, wsLeg{suffix: " +" + method.Name, method: method.Name, tlsOnly: method.TLSOnly, dial: func(ctx context.Context, addr string) (net.Conn, error) {
+				h, p, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				return method.Dial(ctx, h, p)
+			}})
+		}
+	}
 	var out []wsCarrier
 	o := b.opts
 	if o.cdnHost != "" {
@@ -278,7 +311,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 		}
 		for _, leg := range legs {
 			for _, edge := range edges {
-				out = append(out, wsCarrier{name: "CDN " + o.cdnHost + " entry=" + edge + leg.suffix, addr: edge, source: "configured CDN", open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				out = append(out, wsCarrier{name: "CDN " + o.cdnHost + " entry=" + edge + leg.suffix, method: leg.method, addr: edge, source: "configured CDN", open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					return wstunnel.Dial(ctx, wstunnel.Config{Addr: edge, SNI: sni, Host: o.cdnHost, Path: b.path, Verify: true, Dial: leg.dial})
 				}})
 			}
@@ -313,7 +346,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 						name     string
 						official bool
 					}{{"chrome", false}, {"windscribe", true}} {
-						out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, method: leg.method, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 							return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial, OfficialHello: fp.official})
 						}})
 					}
@@ -329,7 +362,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 							name     string
 							official bool
 						}{{"chrome", false}, {"windscribe", true}} {
-							out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
+							out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, method: leg.method, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 								// Windscribe's official wrapper leaves outer TLS chain
 								// verification to the authenticated inner OpenVPN client.
 								return wstunnel.DialStealth(ctx, wstunnel.Config{Addr: addr, SNI: sni, Dial: leg.dial, OfficialHello: fp.official})
@@ -340,7 +373,14 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 			}
 		}
 	}
-	return append(out, wsCarrier{name: "raw OpenVPN +anti-DPI", open: b.carrierLocal, source: "client CONNECT"})
+	for _, leg := range legs[1:] {
+		if !leg.tlsOnly {
+			out = append(out, wsCarrier{name: "raw OpenVPN" + leg.suffix, method: leg.method, source: "client CONNECT", open: func(ctx context.Context, host, port string) (net.Conn, error) {
+				return leg.dial(ctx, net.JoinHostPort(host, port))
+			}})
+		}
+	}
+	return out
 }
 
 // isWindscribeCarrier tells the live feed that a path name is a carrier.
@@ -505,7 +545,7 @@ func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
 	attempt := b.retries[key]
 	b.retries[key] = attempt + 1
 	good := b.good[key]
-	var preferred, fresh, cooling []wsCarrier
+	var preferred, untried, fresh, cooling []wsCarrier
 	now := time.Now()
 	for _, c := range cs {
 		switch {
@@ -513,11 +553,14 @@ func (b *wsBridge) ordered(key string, cs []wsCarrier) []wsCarrier {
 			cooling = append(cooling, c)
 		case c.name == good:
 			preferred = append(preferred, c)
+		case b.targets[key] != nil && b.targets[key].paths[c.name] != nil && b.targets[key].paths[c.name].needsTrial():
+			untried = append(untried, c)
 		default:
 			fresh = append(fresh, c)
 		}
 	}
-	ordered := append(preferred, wsDiversify(fresh, attempt)...)
+	ordered := append(preferred, wsDiversify(untried, attempt)...)
+	ordered = append(ordered, wsDiversify(fresh, attempt)...)
 	if len(ordered) > 0 || len(cooling) == 0 {
 		// Merely launching failed handshakes later still lets their quick
 		// reset packets beat a slower healthy handshake on every retry.
@@ -616,7 +659,10 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			return nil, nil, err
 		}
 	}
-	cs := b.ordered(key, b.carriersFor(host))
+	allCarriers := b.carriersFor(host)
+	b.registerCarriers(key, host, allCarriers)
+	cs := b.ordered(key, allCarriers)
+	b.publishProgress(key, true)
 	// Each connection attempt is a bounded experiment, not a broadcast to
 	// every advertised entry/IP/SNI. Later retries rotate the candidates.
 	const maxRaceCandidates = 24
@@ -665,6 +711,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		lastErr = fmt.Errorf("%s: %w", c.name, err)
 		errMu.Unlock()
 		b.demoteFailure(key, c.name, stage)
+		b.carrierProgress(key, c.name, stage+": "+trimDetail(err.Error()))
 		b.logf("Windscribe attempt=%d target=%s carrier=%s destination=%s source=%s failed stage=%s: %v", attemptID, key, c.name, c.addr, c.source, stage, err)
 	}
 	b.mu.Lock()
@@ -682,6 +729,15 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		go func() {
 			defer wg.Done()
 			keep := false
+			started, completed := false, false
+			defer func() {
+				if started {
+					if !completed {
+						b.carrierProgress(key, c.name, "interrupted")
+					}
+					b.carrierProgress(key, c.name, "finish")
+				}
+			}()
 			if hasPreferred && i == 0 {
 				// A previously CLI-confirmed path gets a bounded exclusive
 				// attempt. A faster unauthenticated reset cannot steal it.
@@ -706,12 +762,15 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				return
 			case <-time.After(time.Duration(slot) * b.stagger):
 			}
+			b.carrierProgress(key, c.name, "start")
+			started = true
 			probeCtx, stopProbe := context.WithTimeout(rctx, b.replyTimeout)
 			defer stopProbe()
 			conn, err := c.open(probeCtx, host, port)
 			if err != nil {
 				if ctx.Err() == nil && rctx.Err() == nil {
 					fail(c, err)
+					completed = true
 				}
 				return
 			}
@@ -741,9 +800,12 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				}
 				if ctx.Err() == nil && rctx.Err() == nil {
 					fail(c, &wstunnel.StageError{Stage: "openvpn", Err: err})
+					completed = true
 				}
 				return
 			}
+			completed = true
+			b.carrierProgress(key, c.name, "reply")
 			taken := false
 			won.Do(func() {
 				taken = true
@@ -762,6 +824,7 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	cancel() // stops the losers
 	if !ok {
 		stopLive()
+		b.publishProgress(key, true)
 		errMu.Lock()
 		err := lastErr
 		var parts []string
@@ -793,13 +856,18 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 		b.active = make(map[*wsActiveCarrier]bool)
 	}
 	b.active[session] = true
+	if p := b.targets[key].paths[r.c.name]; p != nil {
+		p.selected++
+		p.last, p.updated = "selected; awaiting Windscribe", time.Now()
+	}
 	b.mu.Unlock()
+	b.publishProgress(key, true)
 	if b.report != nil {
 		b.report(smartproxy.Event{Host: host, Site: host, Path: r.c.name, Took: r.took, TCPOnly: true})
 	}
 	done := func(lived time.Duration, received int64) {
 		b.mu.Lock()
-		defer b.mu.Unlock()
+		defer func() { b.mu.Unlock(); b.publishProgress(key, true) }()
 		confirmed := session.confirmed
 		delete(b.active, session)
 		streakKey := key + "|" + r.c.name
@@ -838,6 +906,13 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				ttl = 2 * time.Minute
 			}
 			b.bad[key][r.c.name] = time.Now().Add(ttl)
+		}
+		if p := b.targets[key].paths[r.c.name]; p != nil {
+			p.updated = time.Now()
+			p.last = "session ended; VPN unconfirmed"
+			if confirmed {
+				p.last = "CLI-confirmed session ended"
+			}
 		}
 		b.logf("Windscribe attempt=%d target=%s carrier=%s session ended after %s, returned=%d bytes, CLI-correlated=%v, upstream-ended=%v (not proof of DPI or per-carrier authentication)", attemptID, key, r.c.name, shortDur(lived), received, confirmed, session.upstreamEnd)
 	}

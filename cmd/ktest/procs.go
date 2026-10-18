@@ -15,6 +15,5 @@ func waitTrackedGone(ctx context.Context, limit time.Duration) bool {
 	return coreprocess.WaitGone(ctx, limit)
 }
 func configureEnrollmentProcess(cmd *exec.Cmd) { coreprocess.Configure(cmd) }
-func killProcessTree(pid int)                  { coreprocess.KillTree(pid) }
 func hideConsole(cmd *exec.Cmd)                { coreprocess.HideConsole(cmd) }
 func killChildrenOnExit()                      { coreprocess.KillChildrenOnExit() }

@@ -38,6 +38,7 @@ type wsNode struct {
 	IP3             string `json:"ip3"`
 	Hostname        string `json:"hostname"`
 	Group           string `json:"group"`
+	Country         string `json:"-"`  // provider location label, never IP geolocation
 	ForceDisconnect int    `json:"fd"` // 1: draining node; no new sessions
 }
 
@@ -122,8 +123,11 @@ func publicWSIP(s string) bool {
 func parseWSNodes(body []byte) (map[string]wsNode, error) {
 	var response struct {
 		Data []struct {
+			Name   string   `json:"name"`
 			Nodes  []wsNode `json:"nodes"`
 			Groups []struct {
+				City  string   `json:"city"`
+				Nick  string   `json:"nick"`
 				Nodes []wsNode `json:"nodes"`
 			} `json:"groups"`
 		} `json:"data"`
@@ -135,8 +139,12 @@ func parseWSNodes(body []byte) (map[string]wsNode, error) {
 		return nil, err
 	}
 	nodes := make(map[string]wsNode)
-	addNodes := func(list []wsNode) error {
+	addNodes := func(list []wsNode, country, group string) error {
 		for _, node := range list {
+			node.Country = country
+			if node.Group == "" {
+				node.Group = group
+			}
 			// Windscribe wsnet 1.5.33 treats fd:1 as a draining
 			// server; dialing it can fail even when nearby nodes work.
 			if node.ForceDisconnect == 1 {
@@ -160,11 +168,18 @@ func parseWSNodes(body []byte) (map[string]wsNode, error) {
 	for _, country := range response.Data {
 		// Older serverlist/openvpn responses place nodes directly in each
 		// country; current mob-v2 responses place them under groups[].nodes.
-		if err := addNodes(country.Nodes); err != nil {
+		if err := addNodes(country.Nodes, country.Name, ""); err != nil {
 			return nil, err
 		}
 		for _, group := range country.Groups {
-			if err := addNodes(group.Nodes); err != nil {
+			label := group.City
+			if group.Nick != "" {
+				if label != "" {
+					label += " - "
+				}
+				label += group.Nick
+			}
+			if err := addNodes(group.Nodes, country.Name, label); err != nil {
 				return nil, err
 			}
 		}

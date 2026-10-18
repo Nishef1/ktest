@@ -23,7 +23,7 @@ func windscribeStatusIssue(raw string, state windscribeState, loggedIn bool) str
 			field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 			if ok && strings.EqualFold(strings.TrimSpace(field), "Login state") {
 				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "error:") {
-					return "Windscribe account API failed; login is unverified, which does not establish that the VPN disconnected"
+					return "Windscribe connection status is not available; check the connection in the app"
 				}
 				if !strings.EqualFold(strings.TrimSpace(value), "logged in") {
 					return "Windscribe desktop app is not logged in; open the app and log in"

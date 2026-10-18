@@ -278,24 +278,25 @@ func runConnect(args []string) int {
 // siteEvents prints the live feed: one line per site when its winning path is
 // first known or changes, and at most one failure line per site every 20 s.
 type siteEvents struct {
-	t           *term
-	last        map[string]string
-	failedAt    map[string]time.Time
-	ok, fail    atomic.Int64
-	tcpOnly     atomic.Int64
-	latencyOK   atomic.Int64
-	latencyFail atomic.Int64
-	windscribe  bool
-	prepared    atomic.Int64
-	earlyClosed atomic.Int64
-	rejected    atomic.Int64
-	routes      map[string]*routeSelection
-	setupTotal  time.Duration
-	setupMax    time.Duration
-	slow        int
-	dropped     *atomic.Int64
-	fronts      *hostAggregate
-	verbose     bool
+	t                *term
+	last             map[string]string
+	failedAt         map[string]time.Time
+	ok, fail         atomic.Int64
+	tcpOnly          atomic.Int64
+	latencyOK        atomic.Int64
+	latencyFail      atomic.Int64
+	windscribe       bool
+	prepared         atomic.Int64
+	earlyClosed      atomic.Int64
+	rejected         atomic.Int64
+	routes           map[string]*routeSelection
+	setupTotal       time.Duration
+	setupMax         time.Duration
+	slow             int
+	dropped          *atomic.Int64
+	fronts           *hostAggregate
+	verbose          bool
+	windscribeReport func()
 }
 
 type routeSelection struct {
@@ -373,6 +374,9 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	if e.TCPOnly {
 		s.tcpOnly.Add(1)
 		if isWindscribeCarrier(e.Path) {
+			if s.windscribe {
+				return
+			} // target panels own carrier reporting
 			path := e.Path
 			if strings.HasPrefix(path, "raw OpenVPN") {
 				path += " entry=" + e.Host
@@ -432,6 +436,9 @@ func (s *siteEvents) print(e smartproxy.Event) {
 		return
 	}
 	s.fail.Add(1)
+	if s.windscribe && strings.HasPrefix(e.Err, "Windscribe race failed") {
+		return
+	}
 	if time.Since(s.failedAt[key]) < 20*time.Second {
 		return
 	}
@@ -726,6 +733,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		return 1
 	}
 	events := make(chan smartproxy.Event, 256)
+	progressEvents := make(chan wsProgressEvent, 64)
 	var dropped atomic.Int64
 	var activity atomic.Uint64
 	var liveProxy atomic.Pointer[smartproxy.Proxy]
@@ -856,6 +864,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// The HTTP bridge shares Connect's learned path selection without changing
 	// system DNS, routing, or trust stores.
 	httpAddr := ""
+	var windscribeBridge *wsBridge
 	if !o.noHTTP {
 		var httpDial func(context.Context, string, string) (net.Conn, error)
 		if o.mode.isWindscribe() {
@@ -863,7 +872,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			if o.mode == ModeWindscribeAether {
 				dial = proxy.DialExitCarrier
 			}
-			if o.mode == ModeWindscribe && o.ws.enabled() {
+			if o.mode == ModeWindscribe {
 				logf := cfg.Logf
 				if logf == nil {
 					logf = func(string, ...any) {}
@@ -874,6 +883,15 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 					return smartproxy.DialVia(ctx, l.Addr().String(), host, port, 8*time.Second)
 				}
 				bridge := newWSBridge(o.ws, apiDial, cfg.OnEvent, logf)
+				windscribeBridge = bridge
+				bridge.methods = proxy.WindscribeMethods
+				bridge.view = &wsProgressView{t: t}
+				bridge.onProgress = func(key string, force bool) {
+					select {
+					case progressEvents <- wsProgressEvent{key: key, force: force}:
+					default: // the tracker retains all outcomes; a later snapshot includes them
+					}
+				}
 				bridge.carrierLocal = proxy.DialWindscribeCarrier
 				monitor.onConnected(bridge.observeCLIConnected)
 				bridge.catalog = newWSNodeCatalog()
@@ -1136,7 +1154,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Box(title, verdict, lines)
 	t.Println("")
 	if o.mode == ModeWindscribe {
-		t.Println("  " + t.Dim("Windscribe connections (each new attempt rotates the carrier; only Windscribe verifies the VPN)"))
+		t.Println("  " + t.Dim("Windscribe targets (grouped by exact IP and location; unused methods are tried first)"))
 		t.Note("requested = Windscribe's target; entry = carrier address; VPN IP = Windscribe-reported exit, shown separately by CLI")
 	} else {
 		t.Println("  " + t.Dim("Live connections (a site is listed when its winning path is known or changes)"))
@@ -1153,6 +1171,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		defer stopRefresh()
 	}
 	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory, windscribe: o.mode.isWindscribe()}
+	if windscribeBridge != nil {
+		feed.windscribeReport = windscribeBridge.reportProgress
+	}
 	for {
 		select {
 		case <-connection.Done():
@@ -1167,6 +1188,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			return 0
 		case e := <-events:
 			feed.print(e)
+		case progress := <-progressEvents:
+			if windscribeBridge != nil {
+				windscribeBridge.view.show(windscribeBridge.progressSnapshot(progress.key), progress.force)
+			}
 		}
 	}
 }
@@ -1181,6 +1206,9 @@ func trimDetail(s string) string {
 
 // summarize prints what happened during the session.
 func summarize(t *term, feed *siteEvents, fronter *front.Fronter) {
+	if feed.windscribeReport != nil {
+		feed.windscribeReport()
+	}
 	t.Println("")
 	t.Println("  " + t.Bold("Session summary"))
 	ok, fail := feed.ok.Load(), feed.fail.Load()

@@ -345,21 +345,15 @@ func (t *terminal) holdResult(in *input) bool {
 // An idle submenu goes back one level; only the idle main menu exits.
 func (t *terminal) handleInterrupt(back chan<- struct{}, quit chan struct{}) bool {
 	t.mu.Lock()
-	cancel, mainMenuActive := t.cancel, t.mainMenuActive
+	cancel := t.cancel
 	t.mu.Unlock()
 	if cancel != nil {
 		cancel()
 		return false
 	}
-	if mainMenuActive {
-		close(quit)
-		return true
-	}
-	select {
-	case back <- struct{}{}:
-	default:
-	}
-	return false
+	// Ctrl+C keeps its usual meaning: stop the running job, otherwise quit.
+	close(quit)
+	return true
 }
 
 // lineSource hands out stdin one line at a time, and only when asked.

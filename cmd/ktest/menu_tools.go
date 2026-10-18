@@ -73,7 +73,7 @@ func isYes(answer string) bool {
 
 // backHint labels the Back row of a list menu: Enter on a list with no stated
 // default always goes back, never starts something.
-const backHint = "Enter or Ctrl+C"
+const backHint = ""
 
 // Back is available at every submenu prompt; Enter keeps its stated default.
 func isBackChoice(choice string) bool {
@@ -88,7 +88,7 @@ func (t *terminal) diagnoseMenu(base string, in *input) bool {
 	message := ""
 	for {
 		t.ui.menuView()
-		t.ui.Heading("diagnostics", "General network or Windscribe. Ctrl+C goes back.")
+		t.ui.Heading("diagnostics", "General network or Windscribe.")
 		if message != "" {
 			t.ui.Line(toneWarn, "%s", message)
 			message = ""
@@ -141,7 +141,7 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 	message := ""
 	for {
 		t.ui.menuView()
-		t.ui.Heading("Windscribe test", "Compare carrier entries or verify a connected VPN. Ctrl+C goes back.")
+		t.ui.Heading("Windscribe test", "Compare carrier entries or verify a connected VPN.")
 		if message != "" {
 			t.ui.Line(toneWarn, "%s", message)
 			message = ""
@@ -177,7 +177,7 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 			if previousSNIs == "" {
 				previousSNIs = defaultProbeSNIs
 			}
-			t.ui.Printf("  SNIs (Enter = %s; 0 or Ctrl+C = back) > ", previousSNIs)
+			t.ui.Printf("  SNIs (Enter = %s; 0 = back) > ", previousSNIs)
 			names, ok := in.read()
 			if !ok {
 				if in.interrupted {
@@ -240,7 +240,7 @@ func (t *terminal) cdnScanMenu(in *input) bool {
 	message := ""
 	for {
 		t.ui.menuView()
-		t.ui.Heading("CDN tests", "Provider HTTPS or your own Windscribe CDN route. Ctrl+C goes back.")
+		t.ui.Heading("CDN tests", "Provider HTTPS or your own Windscribe CDN route.")
 		if message != "" {
 			t.ui.Line(toneWarn, "%s", message)
 			message = ""
@@ -270,9 +270,9 @@ func (t *terminal) cdnScanMenu(in *input) bool {
 		args := []string{"-provider", provider}
 		if provider == "cloudflare" {
 			if previous := t.settings.Tools.ScanCDN; previous != "" {
-				t.ui.Printf("  CDN hostname (Enter = %s; - = no CDN; 0 or Ctrl+C = back) > ", previous)
+				t.ui.Printf("  CDN hostname (Enter = %s; - = no CDN; 0 = back) > ", previous)
 			} else {
-				t.ui.Printf("  CDN hostname (Enter = provider test; 0 or Ctrl+C = back) > ")
+				t.ui.Printf("  CDN hostname (Enter = provider test; 0 = back) > ")
 			}
 			host, ok := in.read()
 			if !ok {

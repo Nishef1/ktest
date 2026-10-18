@@ -370,7 +370,7 @@ func (t *terminal) setup(base string, in *input) bool {
 		u.Printf("\n")
 		u.Note("Certificate: optional website fronting for Balanced / Fast.")
 		u.Note("Exit components do not prove a working VPN. Windscribe uses its own app.")
-		u.Note("Ctrl+C goes back. No certificate changes without your choice.")
+		u.Note("No certificate changes without your choice.")
 		u.Printf("\n")
 		u.menuOption("0", "Back", backHint)
 		u.Printf("\n  Select > ")
@@ -394,8 +394,9 @@ func (t *terminal) setup(base string, in *input) bool {
 			if !alive {
 				return false
 			}
-		case "", "0", "b", "back":
+		case "0", "b", "back":
 			return true
+		case "":
 		default:
 			message = "Select 1-2, or 0 to go back."
 		}
@@ -431,13 +432,4 @@ func (t *terminal) warpSetup(base string, readLine func() (string, bool)) bool {
 			return false
 		}
 	}
-}
-
-// wrapOne shortens a log line to n runes.
-func wrapOne(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n]) + "..."
-	}
-	return s
 }

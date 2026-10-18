@@ -323,10 +323,7 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 		case windscribeConnecting:
 			m.t.Note("Windscribe is connecting or validating its tunnel; no duplicate reconnect command")
 		default:
-			m.t.Note("Windscribe state unavailable; cannot safely auto-reconnect (check CLI/login)")
-		}
-		if err == nil && !loggedIn && (state == windscribeConnected || state == windscribeConnecting) {
-			m.t.Note("Windscribe account API unavailable; tunnel state is read-only, login and automatic reconnect are not authorized")
+			m.t.Note("Windscribe connection status is unavailable; connect manually in the app")
 		}
 	}
 	if state == windscribeConnected && (changed || ipChanged) {
@@ -376,8 +373,10 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 		// Continue read-only polling so a transient IPC failure does not
 		// permanently disable confirmation of a later healthy TCP session.
 		m.autoReconnect = false
-		t.Note("Initial Windscribe CLI status unknown; continuing read-only monitoring with automatic reconnect disabled")
-		t.Note("Run windscribe-cli.exe status directly; use -windscribe-cli with the absolute executable path for a custom installation.")
+		t.Note("Watching for Windscribe's connection; automatic reconnect is off until status is available")
+		if o.verbose {
+			t.Note("Use -windscribe-cli with an absolute executable path for a custom installation.")
+		}
 	}
 	go func() {
 		ticker := time.NewTicker(3 * time.Second)
