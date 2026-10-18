@@ -480,6 +480,9 @@ private fun EndpointsPanel(
         }
         val frozen = status.optBoolean("frozen")
         if (frozen) {
+            if (status.optString("selected_default").isBlank()) {
+                Note("Limited Balanced coverage: only individually verified targets have routes. Unknown destinations are blocked until a generic route is successfully calibrated.", Tone.Warn)
+            }
             Note("Routes are fixed for this session. Disconnect and use Test routes to measure them again.")
         } else {
             SecondaryButton(if (checking) "Checking HTTPS routes…" else "Verify real HTTPS traffic", onCheckRoute,
