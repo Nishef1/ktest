@@ -154,8 +154,32 @@ func (p *Proxy) udpExitAllowed(u *upstreamState, host string) bool {
 	return false
 }
 
+// UDP routing is distinct from a frozen TCP/HTTPS method. Balanced may
+// select a local method for TCP while sending QUIC only through an already
+// verified foreign SOCKS5 UDP associate. Never create a direct UDP fallback.
+func (p *Proxy) udpCandidates(host string) []*upstreamState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
+	selected := p.aiPinned
+	if pins := p.cfg.Frozen; pins != nil && protected && pins.Protected != "" {
+		selected = pins.Protected
+	}
+	var out []*upstreamState
+	for _, u := range p.ups {
+		if !u.Exit || !u.AIEligible || (u.Match != nil && !u.Match(host)) {
+			continue
+		}
+		if selected != "" && u.Name != selected {
+			continue
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
 func (p *Proxy) openUDPExit(ctx context.Context, host, port string) (*udpExit, error) {
-	for _, u := range p.order(host, port) {
+	for _, u := range p.udpCandidates(host) {
 		if !p.udpExitAllowed(u, host) || p.verifyExit(ctx, u) != nil {
 			continue
 		}
