@@ -37,18 +37,18 @@ type proxySession struct {
 }
 
 type proxyDiagnostics struct {
-	mu             sync.Mutex
-	dnsFailures    int
-	dnsError       string
-	tcpAttempts    int
-	tcpFailures    int
-	tlsResponses   int
+	mu              sync.Mutex
+	dnsFailures     int
+	dnsError        string
+	tcpAttempts     int
+	tcpFailures     int
+	tlsResponses    int
 	udpAssociations int
-	udpFailures    int
-	udp443Failures int
-	lastPath       string // method label only; no destination, credentials, or payloads
-	lastRouteMS    int64
-	lastConnectMS  int64
+	udpFailures     int
+	udp443Failures  int
+	lastPath        string // method label only; no destination, credentials, or payloads
+	lastRouteMS     int64
+	lastConnectMS   int64
 }
 
 type proxyReport struct {
@@ -342,7 +342,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	config := smartproxy.Config{Upstreams: upstreams, RecoverIPHostSNI: localDir != ""}
 	diagnostics := &proxyDiagnostics{}
 	config.OnEvent = func(e smartproxy.Event) {
-		if e.Probe { return }
+		if e.Probe {\n\t\t\treturn\n\t\t}
 		diagnostics.mu.Lock()
 		defer diagnostics.mu.Unlock()
 		if e.Port == "53" && e.Err != "" {
@@ -350,16 +350,20 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			diagnostics.dnsError = "DNS exchange failed"
 		}
 		if e.UDP {
-			if e.OK { diagnostics.udpAssociations++ } else if e.Err != "" {
+			if e.OK {
+				diagnostics.udpAssociations++
+			} else if e.Err != "" {
 				diagnostics.udpFailures++
-				if e.Port == "443" { diagnostics.udp443Failures++ }
+				if e.Port == "443" {
+					diagnostics.udp443Failures++
+				}
 			}
 			return
 		}
 		if e.Port != "53" {
 			diagnostics.tcpAttempts++
-			if e.Err != "" { diagnostics.tcpFailures++ }
-			if e.TLSResponse { diagnostics.tlsResponses++ }
+			if e.Err != "" {\n\t\t\t\tdiagnostics.tcpFailures++\n\t\t\t}
+			if e.TLSResponse {\n\t\t\t\tdiagnostics.tlsResponses++\n\t\t\t}
 			if e.OK && e.Path != "" {
 				diagnostics.lastPath = e.Path
 				diagnostics.lastRouteMS = e.Took.Milliseconds()
