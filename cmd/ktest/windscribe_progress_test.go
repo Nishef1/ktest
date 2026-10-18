@@ -368,7 +368,7 @@ func TestWindscribeZeroCarriersExplainsMissingMappingInsteadOfFailedSearch(t *te
 	v := &wsProgressView{t: plainTerm(&out)}
 	s := wsProgressSnapshot{
 		key: "68.67.118.163:443", incomplete: true,
-		mappingReason: "node not found in 2 fresh provider source(s)",
+		mappingReason: "node not found in 2 fresh provider",
 	}
 	v.show(s, true)
 	for _, want := range []string{"NO WRAPPED CARRIERS", "zero tests were run", "node not found in 2 fresh provider source(s)", "no IP guessing"} {
