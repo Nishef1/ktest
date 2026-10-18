@@ -725,10 +725,10 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	if !hasPreferred {
 		close(preferredFailed)
 	}
-	// At most eight outer transports are active. A failed fast candidate
+	// At most sixteen outer transports are active. A failed fast candidate
 	// releases its slot immediately, so 64 eligible variants can be considered
 	// during one 25-second CONNECT without starting 64 sockets at once.
-	slots := make(chan struct{}, 8)
+	slots := make(chan struct{}, 16)
 	for i, c := range cs {
 		if c.addr == "" {
 			c.addr = key
