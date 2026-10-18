@@ -53,13 +53,13 @@ type Selection struct {
 	Attempts   int    `json:"attempts"`
 }
 type Profile struct {
-	Version     int         `json:"version"`
-	CompletedAt time.Time   `json:"completed_at"`
-	TargetsKey  string      `json:"targets_key"`
-	TargetsRevision string `json:"targets_revision,omitempty"`
-	Default     string      `json:"default"`
-	Selections  []Selection `json:"selections"`
-	Rows        []Result    `json:"rows"`
+	Version         int         `json:"version"`
+	CompletedAt     time.Time   `json:"completed_at"`
+	TargetsKey      string      `json:"targets_key"`
+	TargetsRevision string      `json:"targets_revision,omitempty"`
+	Default         string      `json:"default"`
+	Selections      []Selection `json:"selections"`
+	Rows            []Result    `json:"rows"`
 }
 type Progress struct {
 	Completed, Total      int
@@ -97,9 +97,9 @@ func CalibrateWithWorkers(ctx context.Context, targets []Target, methods []Metho
 		}
 	}
 	type task struct {
-		row int
-		target Target
-		method Method
+		row     int
+		target  Target
+		method  Method
 		repeats int
 	}
 	execute := func(tasks []task) error {
