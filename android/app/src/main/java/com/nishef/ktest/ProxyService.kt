@@ -95,13 +95,24 @@ class ProxyService : Service() {
         val manager = getSystemService(ConnectivityManager::class.java)
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                // Our own TUN can briefly appear as a new default network on
+                // some devices; it is not an underlying Wi-Fi/cellular handover.
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    KTestVpnService.state in setOf("preparing", "tun_running_unverified")) return
                 if (network.networkHandle != expectedHandle &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
                     invalidateBalancedNetwork()
                 }
             }
             override fun onLost(network: Network) {
-                if (network.networkHandle == expectedHandle) invalidateBalancedNetwork()
+                if (network.networkHandle != expectedHandle) return
+                // onLost can mean "no longer default" rather than physically
+                // gone. Check on the service worker, outside the callback.
+                worker.launch {
+                    delay(350)
+                    val stillPresent = manager.allNetworks.any { it.networkHandle == expectedHandle }
+                    if (!stillPresent) invalidateBalancedNetwork()
+                }
             }
         }
         manager.registerDefaultNetworkCallback(cb)
