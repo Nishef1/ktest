@@ -34,6 +34,9 @@ internal class SettingsState {
     var caReport by mutableStateOf<JSONObject?>(null)
     var caError by mutableStateOf<String?>(null)
     var caMessage by mutableStateOf<String?>(null)
+    var caTrust by mutableStateOf<LocalCaTrust.Result?>(null)
+    var caTrustBusy by mutableStateOf(false)
+    var frontingEnabled by mutableStateOf(false)
 }
 
 private data class Notice(val name: String, val detail: String, val license: String, val url: String)
@@ -62,6 +65,7 @@ internal fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val privateDir = context.filesDir.absolutePath
+    val preferences = remember(context) { context.getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE) }
 
     // Storage Access Framework only exports the public certificate. The CA
     // private key must never enter an Intent, shared file or clipboard.
@@ -90,8 +94,12 @@ internal fun SettingsScreen(
         }
     }
     LaunchedEffect(privateDir) {
+        s.frontingEnabled = preferences.getBoolean("fronting_opt_in", false)
         try {
             s.caReport = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.frontCAStatus(privateDir)) }
+            if (s.caReport?.optString("state") == "ready") {
+                s.caTrust = withContext(Dispatchers.IO) { LocalCaTrust.inspect(privateDir) }
+            }
         } catch (e: Exception) {
             s.caError = e.message ?: "Could not inspect local CA"
         }
@@ -240,6 +248,41 @@ internal fun SettingsScreen(
                 SecondaryButton("Save public certificate (.crt)", {
                     exportCert.launch("ktest-ca.crt")
                 }, Modifier.fillMaxWidth(), busy = s.caBusy, icon = KIcons.Download)
+            }
+            if (caState == "ready") {
+                SecondaryButton(if (s.caTrustBusy) "Checking…" else "Check Android CA installation", {
+                    s.caTrustBusy = true
+                    scope.launch {
+                        try {
+                            s.caTrust = withContext(Dispatchers.IO) { LocalCaTrust.inspect(privateDir) }
+                        } finally {
+                            s.caTrustBusy = false
+                        }
+                    }
+                }, Modifier.fillMaxWidth(), busy = s.caTrustBusy, icon = KIcons.Shield)
+                s.caTrust?.let { trust ->
+                    KeyValue("Android user CA", when (trust.state) {
+                        "installed_user" -> "Exact CA installed"
+                        "not_found" -> "Not installed"
+                        else -> "Unable to check"
+                    })
+                    Note(trust.detail, if (trust.state == "installed_user") Tone.Good else Tone.Warn)
+                }
+                if (s.caTrust?.state == "installed_user") {
+                    SecondaryButton(
+                        if (s.frontingEnabled) "Disable optional domain fronting" else "Enable optional domain fronting",
+                        {
+                            s.frontingEnabled = !s.frontingEnabled
+                            preferences.edit().putBoolean("fronting_opt_in", s.frontingEnabled).apply()
+                            s.caMessage = if (s.frontingEnabled)
+                                "Opted in. Restart Balanced/Fast to try learned fronting, with local fallback on unsupported sites."
+                            else "Domain fronting disabled for future connections."
+                        }, Modifier.fillMaxWidth(), icon = KIcons.Route
+                    )
+                }
+            }
+            if (s.frontingEnabled && s.caTrust?.state != "installed_user") {
+                Note("Fronting is selected, but Android user CA trust is not confirmed. New fronting sessions will be refused until you check the certificate.", Tone.Warn)
             }
             s.caError?.let { Note(it, Tone.Danger) }
             s.caMessage?.let { Note(it, Tone.Good) }
