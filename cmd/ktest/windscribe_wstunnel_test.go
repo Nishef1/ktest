@@ -615,6 +615,101 @@ func TestSniffConnCloseBeforeWriteDoesNotHang(t *testing.T) {
 	_ = s.Close()
 }
 
+// An inventory with nineteen variants per method must launch one from each
+// method in the first pass, then the next variant of each method, and so on.
+// The first 64 slots may not be monopolized by the first few method families.
+func TestWindscribeRoundRobinOnePerMethodBeforeRepeats(t *testing.T) {
+	var candidates []wsCarrier
+	for method := range 15 {
+		for variant := range 19 {
+			name := fmt.Sprintf("WStunnel sni=s%d entry=192.0.2.%d hello=chrome", variant%3, variant+1)
+			candidates = append(candidates, wsCarrier{
+				name: fmt.Sprintf("%s m%d v%d", name, method, variant),
+				method: fmt.Sprintf("method-%02d", method),
+			})
+		}
+	}
+	for attempt := uint64(0); attempt < 15; attempt++ {
+		ranked := wsDiversify(candidates, attempt)
+		if len(ranked) != len(candidates) {
+			t.Fatalf("lost variants: got %d, want %d", len(ranked), len(candidates))
+		}
+		for start := 0; start < 15*3; start += 15 {
+			seen := map[string]bool{}
+			for _, c := range ranked[start : start+15] {
+				if seen[c.method] {
+					t.Fatalf("attempt %d round %d repeats %s before other methods", attempt, start/15, c.method)
+				}
+				seen[c.method] = true
+			}
+			if len(seen) != 15 {
+				t.Fatalf("attempt %d round %d covered only %d of 15 methods", attempt, start/15, len(seen))
+			}
+		}
+		first64 := map[string]int{}
+		for _, c := range ranked[:64] {
+			first64[c.method]++
+		}
+		for method := range 15 {
+			key := fmt.Sprintf("method-%02d", method)
+			if first64[key] < 4 {
+				t.Fatalf("attempt %d starved %s in 64-candidate budget: %v", attempt, key, first64)
+			}
+		}
+	}
+}
+
+// Prior failed variants must not make a method disappear from the first pass.
+// Within that method, its next untried candidate takes priority.
+func TestWindscribeUntriedPriorityIsPerMethodNotWholeInventory(t *testing.T) {
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	key := "203.0.113.100:443"
+	var cs []wsCarrier
+	for method := range 4 {
+		for variant := range 3 {
+			cs = append(cs, wsCarrier{
+				name: fmt.Sprintf("WStunnel sni=a method%d variant%d", method, variant),
+				method: fmt.Sprintf("method-%d", method),
+			})
+		}
+	}
+	b.registerCarriers(key, "203.0.113.100", cs)
+	for _, c := range cs {
+		if c.method == "method-0" && strings.HasSuffix(c.name, "variant0") {
+			b.carrierProgress(key, c.name, "start")
+			b.carrierProgress(key, c.name, "tls: reset")
+			b.carrierProgress(key, c.name, "finish")
+		}
+	}
+	ordered := b.ordered(key, cs)
+	seen := map[string]bool{}
+	for _, c := range ordered[:4] {
+		if seen[c.method] {
+			t.Fatalf("method duplicated before all four were sampled: %+v", ordered[:4])
+		}
+		seen[c.method] = true
+		if c.method == "method-0" && strings.HasSuffix(c.name, "variant0") {
+			t.Fatal("failed variant was selected ahead of the other two untried variants")
+		}
+	}
+}
+
+// Confirmed paths still get their exclusive retry before the fair rotation.
+func TestWindscribeConfirmedCarrierRemainsFirstWithMethodRoundRobin(t *testing.T) {
+	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
+	key := "203.0.113.100:443"
+	cs := []wsCarrier{
+		{name: "WStunnel preferred", method: "method-A"},
+		{name: "WStunnel alternative", method: "method-A"},
+		{name: "Stealth backup", method: "method-B"},
+	}
+	b.registerCarriers(key, "203.0.113.100", cs)
+	b.good[key] = cs[0].name
+	if got := b.ordered(key, cs)[0].name; got != cs[0].name {
+		t.Fatalf("confirmed carrier lost priority: %q", got)
+	}
+}
+
 func TestWindscribeCarrierRetriesExploreOtherIPAndWrapper(t *testing.T) {
 	b := newWSBridge(wsOptions{}, nil, nil, func(string, ...any) {})
 	key := "152.233.50.130:443"
