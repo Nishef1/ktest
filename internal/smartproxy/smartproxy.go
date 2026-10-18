@@ -150,6 +150,7 @@ type Config struct {
 
 // Event reports a connection outcome, or unverified TCP establishment.
 type Event struct {
+	UDP         bool // association/result only; no payload, host logging or per-datagram event
 	Probe       bool // internal calibration listener; never counts as user activity
 	Host        string
 	Site        string // grouped domain for aggregate reporting; never the exact history key
