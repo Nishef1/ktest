@@ -17,7 +17,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = [ROOT / "internal/aether/android-cores.json",
-             ROOT / "internal/byedpi/android-cores.json"]
+             ROOT / "internal/byedpi/android-cores.json",
+             ROOT / "internal/xraycfg/android-cores.json"]
 
 
 def digest(data):
@@ -67,6 +68,23 @@ def check_elf(data, abi):
 def archive_payloads(archive, abi):
     payloads = {}
     expected = {item["source"]: item for item in abi["files"]}
+    if archive.suffix == ".zip":
+        # Xray publishes unchanged Android ELF inside a ZIP (unlike Aether
+        # and ByeDPI tarballs). Validate each payload in addition to the
+        # already pinned whole-archive digest.
+        with zipfile.ZipFile(archive) as source:
+            entries = [item for item in source.infolist() if item.filename in expected]
+            if len(entries) != len(expected) or len({item.filename for item in entries}) != len(expected):
+                raise ValueError("Xray ZIP missing or duplicating official executable")
+            for item in entries:
+                if item.is_dir() or item.file_size > 100 << 20:
+                    raise ValueError("bad Xray executable ZIP entry")
+                data = source.read(item)
+                if digest(data) != expected[item.filename]["sha256"]:
+                    raise ValueError("Xray executable checksum mismatch")
+                check_elf(data, abi)
+                payloads[item.filename] = data
+        return payloads
     with tarfile.open(archive, "r:gz") as source:
         for member in source:
             name = member.name.removeprefix("./")
@@ -91,6 +109,8 @@ def prepare(manifest, cache, destination, abis, verify_only):
     cache.mkdir(parents=True, exist_ok=True)
     for name in abis:
         if name not in manifest["abis"]:
+            if manifest.get("optional_abis"):
+                continue  # e.g. official Android Xray is pinned only for ARM64
             raise ValueError(f"unsupported Android ABI: {name}")
         abi = manifest["abis"][name]
         archive_name = abi["archive"]
@@ -149,6 +169,8 @@ def main():
             for path in MANIFESTS:
                 manifest = json.loads(path.read_text())
                 for abi in args.abis:
+                    if abi not in manifest["abis"] and manifest.get("optional_abis"):
+                        continue
                     for item in manifest["abis"][abi]["files"]:
                         name = f'lib/{abi}/{item["name"]}'
                         if digest(apk.read(name)) != item["sha256"]:
