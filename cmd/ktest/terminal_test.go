@@ -533,7 +533,7 @@ func TestCtrlCQuitsFromAnywhereInTheMenus(t *testing.T) {
 	}{
 		{"main menu", "Select >", nil},
 		{"submenu", "Windscribe >", []string{"5"}},
-		{"nested submenu", "Windscribe test >", []string{"5", "3"}},
+		{"nested submenu", "Windscribe test >", []string{"5", "4"}},
 		{"nested prompt", "Provider: cloudflare", []string{"10"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -555,7 +555,7 @@ func TestEnterKeepsItsMeaningInMenus(t *testing.T) {
 	s.send("5")
 	s.waitFor("Windscribe >", 1)
 	s.send("") // Enter is not Back
-	s.waitFor("Select 1-3, or 0", 1)
+	s.waitFor("Select 1-4, or 0", 1)
 	s.send("0")
 	s.waitFor("Select >", 2)
 	s.send("0")
