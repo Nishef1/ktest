@@ -117,7 +117,10 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:KTEST_BYEDPI_BIN = (Resolve-Path portable/ktest/cores/ciadpi.exe).Path
-          go test -count=1 -timeout 1m -run '^TestOfficialByeDPIStartsAllBuiltInStrategies        shell: pwsh
+          go test -count=1 -timeout 1m -run '^TestOfficialByeDPIStartsAllBuiltInStrategies$' ./cmd/ktest
+          if ($LASTEXITCODE -ne 0) { throw "Official ByeDPI rejected a shipped strategy or failed SOCKS5 readiness" }
+      - name: Windows smoke tests and portable ZIP
+        shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $menu = "0`n" | & ./portable/ktest/ktest.exe
