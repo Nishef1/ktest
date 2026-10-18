@@ -243,7 +243,7 @@ func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.C
 	if path == "" {
 		path = wstunnel.DefaultPath
 	}
-	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 250 * time.Millisecond,
+	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 150 * time.Millisecond,
 		replyTimeout: 12 * time.Second,
 		good:         map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}, shortEnds: map[string]int{}}
 	for _, e := range splitList(o.cdnEdges) {
@@ -666,9 +666,10 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	b.registerCarriers(key, host, allCarriers)
 	cs := b.ordered(key, allCarriers)
 	b.publishProgress(key, true)
-	// Each connection attempt is a bounded experiment, not a broadcast to
-	// every advertised entry/IP/SNI. Later retries rotate the candidates.
-	const maxRaceCandidates = 24
+	// Every VPN CONNECT gets a bounded, diverse candidate budget. Failed
+	// transports immediately free a slot for the next method; we never flood
+	// all provider entries simultaneously or wait for another VPN reconnect.
+	const maxRaceCandidates = 64
 	if len(cs) > maxRaceCandidates {
 		b.logf("Windscribe attempt=%d target=%s: testing %d of %d candidates; alternatives rotate on retry", attemptID, key, maxRaceCandidates, len(cs))
 		cs = cs[:maxRaceCandidates]
@@ -724,6 +725,10 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	if !hasPreferred {
 		close(preferredFailed)
 	}
+	// At most eight outer transports are active. A failed fast candidate
+	// releases its slot immediately, so 64 eligible variants can be considered
+	// during one 25-second CONNECT without starting 64 sockets at once.
+	slots := make(chan struct{}, 8)
 	for i, c := range cs {
 		if c.addr == "" {
 			c.addr = key
@@ -756,14 +761,25 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 				case <-preferredFailed:
 				}
 			}
+			select {
+			case <-rctx.Done():
+				return
+			case slots <- struct{}{}:
+			}
+			defer func() { <-slots }()
+			// Stagger only the opening wave. Later candidates are launched
+			// as soon as an earlier attempt fails, without index*stagger
+			// delays that penalize variants deep in the inventory.
 			slot := i
 			if hasPreferred && i > 0 {
 				slot--
 			}
-			select {
-			case <-rctx.Done():
-				return
-			case <-time.After(time.Duration(slot) * b.stagger):
+			if slot < cap(slots) && slot > 0 && b.stagger > 0 {
+				select {
+				case <-rctx.Done():
+					return
+				case <-time.After(time.Duration(slot) * b.stagger):
+				}
 			}
 			b.carrierProgress(key, c.name, "start")
 			started = true
