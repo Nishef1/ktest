@@ -268,8 +268,8 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 	if err != nil {
 		return nil, err
 	}
-	if profile.Default == "" {
-		return nil, errors.New("no generic route returned verified HTTPS; inspect the target results and run Test manually")
+	if !profile.Usable() {
+		return nil, errors.New("no target or generic route returned repeated verified HTTPS; inspect results and retry")
 	}
 	pins := &smartproxy.FrozenRoutes{Default: profile.Default, Targets: map[string]string{}}
 	for _, u := range config.Upstreams {
