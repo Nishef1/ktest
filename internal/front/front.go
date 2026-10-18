@@ -739,12 +739,14 @@ type closeWriter interface{ CloseWrite() error }
 // Only a bounded HTTP/1 response prefix is observed. The contents of
 // requests, response headers and user data are never retained or logged.
 type httpStatusPrefix struct{ first []byte }
+
 func (p *httpStatusPrefix) Write(b []byte) (int, error) {
 	if remaining := 32 - len(p.first); remaining > 0 {
 		p.first = append(p.first, b[:min(len(b), remaining)]...)
 	}
 	return len(b), nil
 }
+
 func (p *httpStatusPrefix) status() int {
 	if !strings.HasPrefix(string(p.first), "HTTP/1.1 ") && !strings.HasPrefix(string(p.first), "HTTP/1.0 ") {
 		return 0
