@@ -1,5 +1,7 @@
 # Android Fast adaptive routing and Balanced route calibration
 
+> **Update 2026-10-18:** Balanced no longer sends unknown destinations through a single calibrated default. Configured targets (and protected AI traffic) keep their pinned routes; every other destination, including a target whose calibration found no working method, races all eligible methods with per-destination learning, as on Windows. All local ByeDPI/Xray cores keep running for the session. If a core that a target is pinned to exits, the session stops with a visible reason; other core exits only remove that method from the race.
+
 This describes the intentionally distinct Android Fast (live adaptive) and Balanced (preconnection calibrated) contracts in the Go route planner, bridge and proxy. It does not change the other native modes or establish physical-phone acceptance. Source tests, an APK build, or an emulator observation cannot establish native-app access, whole-device leak protection, or production readiness. The main integration report must record final verification for the actual signed candidate.
 
 ## Fast: immediate adaptive connection

@@ -172,18 +172,3 @@ func (set *localCoreSet) stop() {
 		<-core.done
 	}
 }
-
-// Once preconnection evaluation ends, only selected native methods remain
-// running. Dead selected methods are not silently replaced mid-session.
-func (set *localCoreSet) retain(needed map[string]bool) {
-	var kept []*nativeCore
-	for _, core := range set.cores {
-		if needed[core.method] {
-			kept = append(kept, core)
-			continue
-		}
-		core.cancel()
-		<-core.done
-	}
-	set.cores = kept
-}

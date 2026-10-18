@@ -53,11 +53,11 @@ internal fun RoutePlanPanel(
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text("Route calibration", color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text(if (connected && frozen) "Routes fixed for this connection" else "Balanced / Fast · saved observations",
+                Text(if (connected && frozen) "Targets pinned · other sites adaptive" else "Balanced / Fast · saved observations",
                     color = K.muted, fontSize = 12.sp)
             }
         }
-        Note("Matching observations can be reused for 24 hours. Go also checks the configured targets and available methods. Routes stay fixed while connected; expiry does not trigger a live retest or fallback.")
+        Note("Matching observations can be reused for 24 hours. Go also checks the configured targets and available methods. While connected your targets stay on their tested routes; other sites race all methods.")
         if (running || s.starting) {
             val done = report?.optInt("completed") ?: 0
             val total = report?.optInt("total") ?: 0
@@ -96,11 +96,11 @@ internal fun RoutePlanPanel(
             Text(when {
                 targetsChanged -> "Configuration needs a new test"
                 fresh -> "Within the 24-hour cache window · compatibility checked on Connect"
-                connected && frozen -> "Cache window expired · this connection keeps its fixed routes"
+                connected && frozen -> "Cache window expired · this connection keeps its pinned targets"
                 else -> "Outside the cache window · shown as historical observations"
             }, color = if (fresh && !targetsChanged) K.muted else K.amber, fontSize = 12.sp)
             if (report?.optBoolean("reused") == true) Note("The last connection reused a saved profile. This label does not extend its 24-hour lifetime.")
-            RoutePlanDetail("Default for other destinations", profile.optString("default").ifBlank { "No generic route selected" })
+            RoutePlanDetail("Other destinations", "Adaptive race across all methods")
             val rows = profile.objectRows("rows")
             val selections = profile.objectRows("selections")
             val targetIds = (selections.map { it.optString("target_id") } + rows.map { it.optString("target_id") }).distinct()

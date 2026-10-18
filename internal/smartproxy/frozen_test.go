@@ -116,3 +116,26 @@ func TestUntestedChildrenUseDefaultNotParentFrontingSelection(t *testing.T) {
 		}
 	}
 }
+
+func TestAdaptiveFrozenPinsTargetsAndRacesEverythingElse(t *testing.T) {
+	pins := &FrozenRoutes{Default: "local", Protected: "exit", Adaptive: true,
+		Targets: map[string]string{"api.example.org:443": "specific", "blocked.example.org:443": ""}}
+	p, err := New(Config{Frozen: pins, ExitOnly: func(h string) bool { return h == "protected.example" }, Upstreams: []Upstream{
+		{Name: "local"}, {Name: "specific"}, {Name: "other"}, {Name: "exit", Exit: true, AIEligible: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.order("api.example.org", "443"); len(got) != 1 || got[0].Name != "specific" {
+		t.Fatalf("calibrated target lost its pin: %d routes", len(got))
+	}
+	if got := p.order("protected.example", "443"); len(got) != 1 || got[0].Name != "exit" {
+		t.Fatalf("protected destination left its verified exit: %d routes", len(got))
+	}
+	for _, host := range []string{"unknown.example", "blocked.example.org"} {
+		got := p.order(host, "443")
+		if len(got) < 3 {
+			t.Fatalf("%s did not race every eligible method: %d routes", host, len(got))
+		}
+	}
+}

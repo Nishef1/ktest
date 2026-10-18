@@ -96,10 +96,15 @@ type Session interface {
 
 // FrozenRoutes is a preconnection selection. Empty exact selections fail
 // closed; unknown destinations use one fixed default, never a new race.
+//
+// Adaptive keeps the calibrated exact-target and protected pins but races every
+// eligible method (with per-destination learning) for all other destinations,
+// including tested targets that found no working method.
 type FrozenRoutes struct {
 	Targets   map[string]string
 	Default   string
 	Protected string
+	Adaptive  bool
 }
 
 type Config struct {

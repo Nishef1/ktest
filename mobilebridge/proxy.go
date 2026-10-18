@@ -138,7 +138,7 @@ func currentReportLocked() proxyReport {
 			case <-c.done:
 				report.XrayError = "Xray local core exited; other strategies remain available"
 				if activeProxy.routeProfile != nil {
-					report.XrayError = "Selected Xray core exited; routes remain fixed. Disconnect and run Test manually."
+					report.XrayError = "Xray local core exited; other sites use the remaining strategies, pinned targets need a reconnect."
 				}
 			default:
 				report.XrayReady = true
@@ -457,13 +457,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		if testOnly {
 			return "{}", nil
 		}
-		if localCores != nil {
-			needed := map[string]bool{config.Frozen.Default: true, config.Frozen.Protected: true}
-			for _, method := range config.Frozen.Targets {
-				needed[method] = true
-			}
-			localCores.retain(needed)
-		}
+		// Calibrated targets stay pinned; every other site races all methods
+		// like the desktop client, so every local core keeps running.
+		config.Frozen.Adaptive = true
 	}
 	proxy, err := smartproxy.New(config)
 	if err != nil {
@@ -509,10 +505,10 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 				case <-ctx.Done():
 				case <-child.done:
 					proxy.Remove(child.method)
-					// Balanced freezes its routes, so a dead selected core has no
-					// replacement and would silently drop that traffic. Fail the
-					// session visibly, as for a native core exit.
-					if routeProfile == nil {
+					// Unpinned sites simply race the remaining methods. A core pinned
+					// to a calibrated target has no replacement, so its traffic would
+					// silently fail: end the session visibly, as for a native exit.
+					if routeProfile == nil || !pinnedMethod(config.Frozen, child.method) {
 						return
 					}
 					proxyMu.Lock()
@@ -630,4 +626,19 @@ func ProxyReady() bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+func pinnedMethod(pins *smartproxy.FrozenRoutes, method string) bool {
+	if pins == nil {
+		return false
+	}
+	if pins.Protected == method || (!pins.Adaptive && pins.Default == method) {
+		return true
+	}
+	for _, selected := range pins.Targets {
+		if selected == method {
+			return true
+		}
+	}
+	return false
 }
