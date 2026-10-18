@@ -115,14 +115,21 @@ jobs:
             Write-Host "Pinned winws2: $($version -join ' ')"
             $common = @("--wf-raw=$f", "--lua-init=@lua/zapret-lib.lua", "--lua-init=@lua/zapret-antidpi.lua", "--filter-tcp=443", "--filter-l7=tls", "--payload=tls_client_hello")
             $presets = @(
-              @("--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,rndsni,dupsid"),
-              @("--lua-desync=multisplit:pos=1,midsld"),
-              @("--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,rndsni,dupsid", "--lua-desync=multisplit:pos=1,midsld:seqovl=5:seqovl_pattern=0x1603030000")
+              @{ name = "fake"; args = @("--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,rndsni,dupsid") },
+              @{ name = "split"; args = @("--lua-desync=multisplit:pos=1,midsld") },
+              @{ name = "combo"; args = @(
+                "--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,rndsni,dupsid",
+                "--lua-desync=multisplit:pos=1,midsld:seqovl=5:seqovl_pattern=0x1603030000"
+              ) }
             )
             foreach ($preset in $presets) {
-              & ./winws2.exe @common @preset "--wf-save=preview-filter.txt"
-              if ($LASTEXITCODE -ne 0 -or -not (Test-Path preview-filter.txt)) {
-                throw "Zapret2 did not accept a pinned single-IP packet preset"
+              $argsForTrial = @($common) + @($preset.args) + @("--wf-save=preview-filter.txt")
+              Write-Host "Verifying pinned Zapret2 strategy: $($preset.name)"
+              $diagnostic = & ./winws2.exe @argsForTrial 2>&1
+              $code = $LASTEXITCODE
+              $diagnostic | ForEach-Object { Write-Host $_ }
+              if ($code -ne 0 -or -not (Test-Path preview-filter.txt)) {
+                throw "Zapret2 $($preset.name) rejected a pinned single-IP preset: exit=$code output=$($diagnostic -join ' ')"
               }
               Remove-Item preview-filter.txt
             }
