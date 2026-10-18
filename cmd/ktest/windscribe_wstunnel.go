@@ -797,17 +797,31 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 	if !hasPreferred {
 		close(preferredFailed)
 	}
-	// At most sixteen outer transports are active. A failed fast candidate
-	// releases its slot immediately, so 64 eligible variants can be considered
-	// during one 25-second CONNECT without starting 64 sockets at once.
+	// At most sixteen outer transports are active. The turn handoff keeps
+	// admission and progress-start order equal to the method round-robin;
+	// competing goroutines must not reorder the first sixteen slots.
 	slots := make(chan struct{}, 16)
+	turn := make(chan struct{})
+	close(turn)
 	for i, c := range cs {
+		previous := turn
+		next := make(chan struct{})
+		turn = next
 		if c.addr == "" {
 			c.addr = key
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Always unblock the next candidate, including after early
+			// cancellation or while awaiting the confirmed preferred path.
+			advance := sync.OnceFunc(func() { close(next) })
+			defer advance()
+			select {
+			case <-rctx.Done():
+				return
+			case <-previous:
+			}
 			keep := false
 			started, completed := false, false
 			defer func() {
@@ -839,22 +853,27 @@ func (b *wsBridge) race(ctx context.Context, host, port string, first []byte, in
 			case slots <- struct{}{}:
 			}
 			defer func() { <-slots }()
-			// Stagger only the opening wave. Later candidates are launched
-			// as soon as an earlier attempt fails, without index*stagger
-			// delays that penalize variants deep in the inventory.
+			// Apply initial stagger relative to the race start, not
+			// cumulatively: a serialized launch order must not turn 16
+			// candidates into a quadratic startup delay.
 			slot := i
 			if hasPreferred && i > 0 {
 				slot--
 			}
 			if slot < cap(slots) && slot > 0 && b.stagger > 0 {
-				select {
-				case <-rctx.Done():
-					return
-				case <-time.After(time.Duration(slot) * b.stagger):
+				if delay := time.Until(began.Add(time.Duration(slot) * b.stagger)); delay > 0 {
+					timer := time.NewTimer(delay)
+					select {
+					case <-rctx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
 				}
 			}
 			b.carrierProgress(key, c.name, "start")
 			started = true
+			advance() // Admit the next method only after this one has started.
 			probeCtx, stopProbe := context.WithTimeout(rctx, b.replyTimeout)
 			defer stopProbe()
 			conn, err := c.open(probeCtx, host, port)
