@@ -290,9 +290,13 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 		key := net.JoinHostPort(strings.ToLower(u.Hostname()), port)
 		// Multiple paths on one host share one stable transport. Prefer a
 		// content-verified route over a transport-only response/refusal.
-		if old, exists := pins.Targets[key]; !exists || old == "" || selection.Assessment == "https_verified" {
-			pins.Targets[key] = selection.Method
+		if selection.Method == "" || selection.Assessment != "https_verified" {
+			// Root-page HTTP refusals are not evidence that native APIs or
+			// media are broken. Try the independently verified generic route
+			// instead of pinning this entire hostname to an empty route.
+			continue
 		}
+		pins.Targets[key] = selection.Method
 	}
 	for _, method := range append([]string{pins.Default, pins.Protected}, mapValues(pins.Targets)...) {
 		if method != "" {
