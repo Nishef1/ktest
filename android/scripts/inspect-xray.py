@@ -20,7 +20,7 @@ with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         if item.filename.rsplit("/", 1)[-1] != "xray":
             continue
         payload = archive.read(item)
-        if len(payload) < 64 or payload[:4] != b"\\x7fELF":
+        if len(payload) < 64 or payload[:4] != b"\x7fELF":
             raise SystemExit("Xray Android binary is not an ELF")
         machine = struct.unpack_from("<H", payload, 18)[0]
         print("XRAY_ELF_MACHINE=", machine, "class=", payload[4], flush=True)
