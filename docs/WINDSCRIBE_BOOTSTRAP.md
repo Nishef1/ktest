@@ -4,7 +4,21 @@ The **local Windscribe** mode (`-mode windscribe`) helps the installed Windows c
 
 The separately selected **Windscribe through Aether** (`-mode windscribe-aether`) uses a measured WARP carrier for raw OpenVPN TCP. It does not wrap that stream again in WStunnel or silently fall back to Psiphon/local methods. Keep ktest/Aether running; exclude their helper transport from Windscribe's tunnel to avoid recursion. A WARP carrier may exit in Iran; that permits carrying Windscribe but does not authorize direct AI traffic. See [methods, diagnosis and identity handling](NETWORK_DIAGNOSIS.md).
 
-## Run
+## Windows Zapret2 controlled experiment (opt-in, independent of VPN login)
+
+The portable Windows build now includes pinned Zapret2 `winws2.exe`, WinDivert and Lua helpers. **Do not mistake this for an additional SOCKS route**: it temporarily intercepts native Windows TCP packets to one exact provider-advertised destination, including other processes connecting to that same IP:443.
+
+From Windows Terminal **explicitly opened as Administrator**, with the Windscribe app in its confirmed **Disconnected** state, ktest's TUN stopped, and an up-to-date Windscribe node catalog, run:
+
+```powershell
+.\ktest.exe windscribe-test -target "Ashburn - Bles Park" -transport wstunnel -sni www.speedtest.net -rounds 2 -zapret fake
+```
+
+`-zapret split` tests a different upstream Zapret2 Lua multisplit strategy. `-zapret off` (default) keeps the original test behavior. The command chooses one exact provider-advertised IPv4 destination for this location and tests **the same destination/SNI in serial pairs**: first without Zapret2, then under a narrowly filtered `winws2` process. It stops the owned process after each shaped trial, including on cancellation or failure. The filter is restricted to TCP 443 for that destination; **WinDivert filters do not isolate by process ID**. ktest refuses explicit arbitrary entry overrides for this experiment, prevents testing over an active/unknown Windscribe VPN, and does not request UAC permission automatically. No UDP, DNS or system-wide port rule is opened.
+
+The output separately reports TCP, certificate-name checked TLS and WebSocket 101. These are **outer-carrier measurements only**, not OpenVPN authentication, success of Windscribe login, a foreign IP, or proof of defeating the ISP's DPI. Windows Defender/firewall/other WinDivert drivers can interfere; if the driver cannot start, the test fails without enabling fallback broad capture. Manual device testing is still needed before any such packet manipulation can safely be promoted to normal `connect` sessions. See [full integration contract](ZAPRET2_WINDOWS_INTEGRATION.md).
+
+
 
 ```powershell
 cd D:\Data\ktest
