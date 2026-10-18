@@ -561,3 +561,19 @@ func TestEnterKeepsItsMeaningInMenus(t *testing.T) {
 	s.send("0")
 	s.expectExit()
 }
+
+
+func TestWindscribeMenuOptionThreeIsExplicitlyExperimental(t *testing.T) {
+	out := menuOutput(t, "5\n3\n0\n0\n0\n")
+	for _, want := range []string{
+		"Zapret2 (Windows experimental test)",
+		"Diagnostics and tests",
+		"Windows packet-layer A/B test; does NOT connect Windscribe VPN.",
+		"Free access toolkit",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("Windscribe option three did not explain its experimental limitations, missing %q:\n%s", want, out)
+		}
+	}
+}
+
