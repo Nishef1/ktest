@@ -159,4 +159,3 @@ func (t *Trial) Stop() error {
 		return errors.New("Zapret2 process cleanup not confirmed within 6 seconds")
 	}
 }
-
