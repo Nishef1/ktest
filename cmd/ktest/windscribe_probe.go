@@ -235,7 +235,7 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 	entry := fs.String("entry", "", "explicit public Windscribe carrier IPv4 (optional, no guessed neighbours)")
 	snis := fs.String("sni", defaultProbeSNIs, "1..12 comma-separated hostnames; none tests an empty SNI")
 	transport := fs.String("transport", "wstunnel", "wstunnel, stealth, or both (Stealth proves TLS only)")
-	zapret := fs.String("zapret", "off", "Windows-only controlled winws2 packet experiment: off, fake, split; one node and SNI")
+	zapret := fs.String("zapret", "off", "Windows-only controlled winws2 packet experiment: off, fake, split or combo; one node and SNI")
 	rounds := fs.Int("rounds", 2, "repetitions per fixed entry and SNI, 1..3")
 	timeout := fs.Duration("timeout", 4*time.Second, "per-attempt timeout, 1s..8s; whole comparison bounded to 60s")
 	verify := fs.Bool("verify-vpn", false, "read-only CLI + system HTTPS exit-IP check; does not reconnect")
@@ -256,7 +256,7 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 		return 2
 	}
 	if !zapretOptionValid(*zapret) {
-		u.Line(toneFail, "Invalid -zapret; choose off, fake or split")
+		u.Line(toneFail, "Invalid -zapret; choose off, fake, split or combo")
 		return 2
 	}
 	if *zapret != "off" {
