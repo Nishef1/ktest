@@ -70,7 +70,7 @@ func TestWindscribeCatalogGapNeverReportsExhaustedCoverage(t *testing.T) {
 	}
 }
 
-func TestWindscribeInventoryNamesEveryMethodAndKeepsTLSOnlyOffRawVPN(t *testing.T) {
+func TestWindscribeInventoryNamesEveryMethodAndExcludesRawVPN(t *testing.T) {
 	b := newWSBridge(wsOptions{direct: true, sni: "example.com", serverIP: "198.51.100.10"}, nil, nil, func(string, ...any) {})
 	b.methods = func() []smartproxy.WindscribeMethod {
 		return []smartproxy.WindscribeMethod{{Name: "ByeDPI A"}, {Name: "ByeDPI B"}, {Name: "TLS cut", TLSOnly: true}, {Name: "IPv6 cut", TLSOnly: true, IPv6Only: true}}
@@ -78,8 +78,8 @@ func TestWindscribeInventoryNamesEveryMethodAndKeepsTLSOnlyOffRawVPN(t *testing.
 	seen := make(map[string]int)
 	for _, c := range b.carriersFor("203.0.113.100") {
 		seen[c.method]++
-		if strings.HasPrefix(c.name, "raw OpenVPN") && c.method == "TLS cut" {
-			t.Fatal("ClientHello shaping offered to raw OpenVPN")
+		if strings.HasPrefix(c.name, "raw OpenVPN") {
+			t.Fatalf("raw OpenVPN should never be queued: %+v", c)
 		}
 	}
 	for _, method := range []string{"direct", "ByeDPI A", "ByeDPI B", "TLS cut"} {
