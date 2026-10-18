@@ -59,3 +59,47 @@ func TestNativeWaitHonorsCancelAndDoesNotAdvertiseAnExitedCore(t *testing.T) {
 		t.Fatal("an exited native core became ready")
 	}
 }
+
+func TestNativeVerificationRejectsCoreExitDuringSuccessfulProbe(t *testing.T) {
+	for _, mode := range []string{"aether", "tor", "psiphon"} {
+		t.Run(mode, func(t *testing.T) {
+			done := make(chan struct{})
+			core := &nativeCore{address: "127.0.0.1:12345", done: done}
+			calls := 0
+			got, err := waitNativeWithProbe(context.Background(), mode, core, func(_ context.Context, selectedMode, address string) (observedExit, error) {
+				calls++
+				if selectedMode != mode || address != core.address {
+					t.Fatal("unexpected native probe arguments")
+				}
+				close(done)
+				return observedExit{IP: "203.0.113.10", Region: "DE"}, nil
+			})
+			if err == nil || got.IP != "" || calls != 1 {
+				t.Fatalf("exited native process was promoted after probe: %+v, %v, calls=%d", got, err, calls)
+			}
+		})
+	}
+}
+
+func TestNativeVerificationRejectsCancellationDuringSuccessfulProbe(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	core := &nativeCore{address: "127.0.0.1:12345", done: make(chan struct{})}
+	got, err := waitNativeWithProbe(ctx, "aether", core, func(context.Context, string, string) (observedExit, error) {
+		cancel()
+		return observedExit{IP: "203.0.113.10"}, nil
+	})
+	if err == nil || got.IP != "" {
+		t.Fatalf("canceled native startup was promoted: %+v, %v", got, err)
+	}
+}
+
+func TestNativeVerificationPromotesHealthyProcess(t *testing.T) {
+	core := &nativeCore{address: "127.0.0.1:12345", done: make(chan struct{})}
+	got, err := waitNativeWithProbe(context.Background(), "psiphon", core, func(context.Context, string, string) (observedExit, error) {
+		return observedExit{IP: "203.0.113.10", Region: "DE"}, nil
+	})
+	if err != nil || got.IP != "203.0.113.10" {
+		t.Fatalf("healthy verified core was rejected: %+v, %v", got, err)
+	}
+}
