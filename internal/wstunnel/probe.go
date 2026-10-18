@@ -9,11 +9,11 @@ import (
 
 // ProbeResult separates carrier readiness from OpenVPN authentication/data.
 type ProbeResult struct {
-	Entry               string `json:"entry"`
-	SNI                 string `json:"sni"`
-	Transport           string `json:"transport"`
-	TCP                 bool   `json:"tcp"`
-	TLS                 bool   `json:"tls_handshake"`
+	Entry     string `json:"entry"`
+	SNI       string `json:"sni"`
+	Transport string `json:"transport"`
+	TCP       bool   `json:"tcp"`
+	TLS       bool   `json:"tls_handshake"`
 	// CertificateVerified means the outer TLS chain and SNI passed standard
 	// verification. A custom VerifyPeer callback alone may only check a name
 	// hint and must not be reported as chain verification.
