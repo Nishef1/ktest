@@ -210,63 +210,110 @@ type wsProgressEvent struct {
 }
 
 type wsProgressView struct {
-	t    *term
-	mu   sync.Mutex
-	last map[string]time.Time
+	t     *term
+	mu    sync.Mutex
+	last  map[string]time.Time
+	state map[string]string
+	line  *progress // one in-place status line for interactive terminals
 }
 
+func wsProgressStatus(s wsProgressSnapshot) (tone, string) {
+	switch {
+	case s.connected > 0:
+		return toneOK, "VPN connected (Windscribe CLI)"
+	case s.active > 0:
+		return toneWarn, "OpenVPN reply; VPN not yet confirmed"
+	case s.running > 0:
+		return toneInfo, "testing transports; VPN unconfirmed"
+	case s.incomplete:
+		return toneWarn, "discovery incomplete; carrier list may grow"
+	case s.total == 0:
+		return toneWarn, "no eligible carrier variants"
+	case s.remaining > 0:
+		return toneInfo, "awaiting Windscribe's next connection"
+	default:
+		return toneWarn, "configured variants checked; VPN unconfirmed"
+	}
+}
+
+// Live updates are a single redrawable status line, not a new 15-row box for
+// every carrier event. Redirected output receives an occasional concise row.
+// Full per-method diagnostics are emitted once, when the session ends.
 func (v *wsProgressView) show(s wsProgressSnapshot, force bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.last == nil {
 		v.last = make(map[string]time.Time)
+		v.state = make(map[string]string)
 	}
-	if !force && time.Since(v.last[s.key]) < 2*time.Second {
+	k, verdict := wsProgressStatus(s)
+	signature := fmt.Sprintf("%d/%d/%d/%d/%d/%t/%s", s.tried, s.remaining, s.running, s.connected, s.interrupted, s.incomplete, s.carrier)
+	previous, seen := v.state[s.key]
+	if seen && previous == signature {
+		return
+	}
+	// Avoid flood on back-to-back starts/failures, including forced race
+	// notifications. A newly confirmed VPN is reported immediately.
+	if seen && s.connected == 0 && time.Since(v.last[s.key]) < 6*time.Second {
+		return
+	}
+	if !force && seen && time.Since(v.last[s.key]) < 2*time.Second {
 		return
 	}
 	v.last[s.key] = time.Now()
+	v.state[s.key] = signature
+	title := s.key
+	if s.location != "" {
+		title += " (" + s.location + ")"
+	}
+	if v.t.live {
+		if v.line == nil {
+			v.t.Line(toneInfo, "Windscribe carrier search: %s", title)
+			v.line = v.t.Progress("Windscribe", max(s.total, 1))
+		}
+		detail := fmt.Sprintf("%s | %d/%d tried, %d left, %d active | %s", title, s.tried, s.total, s.remaining, s.running, verdict)
+		v.line.Set(s.tried, detail)
+		if s.connected > 0 {
+			v.t.Line(k, "Windscribe confirmed VPN over %s", s.carrier)
+		}
+		return
+	}
+	v.t.Line(k, "Windscribe %s | %d/%d tried, %d left, %d running | %s", title, s.tried, s.total, s.remaining, s.running, verdict)
+}
+
+func (v *wsProgressView) summary(s wsProgressSnapshot) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.line != nil {
+		v.line.Finish(toneInfo, "session ended")
+		v.line = nil
+	}
+	k, verdict := wsProgressStatus(s)
 	title := "WINDSCRIBE " + s.key
 	if s.location != "" {
 		title += " | " + s.location
 	}
-	lines := []string{fmt.Sprintf("Variants: %d | tried: %d | still to try: %d | cooling: %d", s.total, s.tried, s.remaining, s.cooling)}
-	for _, row := range s.methods {
-		lines = append(lines, fmt.Sprintf("%s: %d/%d tried | %s", row.name, row.tried, row.total, row.last))
-	}
-	k := toneInfo
-	switch {
-	case s.connected > 0:
-		k = toneOK
-		lines = append(lines, "VPN: connected (Windscribe CLI). Unused variants remain untested.")
-	case s.active > 0:
-		lines = append(lines, "VPN: awaiting Windscribe confirmation; a control reply is not VPN success.")
-	case s.running > 0:
-		lines = append(lines, "VPN: testing transports; no VPN connection confirmed.")
-	default:
-		lines = append(lines, "VPN: no active confirmed connection.")
+	lines := []string{
+		fmt.Sprintf("Coverage: %d/%d tried | %d remaining | %d interrupted | %d cooling", s.tried, s.total, s.remaining, s.interrupted, s.cooling),
+		"VPN: " + verdict,
 	}
 	if s.carrier != "" {
 		lines = append(lines, "Selected: "+s.carrier)
 	}
-	switch {
-	case s.incomplete:
-		lines = append(lines, "More to try: discovery incomplete; WStunnel/Stealth inventory is not yet known.")
-	case s.total == 0:
-		lines = append(lines, "No eligible variants are available; check local methods and provider discovery.")
-	case s.remaining > 0:
-		lines = append(lines, fmt.Sprintf("More to try: %d variants. They advance on Windscribe's next connection, not during an established VPN.", s.remaining))
-	case s.cooling > 0:
-		lines = append(lines, fmt.Sprintf("This pass is exhausted. Earliest cooldown: %s; one recovery re-probe remains allowed. This does not prove the IP/country is blocked.", s.retryAfter.Round(time.Second)))
-	default:
-		lines = append(lines, "All configured variants have been tried; a later retry can still work if the network changes.")
+	for _, row := range s.methods {
+		lines = append(lines, fmt.Sprintf("%s: %d/%d tried | %s", row.name, row.tried, row.total, row.last))
 	}
-	if s.interrupted > 0 {
-		lines = append(lines, "Canceled contenders remain to try; they are not counted as failures.")
+	if s.incomplete {
+		lines = append(lines, "Discovery incomplete; the carrier inventory is not exhaustive.")
+	} else if s.remaining > 0 {
+		lines = append(lines, fmt.Sprintf("%d untried variants remain for Windscribe's next connection.", s.remaining))
+	} else if s.cooling > 0 {
+		lines = append(lines, "Recovery cooldown: "+s.retryAfter.Round(time.Second).String())
 	}
 	if len(s.inapplicable) > 0 {
-		lines = append(lines, "Not applicable to IPv4 entries: "+strings.Join(s.inapplicable, "; "))
+		lines = append(lines, "Not applicable to IPv4: "+strings.Join(s.inapplicable, "; "))
 	}
-	lines = append(lines, "Tried = transport failed or selected for VPN. Only Windscribe confirms the VPN.")
+	lines = append(lines, "A carrier reply is not VPN success. Only Windscribe confirms its VPN.")
 	v.t.Box(title, k, lines)
 }
 
@@ -280,7 +327,7 @@ func (b *wsBridge) reportProgress() {
 	sort.Strings(keys)
 	for _, key := range keys {
 		if b.view != nil {
-			b.view.show(b.progressSnapshot(key), true)
+			b.view.summary(b.progressSnapshot(key))
 		}
 	}
 }
