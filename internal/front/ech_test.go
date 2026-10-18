@@ -122,3 +122,14 @@ func TestHTTPStatusPrefixDoesNotMisclassifyCDNFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPScoreIsReportedOnceAfterCompleteStatusLine(t *testing.T) {
+	calls, status := 0, 0
+	p := &httpStatusPrefix{onStatus: func(s int) { calls++; status = s }}
+	for _, part := range []string{"HTTP/1.1 4", "21 Misdirected Request\r\n", "body"} {
+		_, _ = p.Write([]byte(part))
+	}
+	if calls != 1 || status != 421 {
+		t.Fatalf("partial response or body caused spurious scoring: status=%d calls=%d", status, calls)
+	}
+}
