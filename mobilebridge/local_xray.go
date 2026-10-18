@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/byedpi"
@@ -24,7 +25,7 @@ func attachAndroidXray(ctx context.Context, set *localCoreSet, nativeDir, privat
 	if set == nil || !filepath.IsAbs(privateDir) || privateDir == string(filepath.Separator) {
 		return errors.New("Xray needs a real absolute Android private directory")
 	}
-	bin, err := xraycfg.AndroidBinary(nativeDir, runtimeArchitecture())
+	bin, err := xraycfg.AndroidBinary(nativeDir, runtime.GOARCH)
 	if err != nil {
 		return err
 	}
