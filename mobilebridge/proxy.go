@@ -30,6 +30,7 @@ type proxySession struct {
 	diagnostics  *proxyDiagnostics
 	native       *nativeCore
 	localCores   *localCoreSet
+	xrayError    string
 	fronter      *front.Fronter
 }
 
@@ -58,6 +59,8 @@ type proxyReport struct {
 	FrontAccepted int    `json:"front_accepted,omitempty"`
 	FrontRefused  int    `json:"front_refused,omitempty"`
 	FrontDisabled string `json:"front_disabled,omitempty"`
+	XrayReady bool `json:"xray_ready"`
+	XrayError string `json:"xray_error,omitempty"`
 }
 
 type proxyStartup struct {
@@ -100,6 +103,18 @@ func currentReportLocked() proxyReport {
 	if activeProxy.native != nil {
 		report.Native, report.Method = true, activeProxy.native.method
 	}
+	report.XrayError = activeProxy.xrayError
+	if activeProxy.localCores != nil {
+		for _, c := range activeProxy.localCores.cores {
+			if c.method != "Xray TLS fragment" { continue }
+			select {
+			case <-c.done:
+				report.XrayError = "Xray local core exited; other strategies remain available"
+			default:
+				report.XrayReady = true
+			}
+		}
+	}
 	if activeProxy.fronter != nil {
 		report.Fronting = true
 		report.FrontAccepted, report.FrontRefused = activeProxy.fronter.Stats()
@@ -141,6 +156,12 @@ func startProxy(mode, upstream string, native *nativeOptions, localDir string) (
 }
 
 func startProxyWithFronting(mode, upstream string, native *nativeOptions, localDir, frontDir string) (report string, startErr error) {
+	return startProxyWithNativeCores(mode, upstream, native, localDir, frontDir, "")
+}
+
+// localStateDir is explicitly the Android filesDir, not the APK native
+// directory. Xray writes only temporary non-secret config there.
+func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, localDir, frontDir, localStateDir string) (report string, startErr error) {
 	// Long upstream validation must never hold proxyMu: Android status polling
 	// calls ProxyStatus on the UI thread. Serialize only start calls here.
 	proxyStartMu.Lock()
@@ -214,6 +235,7 @@ func startProxyWithFronting(mode, upstream string, native *nativeOptions, localD
 		upstreams = append(smartproxy.PlainUpstreams(), smartproxy.DesyncUpstreams()...)
 	}
 	var localCores *localCoreSet
+	var xrayError string
 	keepLocal := false
 	if localDir != "" {
 		localCores, err = launchAndroidLocalCores(startContext, localDir)
@@ -225,6 +247,13 @@ func startProxyWithFronting(mode, upstream string, native *nativeOptions, localD
 				localCores.stop()
 			}
 		}()
+		if localStateDir != "" {
+			// Optional route only. A mismatched or unavailable Xray core never
+			// removes the already verified ByeDPI fallback paths.
+			if err := attachAndroidXray(startContext, localCores, localDir, localStateDir); err != nil {
+				xrayError = err.Error()
+			}
+		}
 		upstreams = append(upstreams, localCores.upstreams...)
 	}
 	location := ""
@@ -333,7 +362,7 @@ func startProxyWithFronting(mode, upstream string, native *nativeOptions, localD
 		return "", fmt.Errorf("HTTP listener: %w", err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, localCores: localCores, fronter: fronter}
+	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, localCores: localCores, fronter: fronter, xrayError: xrayError}
 	activeProxy = session
 	keepDNS = true
 	keepManaged = true
