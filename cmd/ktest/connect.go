@@ -651,7 +651,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			wg.Add(1)
 			go func(c *pathCore) {
 				defer wg.Done()
-				ok := waitForPort(ctx, c.run.done, c.port, o.ready)
+				wait := waitForPort
+				if strings.HasPrefix(c.name, "ByeDPI ") {
+					wait = waitForByeDPI
+				}
+				ok := wait(ctx, c.run.done, c.port, o.ready)
 				mu.Lock()
 				defer mu.Unlock()
 				finished++
