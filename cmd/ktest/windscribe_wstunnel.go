@@ -175,6 +175,9 @@ type wsBridge struct {
 	shortEnds   map[string]int                  // consecutive short unexpected ends of correlated sessions
 	nextAttempt uint64
 	targets     map[string]*wsTargetProgress
+	confirmations []wsConfirmation // append-only CLI-correlated session evidence
+	historyPath   string           // optional local JSONL history, saved at session end
+	startedAt     time.Time
 }
 
 // CLI authentication is attributed only if a single OpenVPN stream is
@@ -202,13 +205,29 @@ func (b *wsBridge) observeCLIConnected() {
 		if active.upstreamEnd || active.started.IsZero() || time.Since(active.started) > 90*time.Second {
 			return
 		}
+		if active.confirmed {
+			// Duplicate CLI notifications are not new successful sessions.
+			return
+		}
 		active.confirmed = true
 		key = active.key
+		method := "unclassified"
+		location := ""
 		if target := b.targets[key]; target != nil {
+			location = target.location
 			if p := target.paths[active.name]; p != nil {
+				if p.method != "" {
+					method = p.method
+				}
+				target.seq++
+				p.seq = target.seq
 				p.last, p.updated = "connected (Windscribe CLI)", time.Now()
 			}
 		}
+		b.confirmations = append(b.confirmations, wsConfirmation{
+			At: time.Now().UTC(), Target: key, Location: location,
+			Method: method, Carrier: active.name, Attempt: active.id,
+		})
 		if b.logf != nil {
 			b.logf("Windscribe attempt=%d target=%s carrier=%s correlated with CLI TCP Connected (not cryptographically attributable)", active.id, active.key, active.name)
 		}
@@ -245,7 +264,7 @@ func newWSBridge(o wsOptions, local func(context.Context, string, string) (net.C
 	if path == "" {
 		path = wstunnel.DefaultPath
 	}
-	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 150 * time.Millisecond,
+	b := &wsBridge{opts: o, path: path, local: local, carrierLocal: local, report: report, logf: logf, note: logf, stagger: 150 * time.Millisecond, startedAt: time.Now().UTC(),
 		replyTimeout: 12 * time.Second,
 		good:         map[string]string{}, bad: map[string]map[string]time.Time{}, retries: map[string]uint64{}, active: map[*wsActiveCarrier]bool{}, shortEnds: map[string]int{}}
 	for _, e := range splitList(o.cdnEdges) {
