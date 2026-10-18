@@ -885,7 +885,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				bridge := newWSBridge(o.ws, apiDial, cfg.OnEvent, logf)
 				windscribeBridge = bridge
 				bridge.methods = proxy.WindscribeMethods
-				bridge.view = &wsProgressView{t: t}
+				bridge.view = &wsProgressView{t: t, verbose: o.verbose}
 				bridge.onProgress = func(key string, force bool) {
 					select {
 					case progressEvents <- wsProgressEvent{key: key, force: force}:
