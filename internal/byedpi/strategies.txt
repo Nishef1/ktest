@@ -2,7 +2,9 @@
 # `ktest smart`, one per line:
 #   label | ciadpi arguments
 # Lines starting with # are ignored. ktest adds "-i 127.0.0.1 -p <port>" itself,
-# so -i/--ip/-p/--port/-D/--daemon/-w/--pidfile are rejected.
+# so all listener/daemon overrides are rejected (including attached short
+# forms), as are --connect-to, transparent mode and other relay overrides.
+# Quoted or escaped argument values remain a single argument (no shell runs).
 # Copy this file to profiles/byedpi-strategies.txt (`ktest strategies -write`)
 # to edit it. Option meanings: https://github.com/hufrea/byedpi
 #
