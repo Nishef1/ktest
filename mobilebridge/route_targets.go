@@ -324,11 +324,26 @@ func routeTargetsJSON(dir string, targets []routeTarget) (string, error) {
 func routeTargetsPublicCA(dir string) *x509.Certificate {
 	frontCAMu.Lock()
 	defer frontCAMu.Unlock()
-	caDir, err := realRouteDirectory(filepath.Join(dir, androidFrontCADirectory))
+	rootDir, err := realRouteDirectory(dir)
 	if err != nil {
 		return nil
 	}
-	if relative, err := filepath.Rel(dir, caDir); err != nil || relative != androidFrontCADirectory {
+	caDir, err := realRouteDirectory(filepath.Join(rootDir, androidFrontCADirectory))
+	if err != nil {
+		return nil
+	}
+	relative, err := filepath.Rel(rootDir, caDir)
+	if err != nil {
+		return nil
+	}
+	// Windows canonicalizes path-component casing independently of the
+	// spelling supplied by the caller. Only this single direct-child name is
+	// allowed; use case-insensitive comparison only on Windows.
+	if filepath.Separator == '\\' {
+		if !strings.EqualFold(relative, androidFrontCADirectory) {
+			return nil
+		}
+	} else if relative != androidFrontCADirectory {
 		return nil
 	}
 	path := filepath.Join(caDir, front.CertFile)

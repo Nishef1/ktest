@@ -184,13 +184,13 @@ jobs:
           $env:KTEST_BYEDPI_BIN = (Resolve-Path portable/ktest/cores/ciadpi.exe).Path
           go test -count=1 -timeout 1m -run '^TestOfficialByeDPIStartsAllBuiltInStrategies$' ./cmd/ktest
           if ($LASTEXITCODE -ne 0) { throw "Official ByeDPI rejected a shipped strategy or failed SOCKS5 readiness" }
-      - name: Validate shared Android Xray fragment profile with official Xray
+      - name: Validate Android Xray fragment and TUN profiles with official Xray
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $env:KTEST_XRAY_BIN = (Resolve-Path portable/ktest/cores/xray.exe).Path
           go test -count=1 -run '^TestOfficialXrayValidatesGeneratedAndroidProfile$' ./internal/xraycfg
-          if ($LASTEXITCODE -ne 0) { throw "Pinned Xray rejected the Android fragment profile" }
+          if ($LASTEXITCODE -ne 0) { throw "Pinned Xray rejected an Android fragment or TUN profile" }
       - name: Windows smoke tests and portable ZIP
         shell: pwsh
         run: |

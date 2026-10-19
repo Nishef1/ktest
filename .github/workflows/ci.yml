@@ -17,6 +17,29 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Download pinned official Xray parser for generated Android config checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = Join-Path $env:RUNNER_TEMP "xray-windows-26.10.10.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "xray-windows-26.10.10"
+          Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/download/v26.10.10/Xray-windows-64.zip" -OutFile $zip
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          if ($actual -ne "bfefce8e9804e53b7d75b7c49d958b34e89890d9d5e672329089d1b3111647af") {
+            throw "Official Xray archive SHA-256 mismatch"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+          $xray = Get-ChildItem -Path $dest -Filter xray.exe -File -Recurse | Select-Object -First 1
+          if ($null -eq $xray) { throw "Official Xray archive did not contain xray.exe" }
+          foreach ($name in @("geoip.dat", "geosite.dat")) {
+            $asset = Get-ChildItem -Path $dest -Filter $name -File -Recurse | Select-Object -First 1
+            if ($null -eq $asset) { throw "Official Xray archive did not contain $name" }
+            if (-not [string]::Equals($asset.DirectoryName, $xray.DirectoryName, [StringComparison]::OrdinalIgnoreCase)) {
+              Copy-Item -LiteralPath $asset.FullName -Destination (Join-Path $xray.DirectoryName $name) -Force
+            }
+          }
+          "KTEST_XRAY_BIN=$($xray.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - run: go test ./...
       - run: go vet ./...
       - run: go build ./cmd/ktest

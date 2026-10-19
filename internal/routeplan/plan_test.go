@@ -138,7 +138,6 @@ func TestCancelAtCompletionDoesNotPublishAReusableProfile(t *testing.T) {
 	}
 }
 
-
 func TestCalibrationRejectsOnlyHTTPRefusalsAsSelectedRoute(t *testing.T) {
 	p, err := Calibrate(context.Background(),
 		[]Target{{ID: "x", Name: "X", URL: "https://x.example/"}},

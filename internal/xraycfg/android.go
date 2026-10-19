@@ -1,6 +1,6 @@
-// Package xraycfg pins Xray's native Android core and generates only a
-// loopback, local-freedom TLS fragmentation profile. It does not implement a
-// VPN, a foreign exit or a separate TUN dataplane.
+// Package xraycfg pins Xray's native Android core and generates two
+// narrowly scoped profiles: a loopback-only TLS fragmenter and a TUN adapter
+// whose only outbound is KTest's local Go SOCKS policy engine.
 package xraycfg
 
 import (
@@ -61,7 +61,7 @@ func AndroidBinary(nativeDir, goarch string) (string, error) {
 
 // ClientConfig uses the upstream Xray freedom/fragment feature, not KTest's
 // ClientHello-cutting code. Only TCP/loopback is exposed; the shared Go policy
-// retains DNS, CA fronting, verified foreign exits and device-wide HEV/UDP.
+// retains DNS, CA fronting, verified foreign exits and device-wide routing.
 func ClientConfig(port int) ([]byte, error) {
 	if port < 1 || port > 65535 {
 		return nil, errors.New("invalid Xray loopback port")
@@ -88,8 +88,51 @@ func ClientConfig(port int) ([]byte, error) {
 	return json.Marshal(root)
 }
 
+// TunConfig turns Android's existing VpnService TUN fd into Xray's layer-3
+// inbound, then sends every TCP/UDP flow to the local Go SOCKS engine. This is
+// deliberately not a direct Internet outbound: adaptive route selection,
+// DNS policy, foreign-exit verification and leak prevention remain in Go.
+func TunConfig(socksPort, mtu int) ([]byte, error) {
+	if socksPort < 1 || socksPort > 65535 {
+		return nil, errors.New("invalid local Go SOCKS port")
+	}
+	if mtu < 1280 || mtu > 9000 {
+		return nil, errors.New("invalid Android TUN MTU")
+	}
+	root := map[string]any{
+		"log": map[string]any{"loglevel": "warning", "access": "none"},
+		"inbounds": []any{map[string]any{
+			"tag":      "ktest-tun",
+			"port":     0,
+			"protocol": "tun",
+			"settings": map[string]any{"name": "ktest-tun", "mtu": mtu},
+			"sniffing": map[string]any{
+				"enabled":      true,
+				"destOverride": []string{"http", "tls", "quic"},
+			},
+		}},
+		"outbounds": []any{map[string]any{
+			"tag":      "ktest-go-socks",
+			"protocol": "socks",
+			"settings": map[string]any{
+				"servers": []any{map[string]any{
+					"address": "127.0.0.1",
+					"port":    socksPort,
+				}},
+			},
+		}},
+		"routing": map[string]any{
+			"rules": []any{map[string]any{
+				"type":        "field",
+				"inboundTag":  []string{"ktest-tun"},
+				"outboundTag": "ktest-go-socks",
+			}},
+		},
+	}
+	return json.Marshal(root)
+}
+
 // ValidateListen is used by tests to verify no Xray endpoint binds publicly.
-// HTTP/UDP handling is owned by the shared KTest stack, not this native core.
 func ValidateListen(listen string) bool {
 	ip := net.ParseIP(listen)
 	return ip != nil && ip.IsLoopback()

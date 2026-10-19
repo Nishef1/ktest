@@ -287,10 +287,16 @@ func cdnProvider(p string) bool {
 }
 
 func realPrivateDirectory(dir string) bool {
-	dir = filepath.Clean(dir)
-	if !filepath.IsAbs(dir) || filepath.Dir(dir) == dir {
+	if !filepath.IsAbs(dir) {
 		return false
 	}
+	dir = filepath.Clean(dir)
+	if filepath.Dir(dir) == dir {
+		return false
+	}
+	// Reject a symlink at the caller-owned leaf, but do not compare canonical
+	// path strings: Windows may change component casing/aliases, and Android
+	// intentionally exposes equivalent private paths through platform parents.
 	info, err := os.Lstat(dir)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return false
@@ -299,15 +305,12 @@ func realPrivateDirectory(dir string) bool {
 	if err != nil {
 		return false
 	}
-	if filepath.Separator == '\\' {
-		return strings.EqualFold(real, dir)
-	}
-	return real == dir
+	resolved, err := os.Stat(real)
+	return err == nil && resolved.IsDir() && os.SameFile(info, resolved)
 }
-
 func cdnPrivateDirectory(privateDir string) (string, error) {
 	if !realPrivateDirectory(privateDir) {
-		return "", errors.New("scan storage requires a real absolute private directory, without symlinks or a filesystem root")
+		return "", errors.New("scan storage requires a real absolute private directory leaf, not a symlink or filesystem root")
 	}
 	dir := filepath.Join(privateDir, "cdn-scans")
 	if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, os.ErrExist) {

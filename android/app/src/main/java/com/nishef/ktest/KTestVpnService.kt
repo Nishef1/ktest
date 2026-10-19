@@ -11,6 +11,7 @@ import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -29,14 +30,15 @@ import org.json.JSONObject
  * MUST NOT claim the VPN is active just because Builder.establish() returned
  * a TUN fd; a real, healthy Go-selected packet adapter is required first.
  *
- * Until the full Go/HEV UDP/DNS/IPv6 path is validated and a packet adapter
- * is registered, VpnCapability() rejects startup before establishing or
- * rerouting any device traffic. Protocol implementation alone is insufficient.
+ * Go owns route policy and SOCKS. The service registers HEV as a fallback;
+ * the Go core tries its checksum-pinned Xray TUN inbound first and switches
+ * to HEV automatically if Xray cannot start or exits.
  */
 class KTestVpnService : VpnService() {
     companion object {
         const val ACTION_START = "com.nishef.ktest.VPN_START"
         const val ACTION_STOP = "com.nishef.ktest.VPN_STOP"
+        const val EXTRA_UNDERLYING_NETWORK_HANDLE = "underlying_network_handle"
         private const val CHANNEL = "ktest_system_vpn"
         private const val NOTIFICATION_ID = 43
         @Volatile var state: String = "disconnected"
@@ -52,15 +54,21 @@ class KTestVpnService : VpnService() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var pending: Job? = null
-    private var tun: ParcelFileDescriptor? = null
+    @Volatile private var pending: Job? = null
+    @Volatile private var startGeneration = 0L
+    @Volatile private var tun: ParcelFileDescriptor? = null
+    @Volatile private var stopping = false
+    private var stopJob: Job? = null
+    private var stopTargetState = "disconnected"
+    private var stopTargetError: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
     override fun onCreate() {
         super.onCreate()
-        // Register only a packet adapter. Go refuses full VPN until the
-        // complete Go/HEV routing path has validated DNS/UDP and IPv6.
+        // Register Xray's app-private/native paths before registering HEV as
+        // fallback. Go owns selection and keeps both adapters on the same SOCKS policy.
+        Mobilebridge.setAndroidXrayTunPaths(applicationInfo.nativeLibraryDir, filesDir.canonicalPath)
         Mobilebridge.setAndroidVpnPacketAdapter(HevPacketAdapter(this))
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "KTest VPN", NotificationManager.IMPORTANCE_LOW)
@@ -70,13 +78,16 @@ class KTestVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                if (pending != null || tun != null) return START_NOT_STICKY
+                if (pending != null || tun != null || stopping) return START_NOT_STICKY
                 state = "preparing"
                 lastError = null
                 // Android requires foreground promotion immediately, before
                 // any slow Go/OS operation that could exceed the start limit.
                 startForeground(NOTIFICATION_ID, notification("Checking Go core readiness"))
-                pending = scope.launch {
+                val underlyingHandle = intent.getLongExtra(EXTRA_UNDERLYING_NETWORK_HANDLE, -1L)
+                val runGeneration = ++startGeneration
+                val job = scope.launch(start = CoroutineStart.LAZY) {
+                    var adapterStopped = false
                     try {
                         val capability = JSONObject(Mobilebridge.vpnCapability())
                         require(capability.optBoolean("available")) {
@@ -108,56 +119,80 @@ class KTestVpnService : VpnService() {
                         }
                         val tunDevice = builder.establish()
                             ?: error("Android did not establish the TUN interface")
+                        if (underlyingHandle > 0) {
+                            val underlying = android.net.Network.fromNetworkHandle(underlyingHandle)
+                            val manager = getSystemService(android.net.ConnectivityManager::class.java)
+                            if (manager.getNetworkCapabilities(underlying)?.hasCapability(
+                                    android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET
+                                ) == true) {
+                                setUnderlyingNetworks(arrayOf(underlying))
+                            }
+                        }
 
                         tun = tunDevice
-                        // Go, not this Android service, must drive a real
-                        // TUN-to-network dataplane and reject unsupported UDP.
+                        // Go prefers the pinned Xray TUN inbound and falls back
+                        // to HEV if startup fails. Both feed the same adaptive
+                        // Go SOCKS policy; Kotlin never selects site routes.
                         Mobilebridge.attachVpnTun(tunDevice.fd.toLong())
+                        if (!isActive || startGeneration != runGeneration) {
+                            Mobilebridge.stopVpnTun()
+                            throw CancellationException("VPN startup canceled")
+                        }
                         val report = JSONObject(Mobilebridge.vpnCapability())
                         check(report.optBoolean("active")) {
                             "Go packet engine did not confirm an active TUN adapter"
                         }
-                        state = "tun_running_unverified"
-                        startForeground(NOTIFICATION_ID, notification(
-                            "Android VPN packet routing active (beta)"
-                        ))
-                        // Fail closed: if the Go proxy or HEV stops, tear the TUN down
-                        // instead of leaving a black-holed interface behind.
+                        withContext(Dispatchers.Main) {
+                            if (!isActive || startGeneration != runGeneration) {
+                                throw CancellationException("VPN startup canceled")
+                            }
+                            state = "tun_running_unverified"
+                            startForeground(NOTIFICATION_ID, notification(
+                                "System tunnel active; destination routes adapt automatically"
+                            ))
+                        }
+                        // Fail closed if the Go proxy or both packet adapters stop.
+                        // VpnCapability() attempts automatic Xray -> HEV recovery
+                        // before reporting the packet path inactive.
                         while (isActive) {
                             delay(1500)
                             if (!JSONObject(Mobilebridge.vpnCapability()).optBoolean("active")) {
-                                lastError = "Connection stopped; VPN closed"
+                                adapterStopped = true
                                 break
                             }
                         }
+                        withContext(NonCancellable + Dispatchers.IO) { closeTunnel() }
                         withContext(NonCancellable + Dispatchers.Main) {
-                            closeTunnel()
-                            state = "disconnected"
-                            stopForeground(STOP_FOREGROUND_REMOVE)
-                            stopSelfResult(startId)
+                            if (startGeneration == runGeneration) {
+                                if (adapterStopped) lastError = "Connection stopped; VPN packet adapter became unhealthy"
+                                state = "disconnected"
+                                stopForeground(STOP_FOREGROUND_REMOVE)
+                                stopSelfResult(startId)
+                            }
                         }
                     } catch (e: CancellationException) {
                         // User or Android revoked the service while checking.
                         throw e
                     } catch (e: Exception) {
-                        lastError = e.message ?: "VPN adapter unavailable"
-                        state = "failed"
+                        val errorMessage = e.message ?: "VPN adapter unavailable"
+                        withContext(NonCancellable + Dispatchers.IO) { closeTunnel() }
                         withContext(NonCancellable + Dispatchers.Main) {
-                            closeTunnel()
-                            stopForeground(STOP_FOREGROUND_REMOVE)
-                            stopSelfResult(startId)
+                            if (startGeneration == runGeneration) {
+                                lastError = errorMessage
+                                state = "failed"
+                                stopForeground(STOP_FOREGROUND_REMOVE)
+                                stopSelfResult(startId)
+                            }
                         }
                     } finally {
-                        pending = null
+                        if (startGeneration == runGeneration) pending = null
                     }
                 }
+                pending = job
+                job.start()
             }
             ACTION_STOP -> {
-                pending?.cancel()
-                closeTunnel()
-                state = "disconnected"
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                requestTunnelStop("disconnected", null)
             }
             else -> stopSelf()
         }
@@ -165,15 +200,13 @@ class KTestVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        pending?.cancel()
-        closeTunnel()
-        state = "revoked"
-        lastError = "Android revoked the VPN permission"
-        stopSelf()
+        requestTunnelStop("revoked", "Android revoked the VPN permission")
     }
 
     override fun onDestroy() {
+        startGeneration++
         pending?.cancel()
+        pending = null
         closeTunnel()
         scope.cancel()
         state = "disconnected"
@@ -191,8 +224,32 @@ class KTestVpnService : VpnService() {
         global && props.routes.any { it.isDefaultRoute && it.destination.address is java.net.Inet6Address }
     }.getOrDefault(false)
 
-    private fun closeTunnel() {
+
+    /** Stop packet forwarding off the main thread; native process teardown can block. */
+    private fun requestTunnelStop(finalState: String, error: String?) {
+        startGeneration++
+        pending?.cancel()
+        pending = null
+        stopTargetState = finalState
+        stopTargetError = error
+        if (stopping) return
+        stopping = true
+        state = "stopping"
+        stopJob = scope.launch {
+            closeTunnel()
+            withContext(Dispatchers.Main) {
+                state = stopTargetState
+                stopTargetError?.let { lastError = it }
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopping = false
+                stopSelf()
+            }
+        }
+    }
+
+    @Synchronized private fun closeTunnel() {
         Mobilebridge.stopVpnTun()
+        runCatching { setUnderlyingNetworks(null) }
         runCatching { tun?.close() }
         tun = null
     }

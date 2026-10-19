@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "KtestAndroid"
-include(":app")
+include(":app", ":vpnprobe")
