@@ -90,7 +90,9 @@ public final class MainActivity extends Activity {
         worker.execute(() -> {
             StringBuilder report = new StringBuilder();
             report.append("KTest VPN traffic acceptance\n");
-            report.append("This app uses a separate UID from KTest.\n\n");
+            report.append("This app uses a separate UID from KTest.\n");
+            report.append("Active Android VPN: ").append(isVpnActive() ? "YES" : "NO (baseline / not tunneled)")
+                .append("\n\n");
 
             try {
                 InetAddress[] addresses = InetAddress.getAllByName("www.cloudflare.com");
@@ -236,6 +238,20 @@ public final class MainActivity extends Activity {
             return "FAIL (" + category(e) + ")";
         } finally {
             if (socket != null) socket.close();
+        }
+    }
+
+    private boolean isVpnActive() {
+        try {
+            ConnectivityManager manager = (ConnectivityManager)
+                getSystemService(Context.CONNECTIVITY_SERVICE);
+            Network active = manager.getActiveNetwork();
+            android.net.NetworkCapabilities capabilities =
+                active == null ? null : manager.getNetworkCapabilities(active);
+            return capabilities != null &&
+                capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN);
+        } catch (Exception ignored) {
+            return false;
         }
     }
 
