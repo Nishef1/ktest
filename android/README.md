@@ -182,8 +182,15 @@ foreign exit; it does not change the public exit IP.
 Balanced/Fast now request a packaged foreign exit automatically when real
 traffic exhausts or stalls the local routes, or immediately for protected
 services. Concurrent requests share discovery; local listeners remain usable.
-Balanced offers Aether, Psiphon/CDN and Tor. Fast excludes Xray and all
-Psiphon/Tor backends, allowing native Aether transports only. A successful
+Balanced offers Aether, Psiphon/CDN and Tor, with independent startup slots;
+standalone Psiphon/Tor retain direct transports and separate local anti-DPI
+carrier variants without depending on WARP enrollment. Each backend profile
+has its own stable private state directory, so concurrent attempts cannot
+overwrite each other's helper configuration or datastore. Psiphon's native
+DNS uses the existing encrypted Go wire-DNS path over a private loopback
+listener, without forcing its direct QUIC traffic through a TCP-only proxy.
+Fast includes local Xray but
+excludes all Psiphon/Tor backends, allowing native Aether exits only. A successful
 profile and hashed destination ranking hints are stored privately per network
 and mode for 24 hours. A working core remains alive until disconnect or failure;
 the Go session reaps losing attempts and recovers after a dead core. Windows
@@ -228,7 +235,7 @@ Before calling this an Android port complete, validate the Xray TUN primary path
 | Area | Implemented in source | Still required |
 | --- | --- | --- |
 | Shared Go connection | Shared SOCKS/HTTP lifecycle and managed native launch/cancel/exit handling | Full lifecycle/reconnect device evidence; no wholesale supervisor port |
-| Fast | Adaptive Go/ByeDPI routes without preconnection calibration; automatic native Aether fallback, private network history, packet DNS and verified-exit UDP | Physical-device startup speed and recovery evidence |
+| Fast | Adaptive Go/ByeDPI/Xray routes without preconnection calibration; automatic native Aether fallback, private network history, packet DNS and verified-exit UDP | Physical-device startup speed and recovery evidence |
 | Balanced | Adaptive Go/ByeDPI/Xray local routes, shared DNS and verified-exit UDP policy; Xray TUN is the preferred whole-device packet adapter with automatic HEV fallback | Physical-device route, expiry/fail-closed, Xray-to-HEV failover and reconnect evidence |
 | Aether | Packaged core launch, method selection and optional external SOCKS; native scans/reconnect reused | Verified native egress and sustained traffic |
 | Tor / Psiphon | Existing Aether backends connected to Android, shared Tor verification and foreign-exit checks | Real egress and sustained traffic; process launch alone is insufficient |

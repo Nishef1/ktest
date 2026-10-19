@@ -46,7 +46,7 @@ func (m ConnectionMode) exitOnly() bool {
 }
 
 func (m ConnectionMode) allowsXray() bool {
-	return m != ModeFast && !m.exitOnly()
+	return !m.exitOnly()
 }
 
 func (m ConnectionMode) isWindscribe() bool { return m == ModeWindscribe || m == ModeWindscribeAether }
@@ -60,7 +60,7 @@ func (m ConnectionMode) message() string {
 	case ModeBalanced:
 		return "Local routes first; on-demand Aether, Psiphon and Tor fallback. TikTok and AI require a verified foreign exit."
 	case ModeFast:
-		return "Local Go, ByeDPI, Zapret and fronting routes with learned priors; Aether exits on demand, no Xray, Psiphon or Tor. TikTok and AI require a verified foreign exit."
+		return "Local Go, ByeDPI, Xray, Zapret and fronting routes with learned priors; Aether exits on demand, no Psiphon or Tor. TikTok and AI require a verified foreign exit."
 	case ModeWindscribe:
 		return "OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI, optional own Cloudflare hostname) plus IP-preserving local anti-DPI (Xray TCP fragmentation, ByeDPI, TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."
 	case ModeWindscribeAether:

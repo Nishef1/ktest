@@ -18,7 +18,7 @@ import (
 )
 
 // attachAndroidXray adds ONE official, local-only Xray TLS-fragmentation path.
-// HEV/Android VpnService remain the sole packet TUN; Go still decides DNS,
+// The separate Xray TUN/HEV adapter forwards packets; Go still decides DNS,
 // trusted CA fronting, route racing, foreign exits and UDP leak prevention.
 // A failing optional Xray core must not disable already working ByeDPI paths.
 func attachAndroidXray(ctx context.Context, set *localCoreSet, nativeDir, privateDir string) error {

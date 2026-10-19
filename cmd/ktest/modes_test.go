@@ -95,12 +95,9 @@ func TestFastRejectsExplicitForeignHelpersBeforeStartingCores(t *testing.T) {
 	}
 }
 
-func TestFastKeepsXrayOutOfItsRouteSet(t *testing.T) {
-	if ModeFast.allowsXray() {
-		t.Fatal("Fast must stay on Go and local anti-DPI routes, with only Aether available as its managed exit")
-	}
-	if !ModeBalanced.allowsXray() || !ModeWindscribe.allowsXray() {
-		t.Fatal("Balanced and local-only Windscribe lost their supported Xray routes")
+func TestMixedModesIncludeXrayAlongsideLocalRoutes(t *testing.T) {
+	if !ModeFast.allowsXray() || !ModeBalanced.allowsXray() || !ModeWindscribe.allowsXray() {
+		t.Fatal("Fast, Balanced and local-only Windscribe must retain their supported Xray routes")
 	}
 }
 

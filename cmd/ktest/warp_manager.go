@@ -40,9 +40,6 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 	if err != nil {
 		return profiles, err
 	}
-	if mode == ModeFast || mode == ModeBalanced || mode == ModeAether {
-		profiles = aether.WithLocalCarriers(profiles)
-	}
 	if mode == ModeBalanced {
 		hasTor := false
 		for _, p := range profiles {
@@ -51,6 +48,9 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 		if !hasTor {
 			profiles = append(profiles, aetherProfile{Label: "Tor-only", Args: []string{"--tor-only"}})
 		}
+	}
+	if mode == ModeFast || mode == ModeBalanced || mode == ModeAether {
+		profiles = aether.WithLocalCarriers(profiles)
 	}
 	return profilesForMode(profiles, mode), nil
 }
@@ -89,7 +89,7 @@ func (m *warpManager) searchBudget(indices []int) time.Duration {
 	budget := 40 * time.Second
 	ceiling := 250 * time.Second
 	forced := m.o.aetherMethod != "" && m.o.aetherMethod != "auto"
-	if !forced && len(indices) > 2 {
+	if !forced && len(indices) > 2 && m.o.mode != ModeBalanced {
 		return budget
 	}
 	for _, i := range indices {

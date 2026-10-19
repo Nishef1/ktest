@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-func TestLocalCarrierVariantsPreserveIdentityAndExcludeUDPAndHelpers(t *testing.T) {
+func TestLocalCarrierVariantsPreserveDirectUDPAndIndependentBackends(t *testing.T) {
 	original := []Profile{{Label: "H2", Args: []string{"--masque", "--h2", "--fragment"}}, {Label: "H3", Args: []string{"--masque", "--h3"}}, {Label: "WG", Args: []string{"--wg"}}, {Label: "Psiphon", Args: []string{"--psiphon-only"}}}
 	variants := WithLocalCarriers(original)
-	if len(variants) != 5 || !variants[1].LocalCarrier() || !reflect.DeepEqual(original[0].Args, []string{"--masque", "--h2", "--fragment"}) {
+	if len(variants) != 6 || !variants[1].LocalCarrier() || !variants[5].LocalCarrier() || variants[4].LocalCarrier() || !reflect.DeepEqual(original[0].Args, []string{"--masque", "--h2", "--fragment"}) {
 		t.Fatal("changed original profiles or generated incompatible carriers")
 	}
 	p := variants[1]

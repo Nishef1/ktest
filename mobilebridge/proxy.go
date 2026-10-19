@@ -335,8 +335,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}
 		}()
 		if localStateDir != "" && androidXrayEnabled(mode) {
-			// Xray is an optional Balanced route. Fast stays on Go and the local
-			// anti-DPI methods, with managed Aether exits available on demand.
+			// Xray is an optional local route in both Balanced and Fast.
 			// A failed Xray start never removes the verified ByeDPI fallbacks.
 			if err := attachAndroidXray(startContext, localCores, localDir, localStateDir); err != nil {
 				xrayError = err.Error()

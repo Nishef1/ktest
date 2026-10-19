@@ -14,9 +14,9 @@ import (
 	"github.com/Nishef1/ktest/internal/coreprocess"
 )
 
-func TestFastUsesNoXrayAndDoesNotWarmItsManagedExit(t *testing.T) {
-	if androidXrayEnabled("fast") || shouldWarmAutomaticExit("fast") {
-		t.Fatal("Fast must defer native cores until its local routes cannot serve the requested traffic")
+func TestFastIncludesXrayAndDefersManagedExitDiscovery(t *testing.T) {
+	if !androidXrayEnabled("fast") || shouldWarmAutomaticExit("fast") {
+		t.Fatal("Fast must offer Xray locally and defer foreign exit discovery until needed")
 	}
 	if !androidXrayEnabled("balanced") || !shouldWarmAutomaticExit("balanced") {
 		t.Fatal("Balanced lost its optional Xray route or early managed-exit warmup")

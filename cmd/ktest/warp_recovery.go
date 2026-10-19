@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"time"
+
+	"github.com/Nishef1/ktest/internal/aether"
+)
 
 // Preserve measured winners, but give independent unmeasured methods a turn
 // before trying many variants of the same blocked transport. Psiphon CDN is
@@ -33,16 +37,7 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 		seen[method] = true
 		diverse = append(diverse, p)
 	}
-	if len(diverse) > 1 {
-		for i := 1; i < len(diverse); i++ {
-			if diverse[i].Method() == "psiphon-cdn" {
-				p := diverse[i]
-				copy(diverse[2:i+1], diverse[1:i])
-				diverse[1] = p
-				break
-			}
-		}
-	}
+	diverse = aether.IndependentProfilesFirst(diverse)
 	return append(append(append(proven, diverse...), variants...), failed...)
 }
 

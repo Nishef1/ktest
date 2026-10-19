@@ -71,7 +71,76 @@ func TestSlowRememberedRouteDoesNotDelayAFasterAlternative(t *testing.T) {
 	t.Logf("recovered in %s; reported %s", elapsed, e.Took)
 }
 
+func TestRepeatedPostHandshakeBlackholesGiveConsentedFrontingTimeToPrepare(t *testing.T) {
+	var localAttempts atomic.Int32
+	p, err := New(Config{Stagger: 50 * time.Millisecond, Upstreams: []Upstream{
+		{Name: "fast hello, no data", Rank: 0, Addr: fakeSocks(t, destination(t), true, &localAttempts)},
+		{Name: "front", Rank: 1, Takeover: func(ctx context.Context, _, _ string, _ []byte) (Session, error) {
+			select {
+			case <-time.After(300 * time.Millisecond):
+				return rejectedSession{}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := "blackhole.example"
+	p.record(p.ups[0], host, "443", true, 10*time.Millisecond)
+	p.earlyFailure(context.Background(), host, "443", p.ups[0].Name, true)
+	if p.order(host, "443")[0].Name != p.ups[0].Name {
+		t.Fatal("one transient stall erased the proven preference")
+	}
+	p.earlyFailure(context.Background(), host, "443", p.ups[0].Name, true)
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	w, err := p.race(ctx, host, "443", clientHello())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.release()
+	if w.path != "front" || localAttempts.Load() != 0 {
+		t.Fatalf("a quick ServerHello beat the usable front again: %s, local=%d", w.path, localAttempts.Load())
+	}
+	p.rejectTakeover(host, "443", "front")
+	if p.order(host, "443")[0].Name == "front" {
+		t.Fatal("a client CA refusal was overridden by blackhole recovery")
+	}
+}
+
 type rejectedSession struct{}
+
+func TestVerifiedExitRecoversBlackholeWithoutClientCATrust(t *testing.T) {
+	var localHits, exitHits atomic.Int32
+	exitServer := serve(t, func(c net.Conn) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = c.Write(serverHello)
+	})
+	p, err := New(Config{Stagger: 50 * time.Millisecond, Upstreams: []Upstream{
+		{Name: "local", Addr: fakeSocks(t, destination(t), true, &localHits)},
+		{Name: "verified exit", Addr: fakeSocks(t, exitServer, true, &exitHits), Exit: true, AIEligible: true, Late: true, Rank: 9},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := "pinned-app.example"
+	p.record(p.ups[0], host, "443", true, 10*time.Millisecond)
+	for range 2 {
+		p.earlyFailure(context.Background(), host, "443", "local", true)
+	}
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	w, err := p.race(ctx, host, "443", clientHello())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.release()
+	if w.path != "verified exit" || localHits.Load() != 0 || exitHits.Load() != 1 {
+		t.Fatalf("a verified exit stayed behind blackholed local paths: %s, local=%d exit=%d", w.path, localHits.Load(), exitHits.Load())
+	}
+}
 
 func (rejectedSession) Serve(net.Conn, []byte) error {
 	return fmt.Errorf("remote error: tls: unknown certificate")

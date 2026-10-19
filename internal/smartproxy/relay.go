@@ -141,6 +141,9 @@ func (p *Proxy) observeRelay(ctx context.Context, host, port, path string, r rel
 		s := p.historyLocked(host, port).score(path)
 		s.earlyFailures = 0
 		s.coolUntil = time.Time{}
+		if s.kind == KindBlackhole {
+			s.kind = KindNone // real data delivery supersedes the earlier silent flow
+		}
 		p.mu.Unlock()
 		return
 	}

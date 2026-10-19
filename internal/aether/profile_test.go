@@ -28,6 +28,44 @@ func TestFastNeverLaunchesForeignHelperBackends(t *testing.T) {
 	}
 }
 
+func TestIndependentProfileOrderingPreservesWinnerAndBackendCoverage(t *testing.T) {
+	profiles := []Profile{
+		{Label: "warp", Args: []string{"--masque", "--h2"}},
+		{Label: "variant", Args: []string{"--masque", "--h3"}},
+		{Label: "psiphon", Args: []string{"--psiphon-only"}},
+		{Label: "cdn", Args: []string{"--psiphon-only", "--psiphon-mode", "cdn"}},
+		{Label: "tor", Args: []string{"--tor-only"}},
+	}
+	ordered := IndependentProfilesFirst(profiles)
+	for i, label := range []string{"warp", "cdn", "tor", "psiphon", "variant"} {
+		if ordered[i].Label != label {
+			t.Fatalf("candidate %d = %s, want %s", i, ordered[i].Label, label)
+		}
+	}
+	fast := IndependentProfilesFirst(ProfilesForMode(profiles, "fast"))
+	if len(fast) != 2 || fast[0].Label != "warp" || fast[1].Label != "variant" {
+		t.Fatal("recovery ordering changed Fast's permitted inventory")
+	}
+	profiles[0], profiles[4] = profiles[4], profiles[0]
+	if ordered = IndependentProfilesFirst(profiles); ordered[0].Label != "tor" || ordered[2].Label != "variant" {
+		t.Fatal("a preferred independent backend did not retain its first attempt")
+	}
+}
+
+func TestCachedPsiphonDoesNotBuryCDNRetryBehindWarpVariants(t *testing.T) {
+	profiles := []Profile{{Label: "cached", Args: []string{"--psiphon-only"}}}
+	for range 12 {
+		profiles = append(profiles, Profile{Label: "warp", Args: []string{"--masque", "--h2"}})
+	}
+	profiles = append(profiles,
+		Profile{Label: "cdn", Args: []string{"--psiphon-only", "--psiphon-mode", "cdn"}},
+		Profile{Label: "tor", Args: []string{"--tor-only"}})
+	ordered := IndependentProfilesFirst(profiles)
+	if ordered[0].Label != "cached" || ordered[3].Label != "cdn" || len(ordered) != len(profiles) {
+		t.Fatal("a failed cached Psiphon path can starve its independent CDN retry")
+	}
+}
+
 func TestGoolEnrollmentUsesOnlyOuterMasqueForBothFlagForms(t *testing.T) {
 	for _, args := range [][]string{
 		{"--gool", "--h2", "--gool-peer", "192.0.2.1:2408"},
@@ -45,6 +83,9 @@ func TestGoolEnrollmentUsesOnlyOuterMasqueForBothFlagForms(t *testing.T) {
 }
 
 func TestNativeStartupDeadlinePreservesEqualsFormAndCannotOverflow(t *testing.T) {
+	if got := AttemptTimeout(Profile{Args: []string{"--psiphon-only"}}); got < 200*time.Second {
+		t.Fatalf("Psiphon is canceled before its native 180-second readiness deadline and verification margin: %s", got)
+	}
 	for _, args := range [][]string{{"--startup-secs", "100"}, {"--startup-secs=100"}} {
 		if got := AttemptTimeout(Profile{Args: args}); got != 120*time.Second {
 			t.Fatalf("core can be canceled before its configured startup deadline: %v", got)

@@ -192,7 +192,10 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 	var speedSlots atomic.Int32
 	speedSlots.Store(16) // at most 2 MiB of optional download payload per comparison
 	count := 2
-	if limit == 1 {
+	if m.o.mode == ModeBalanced {
+		count = 3
+	}
+	if limit == 1 && m.o.mode != ModeBalanced && m.o.mode != ModeFast {
 		history, _ := cachedNetwork(m.network, m.core)
 		if len(indices) > 0 {
 			if r, ok := history.Results[m.profs[indices[0]].ID()]; ok && r.State == "verified" && time.Since(r.Checked) < networkCacheTTL {
@@ -200,8 +203,17 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 			}
 		}
 	}
-	for range count {
+	for worker := range count {
 		workers.Go(func() {
+			if limit == 1 && worker > 0 {
+				timer := time.NewTimer(time.Duration(worker) * 200 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+					return
+				case <-timer.C:
+				}
+			}
 			for ctx.Err() == nil {
 				if m.monitor != nil && m.monitor.Connected() {
 					return

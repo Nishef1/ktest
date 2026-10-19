@@ -107,10 +107,10 @@ func AndroidBundlePaths(nativeDir, goarch string) (AndroidPaths, error) {
 func (paths AndroidPaths) ProfileArgs(p Profile, port int, stateDir string) []string {
 	args := RunArgs(p, port, stateDir)
 	if p.Psiphon() || p.Has("--psiphon") || p.Has("--psiphon-reverse") {
-		args = append(args, "--psiphon-bin", paths.Psiphon, "--psiphon-dir", filepath.Join(stateDir, "psiphon"))
+		args = append(args, "--psiphon-bin", paths.Psiphon, "--psiphon-dir", filepath.Join(stateDir, "psiphon-"+p.ID()))
 	}
 	if p.Has("--tor-only") || p.Has("--tor") || p.Has("--tor-reverse") {
-		args = append(args, "--tor-pt", paths.Lyrebird, "--tor-dir", filepath.Join(stateDir, "tor"))
+		args = append(args, "--tor-pt", paths.Lyrebird, "--tor-dir", filepath.Join(stateDir, "tor-"+p.ID()))
 	}
 	return args
 }

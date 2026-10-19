@@ -63,14 +63,9 @@ func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 		// privateDir lets Psiphon's CDN fronting try this network's verified edges.
 		options: nativeOptions{libraryDir: libraryDir, stateDir: filepath.Join(stateDir, "automatic-exits"), privateDir: stateDir}}
 	a.attempt = func(ctx context.Context, p aether.Profile) (*nativeCore, observedExit, error) {
-		o := a.options
-		o.profile = &p
-		if p.LocalCarrier() {
-			var err error
-			o.carrier, err = a.localCarrier()
-			if err != nil {
-				return nil, observedExit{}, err
-			}
+		o, err := a.optionsForProfile(p)
+		if err != nil {
+			return nil, observedExit{}, err
 		}
 		n, err := launchNative(ctx, mode, o)
 		if err != nil {
@@ -92,6 +87,22 @@ func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 		return n, checked, nil
 	}
 	return a
+}
+
+// The carrier variant is independent of direct startup. In particular,
+// sending Psiphon through SOCKS disables its native QUIC transports, so never
+// silently replace the direct profile with a carried one.
+func (a *automaticExit) optionsForProfile(p aether.Profile) (nativeOptions, error) {
+	o := a.options
+	o.profile = &p
+	if p.LocalCarrier() {
+		address, err := a.localCarrier()
+		if err != nil {
+			return o, err
+		}
+		o.carrier = address
+	}
+	return o, nil
 }
 
 func (a *automaticExit) localCarrier() (string, error) {
@@ -155,18 +166,10 @@ func (a *automaticExit) profiles() []aether.Profile {
 	stop()
 	profiles, _ := aether.ParseProfiles(aether.DefaultProfiles, ech, ip)
 	profiles = aether.ProfilesForMode(profiles, a.mode)
-	profiles = aether.WithLocalCarriers(profiles)
-	// WARP variants do not crowd out an independent CDN-backed transport.
 	if a.mode == "balanced" {
-		for i, p := range profiles {
-			if p.Method() == "psiphon-cdn" && i > 1 {
-				copy(profiles[2:i+1], profiles[1:i])
-				profiles[1] = p
-				break
-			}
-		}
 		profiles = append(profiles, aether.Profile{Label: "Tor-only", Args: []string{"--tor-only"}})
 	}
+	profiles = aether.WithLocalCarriers(profiles)
 	var hint nativeHint
 	if raw, err := os.ReadFile(a.hintFile()); err == nil && len(raw) < 4096 && json.Unmarshal(raw, &hint) == nil && hint.Key == a.historyKey && hint.Key != "" && time.Since(hint.Checked) < 24*time.Hour && time.Until(hint.Checked) < time.Minute {
 		sort.SliceStable(profiles, func(i, j int) bool { return profiles[i].ID() == hint.ID && profiles[j].ID() != hint.ID })
@@ -181,14 +184,28 @@ type nativeResult struct {
 }
 
 func (a *automaticExit) discover(profiles []aether.Profile) *nativeResult {
+	profiles = aether.IndependentProfilesFirst(profiles)
 	ctx, cancel := context.WithCancel(a.ctx)
 	defer cancel()
 	results := make(chan nativeResult, 2)
 	var mu sync.Mutex
 	var workers sync.WaitGroup
 	next := 0
-	for range 2 {
+	count := 2
+	if a.mode == "balanced" {
+		count = 3 // WARP, Psiphon and Tor must be able to bootstrap independently.
+	}
+	for worker := range count {
 		workers.Go(func() {
+			if worker > 0 {
+				timer := time.NewTimer(time.Duration(worker) * 200 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+					return
+				case <-timer.C:
+				}
+			}
 			for ctx.Err() == nil {
 				mu.Lock()
 				i := next

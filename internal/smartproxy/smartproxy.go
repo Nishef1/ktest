@@ -832,9 +832,10 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	// Late paths go to the back, behind a gate that opens when everything else
 	// has failed or after lateAfter.
 	remembered := p.rememberedName(host, port)
+	recovering := p.recoveringBlackhole(host, port)
 	var ordered, late []*upstreamState
 	for _, u := range order {
-		if u.Late && u.Name != remembered && !(p.cfg.PreferVerifiedExit && u.Exit && u.AIEligible) {
+		if u.Late && u.Name != remembered && !((p.cfg.PreferVerifiedExit || recovering) && u.Exit && u.AIEligible) {
 			late = append(late, u)
 		} else {
 			ordered = append(ordered, u)

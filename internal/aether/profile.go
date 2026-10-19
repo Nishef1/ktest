@@ -195,6 +195,61 @@ func ProfilesForMode(profiles []Profile, mode string) []Profile {
 	return selected
 }
 
+// IndependentProfilesFirst preserves the leading recommendation, then gives
+// WARP, Psiphon/CDN and Tor each a slot before further variants of a backend.
+// Later rounds remain interleaved so a failed cached Psiphon profile cannot
+// bury its CDN alternative behind every WARP variant. The inventory is unchanged.
+func IndependentProfilesFirst(profiles []Profile) []Profile {
+	if len(profiles) == 0 {
+		return nil
+	}
+	family := func(p Profile) string {
+		if p.Psiphon() {
+			return "psiphon"
+		}
+		if p.Has("--tor-only") {
+			return "tor"
+		}
+		return "warp"
+	}
+	selected := make(map[int]bool)
+	selected[0] = true
+	out := []Profile{profiles[0]}
+	appendNext := func(kind string) bool {
+		candidate := -1
+		for i, p := range profiles {
+			if selected[i] || family(p) != kind {
+				continue
+			}
+			if candidate == -1 {
+				candidate = i
+			}
+			if kind == "psiphon" && p.Method() == "psiphon-cdn" {
+				candidate = i
+				break
+			}
+		}
+		if candidate >= 0 {
+			selected[candidate] = true
+			out = append(out, profiles[candidate])
+			return true
+		}
+		return false
+	}
+	kinds := []string{"psiphon", "tor", "warp"}
+	for _, kind := range kinds {
+		if family(profiles[0]) != kind {
+			appendNext(kind)
+		}
+	}
+	for len(out) < len(profiles) {
+		for _, kind := range kinds {
+			appendNext(kind)
+		}
+	}
+	return out
+}
+
 // The help output is not a bag of substrings. Read option declarations from
 // their own lines so --h is not falsely accepted because --help exists.
 func DocumentedOptions(help string) map[string]bool {
@@ -270,6 +325,11 @@ func RunArgs(p Profile, port int, stateDir string) []string {
 func AttemptTimeout(p Profile) time.Duration {
 	if p.Has("--tor-only") {
 		return 7 * time.Minute
+	}
+	if p.Psiphon() {
+		// Aether 2.3.0 gives its independent Psiphon helper 180 seconds to
+		// establish a tunnel. WARP's 45-second startup budget cuts that short.
+		return 200 * time.Second
 	}
 	startup := 45 * time.Second
 	if duration, err := time.ParseDuration(p.Value("--startup-secs") + "s"); err == nil && duration >= 0 && duration <= time.Duration(1<<63-1)-20*time.Second {

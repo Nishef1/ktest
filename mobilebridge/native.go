@@ -123,12 +123,23 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 		args = append(args, "--upstream", "socks5://"+o.carrier)
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
+	cleanupDNS := func() {}
+	if p.Psiphon() && !p.Has("--psiphon-config") {
+		path, cleanup, err := preparePsiphonDNS(runCtx, o.stateDir, p.ID())
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("native Psiphon DNS bootstrap: %w", err)
+		}
+		cleanupDNS = cleanup
+		args = append(args, "--psiphon-config", path)
+	}
 	n := &nativeCore{address: address, method: p.Method(), cancel: cancel, done: make(chan struct{}), log: newStageLog()}
 	go func() {
+		defer close(n.done)
+		defer cleanupDNS()
 		// Raw native output can contain identifiers or credentials. Only
 		// redacted warnings reach the UI; nothing goes to logcat or storage.
 		n.err = aether.Run(runCtx, paths.Aether, args, n.log)
-		close(n.done)
 	}()
 	return n, nil
 }
@@ -216,8 +227,8 @@ func waitNativeWithProbe(ctx context.Context, mode string, n *nativeCore, probe 
 	}
 }
 
-// Fast relays TCP (and DNS) only, so UDP-based Aether transports (HTTP/3,
-// WireGuard) and separate Psiphon/Tor helpers cannot use it as an upstream.
+// This explicit WARP carrier selector is TCP-only. Balanced separately keeps
+// both direct and carried Psiphon/Tor profiles, including native UDP options.
 func tcpCarriedProfiles(profiles []aether.Profile) []aether.Profile {
 	var out []aether.Profile
 	for _, p := range profiles {

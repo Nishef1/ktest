@@ -54,8 +54,8 @@ func TestAndroidProfileArgsUsePinnedHelpersOnlyForMatchingModes(t *testing.T) {
 		want []string
 		deny []string
 	}{
-		{"tor", Profile{Label: "Tor-only", Args: []string{"--tor-only"}}, []string{"--tor-pt", paths.Lyrebird, "--tor-dir", filepath.Join(dir, "tor")}, []string{"--psiphon-bin"}},
-		{"psiphon", Profile{Label: "Psiphon", Args: []string{"--psiphon-only"}}, []string{"--psiphon-bin", paths.Psiphon, "--psiphon-dir", filepath.Join(dir, "psiphon")}, []string{"--tor-pt"}},
+		{"tor", Profile{Label: "Tor-only", Args: []string{"--tor-only"}}, []string{"--tor-pt", paths.Lyrebird, "--tor-dir"}, []string{"--psiphon-bin"}},
+		{"psiphon", Profile{Label: "Psiphon", Args: []string{"--psiphon-only"}}, []string{"--psiphon-bin", paths.Psiphon, "--psiphon-dir"}, []string{"--tor-pt"}},
 		{"psiphon-cdn", Profile{Label: "Psiphon CDN", Args: []string{"--psiphon-only", "--psiphon-mode", "cdn"}}, []string{"--psiphon-bin", paths.Psiphon}, []string{"--tor-pt"}},
 		{"aether", Profile{Label: "MASQUE H2", Args: []string{"--masque", "--h2"}}, nil, []string{"--tor-pt", "--psiphon-bin"}},
 	}
@@ -73,5 +73,23 @@ func TestAndroidProfileArgsUsePinnedHelpersOnlyForMatchingModes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAndroidConcurrentBackendProfilesKeepSeparateStableState(t *testing.T) {
+	paths := AndroidPaths{Psiphon: "libpsiphon.so", Lyrebird: "liblyrebird.so"}
+	dir := t.TempDir()
+	for _, p := range []Profile{{Label: "Psiphon", Args: []string{"--psiphon-only"}}, {Label: "Tor", Args: []string{"--tor-only"}}} {
+		variants := WithLocalCarriers([]Profile{p})
+		flag := "--psiphon-dir"
+		if p.Has("--tor-only") {
+			flag = "--tor-dir"
+		}
+		a := Profile{Args: paths.ProfileArgs(variants[0], 18001, dir)}
+		b := Profile{Args: paths.ProfileArgs(variants[1], 18002, dir)}
+		repeated := Profile{Args: paths.ProfileArgs(variants[0], 18003, dir)}
+		if a.Value(flag) == b.Value(flag) || a.Value(flag) != repeated.Value(flag) {
+			t.Fatal("concurrent direct/carried profiles share state, or state depends on a transient port")
+		}
 	}
 }

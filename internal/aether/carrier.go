@@ -31,7 +31,8 @@ func WithLocalCarriers(profiles []Profile) []Profile {
 	remaining := 64 - len(profiles)
 	for _, p := range profiles {
 		out = append(out, p)
-		if !CanCarryLocally(p) || remaining <= 0 {
+		standalone := !p.Has("--upstream") && (p.Psiphon() || p.Has("--tor-only"))
+		if (!CanCarryLocally(p) && !standalone) || remaining <= 0 {
 			continue
 		}
 		carried := Profile{Label: p.Label + " through local anti-DPI"}

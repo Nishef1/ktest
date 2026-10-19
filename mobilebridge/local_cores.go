@@ -21,7 +21,7 @@ type localCoreSet struct {
 	upstreams []smartproxy.Upstream
 }
 
-func androidXrayEnabled(mode string) bool { return mode == "balanced" }
+func androidXrayEnabled(mode string) bool { return mode == "balanced" || mode == "fast" }
 
 // StartAndroidProxy adds the same native ByeDPI strategies used on desktop.
 // The Go policy still owns DNS, route racing and protected foreign-only sites.
@@ -35,9 +35,8 @@ func StartAndroidProxy(mode, upstream, nativeLibraryDir string) (string, error) 
 	return startProxy(mode, upstream, nil, nativeLibraryDir)
 }
 
-// StartAndroidProxyWithXray keeps HEV and Go routing unchanged, while offering
-// the official pinned Xray TLS-fragment path next to ByeDPI and Go cuts in
-// Balanced. Fast keeps the same API but never starts the Xray core.
+// StartAndroidProxyWithXray offers the official pinned Xray TLS-fragment path
+// next to ByeDPI and Go cuts in Balanced and Fast. Go retains route selection.
 func StartAndroidProxyWithXray(mode, upstream, nativeLibraryDir, privateFilesDir string) (string, error) {
 	if mode != "balanced" && mode != "fast" {
 		return "", errors.New("Android Xray local strategies require Balanced or Fast")

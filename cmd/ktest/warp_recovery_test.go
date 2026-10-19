@@ -10,6 +10,20 @@ func recoveryProfile(label string, args ...string) aetherProfile {
 	return aetherProfile{Label: label, Args: args}
 }
 
+func TestBalancedDiscoveryAllowsIndependentBackendStartupBudget(t *testing.T) {
+	m := &warpManager{o: connectOptions{mode: ModeBalanced}, profs: []aetherProfile{
+		recoveryProfile("warp", "--masque", "--h2"),
+		recoveryProfile("psiphon", "--psiphon-only"),
+		recoveryProfile("tor", "--tor-only"),
+	}}
+	if got := m.searchBudget([]int{0, 1, 2}); got < profileAttemptBudget(m.profs[2]) {
+		t.Fatalf("mixed discovery truncates Tor startup: %s", got)
+	}
+	if got := m.searchBudget([]int{0, 1, 0}); got < profileAttemptBudget(m.profs[1]) {
+		t.Fatalf("mixed discovery truncates Psiphon startup: %s", got)
+	}
+}
+
 func profileLabels(profiles []aetherProfile) []string {
 	var labels []string
 	for _, p := range profiles {

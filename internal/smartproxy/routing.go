@@ -73,6 +73,25 @@ func (p *Proxy) preferredLocked(host, port string) string {
 	return p.cfg.SeedDefault
 }
 
+func (m *destinationMemory) repeatedBlackhole() bool {
+	if m == nil {
+		return false
+	}
+	failures := 0
+	for _, s := range m.routes {
+		if s.kind == KindBlackhole {
+			failures += s.fails
+		}
+	}
+	return failures >= 2
+}
+
+func (p *Proxy) recoveringBlackhole(host, port string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.priorsApplyLocked(host) && p.memoryLocked(host, port).repeatedBlackhole()
+}
+
 func (p *Proxy) order(host, port string) []*upstreamState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -130,6 +149,7 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 		return nil
 	}
 	cooling := func(u *upstreamState) bool { s := score(u); return s != nil && now.Before(s.coolUntil) }
+	blackholed := m.repeatedBlackhole() && p.priorsApplyLocked(host)
 	rate := func(u *upstreamState) float64 {
 		if s := score(u); s != nil {
 			return float64(s.wins+1) / float64(s.wins+s.fails+2)
@@ -142,6 +162,12 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 			return !cooling(a)
 		}
 		if p.cfg.PreferVerifiedExit && (a.Exit && a.AIEligible) != (b.Exit && b.AIEligible) {
+			return a.Exit && a.AIEligible
+		}
+		if blackholed && (a.Takeover != nil) != (b.Takeover != nil) {
+			return a.Takeover != nil
+		}
+		if blackholed && (a.Exit && a.AIEligible) != (b.Exit && b.AIEligible) {
 			return a.Exit && a.AIEligible
 		}
 		if (a.Name == preferred) != (b.Name == preferred) {
@@ -329,13 +355,17 @@ func (p *Proxy) rejectTakeover(host, port, path string) {
 }
 
 // The configured stagger is a hedge budget, not a reward for a slow winner.
-// Fast learned routes get a shorter head start; slow ones never delay the
-// alternatives beyond the configured budget.
+// Fast learned routes get a shorter head start. A consented front or verified exit needs a
+// bounded preparation window after repeated post-hello blackholes: otherwise
+// another quick but unusable ServerHello keeps winning every retry.
 func (p *Proxy) firstWave(first *upstreamState, host, port string) time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	wave := p.cfg.Stagger
 	if m := p.memoryLocked(host, port); m != nil {
+		if (first.Takeover != nil || (first.Exit && first.AIEligible)) && m.repeatedBlackhole() && p.priorsApplyLocked(host) {
+			return 1500 * time.Millisecond
+		}
 		if s := m.routes[first.Name]; s != nil {
 			if s.ewmaMS > 0 {
 				wave = min(wave, max(50*time.Millisecond, time.Duration(1.5*s.ewmaMS*float64(time.Millisecond))))
