@@ -21,6 +21,7 @@ type nativeOptions struct {
 	viaFast    bool
 	privateDir string
 	carrier    string
+	profile    *aether.Profile // automatic discovery preserves exact variants
 }
 
 type nativeCore struct {
@@ -73,6 +74,9 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 
 func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCore, error) {
 	p, err := nativeProfile(mode, o.method, o.carrier != "")
+	if o.profile != nil {
+		p, err = *o.profile, nil
+	}
 	if err != nil {
 		return nil, err
 	}

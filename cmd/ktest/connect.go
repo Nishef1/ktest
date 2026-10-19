@@ -176,6 +176,9 @@ func validateConnectOptions(o connectOptions) error {
 	if _, err := parseConnectionMode(string(o.mode)); err != nil {
 		return err
 	}
+	if o.mode == ModeFast && (o.exitSocks != "" || strings.HasPrefix(o.aetherMethod, "psiphon") || o.aetherMethod == "tor") {
+		return errors.New("Fast permits only native Aether exits; use Balanced for Psiphon, Tor or external SOCKS")
+	}
 	if o.mode == ModePsiphon && o.exitSocks != "" {
 		return errors.New("Aether to Psiphon forbids -exit-socks: only managed Psiphon profiles may be used")
 	}
@@ -479,7 +482,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("Coverage: %s", connectionCoverage(o))
 	t.Note("%s", o.mode.message())
-	if o.mode.isWindscribe() {
+	if o.mode.isWindscribe() || o.mode == ModeFast {
 		if err := validateConnectOptions(o); err != nil {
 			t.Line(toneFail, "%v", err)
 			return 2
@@ -594,7 +597,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		c.launch = l
 		cores = append(cores, c)
 	}
-	if !o.noXray && !o.mode.exitOnly() {
+	if !o.noXray && !o.mode.exitOnly() && o.mode != ModeFast {
 		// Imported Xray profiles may contain foreign outbound proxies. Do
 		// not trust a filename containing "fragment" as identity-preserving.
 		for _, x := range []struct {
@@ -721,14 +724,21 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		ups = append(ups, smartproxy.PlainUpstreams()...)
 	}
 	for _, c := range up {
+		rank := 2
+		if !c.localBypass {
+			rank = 3
+		}
 		ups = append(ups, smartproxy.Upstream{
 			Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port),
 			LocalDNS: c.localDNS, SoftResolve: strings.HasPrefix(c.name, "Xray") && !c.localBypass,
-			Rank: 2, LocalBypass: c.localBypass,
+			Rank: rank, LocalBypass: c.localBypass,
 		})
 	}
 	if !o.noSelf && !o.mode.exitOnly() {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
+	}
+	if o.mode == ModeBalanced || o.mode == ModeFast {
+		ups = append(ups, localZapretUpstreams(o.base)...)
 	}
 	// An independent, already-running TCP exit (e.g. Tor, Psiphon or a
 	// user-owned serverless Worker) can carry Windscribe's TCP bootstrap
@@ -752,7 +762,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			t.Note("External SOCKS exit is not permitted for protected AI sites: %v", checked)
 		}
 		ups = append(ups, smartproxy.Upstream{
-			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: o.mode != ModeFast && !o.mode.exitOnly(), Rank: 3,
+			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: !o.mode.exitOnly(), Rank: 3,
 		})
 	}
 	if len(ups) == 0 && !o.mode.exitOnly() && !o.forceFront {
@@ -763,6 +773,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	progressEvents := make(chan wsProgressEvent, 64)
 	var dropped atomic.Int64
 	var liveProxy atomic.Pointer[smartproxy.Proxy]
+	exitDemand := make(chan struct{}, 1)
 	cfg := smartproxy.Config{
 		Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte,
 		VerifyExit: func(ctx context.Context, u smartproxy.Upstream) error {
@@ -783,6 +794,31 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				dropped.Add(1)
 			}
 		},
+	}
+	if o.mode == ModeBalanced || o.mode == ModeFast {
+		if network := networkSignature(ctx); network != "" {
+			cfg.HistoryKey = network + "/" + string(o.mode)
+			cfg.HistoryFile = filepath.Join(warpDir(), "routes-"+network+"-"+string(o.mode)+".json")
+		}
+		cfg.EnsureExit = func(wait context.Context) error {
+			if err := wait.Err(); err != nil {
+				return err
+			}
+			select {
+			case exitDemand <- struct{}{}:
+			default:
+			}
+			if p := liveProxy.Load(); p != nil && waitForVerifiedExit(wait, p) {
+				return nil
+			}
+			if err := wait.Err(); err != nil {
+				return err
+			}
+			return errors.New("no permitted exit available")
+		}
+		if o.noWarp || !fileOK(aetherBinary(o.base)) {
+			cfg.EnsureExit = nil
+		}
 	}
 	o.mode.configure(&cfg, aiRules)
 	if o.mode == ModeWindscribe {
@@ -971,6 +1007,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	} else if o.mode == ModeWindscribe {
 		warpNote = "disabled: local anti-DPI only; Psiphon/Aether/WARP/Tor and foreign exits prohibited"
 		stopWarp = func() {}
+	} else if o.mode == ModeBalanced || o.mode == ModeFast {
+		currentExitStatus, stopWarp = startWarpOnDemand(ctx, o, proxy, t, exitDemand)
 	} else {
 		currentExitStatus, stopWarp = startWarp(ctx, o, proxy, t, monitor)
 	}

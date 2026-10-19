@@ -184,6 +184,14 @@ func (p *Proxy) udpCandidates(host string) []*upstreamState {
 }
 
 func (p *Proxy) openUDPExit(ctx context.Context, host, port string) (*udpExit, error) {
+	if len(p.udpCandidates(host)) == 0 && p.cfg.EnsureExit != nil {
+		wait, stop := context.WithTimeout(ctx, 45*time.Second)
+		err := p.cfg.EnsureExit(wait)
+		stop()
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, u := range p.udpCandidates(host) {
 		if !p.udpExitAllowed(u, host) || p.verifyExit(ctx, u) != nil {
 			continue

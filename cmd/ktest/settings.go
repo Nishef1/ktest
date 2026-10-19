@@ -106,7 +106,7 @@ func optionsForMode(o connectOptions, mode ConnectionMode) connectOptions {
 	} else {
 		o.ws.cdnHost, o.ws.cdnSNI, o.ws.cdnEdges = "", "", ""
 	}
-	if mode.isWindscribe() || mode == ModePsiphon {
+	if mode.isWindscribe() || mode == ModePsiphon || mode == ModeFast {
 		o.exitSocks = ""
 	}
 	if mode == ModeWindscribeAether {

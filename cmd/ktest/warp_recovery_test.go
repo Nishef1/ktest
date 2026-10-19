@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -119,5 +120,13 @@ func TestReplenishmentKeepsOriginalCorePortIndexes(t *testing.T) {
 		if i == 2 {
 			t.Fatalf("active core port was scheduled for reuse: %v", indices)
 		}
+	}
+}
+
+func TestReplenishmentWithEveryProfileActiveDoesNotRestartAnyCore(t *testing.T) {
+	p := recoveryProfile("only", "--psiphon-only")
+	m := &warpManager{profs: []aetherProfile{p}}
+	if got := m.search(context.Background(), map[string]*warpFound{p.ID(): {p: p}}); len(got) != 0 {
+		t.Fatal("restarted an active core")
 	}
 }

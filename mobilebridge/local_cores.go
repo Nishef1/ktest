@@ -34,7 +34,8 @@ func StartAndroidProxy(mode, upstream, nativeLibraryDir string) (string, error) 
 }
 
 // StartAndroidProxyWithXray keeps HEV and Go routing unchanged, while offering
-// the one official pinned Xray TLS-fragment path next to ByeDPI and Go cuts.
+// the official pinned Xray TLS-fragment path next to ByeDPI and Go cuts in
+// Balanced. Fast keeps the same API but never starts the Xray core.
 func StartAndroidProxyWithXray(mode, upstream, nativeLibraryDir, privateFilesDir string) (string, error) {
 	if mode != "balanced" && mode != "fast" {
 		return "", errors.New("Android Xray local strategies require Balanced or Fast")

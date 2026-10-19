@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/coreprocess"
@@ -90,6 +91,23 @@ func Target(ip string, strategy Strategy) (string, []string, error) {
 	return filter, args, nil
 }
 
+// FlowTarget limits interception to one already owned TCP socket. The socket
+// stays open until the filter is removed, so another process cannot acquire
+// the same local port / remote address tuple during the trial.
+func FlowTarget(ip string, localPort int, strategy Strategy) (string, []string, error) {
+	filter, args, err := Target(ip, strategy)
+	if err != nil {
+		return "", nil, err
+	}
+	if localPort < 1 || localPort > 65535 {
+		return "", nil, errors.New("Zapret2 requires an owned local TCP port")
+	}
+	filter = strings.ReplaceAll(filter, "tcp.DstPort == 443)", fmt.Sprintf("tcp.DstPort == 443 and tcp.SrcPort == %d)", localPort))
+	filter = strings.ReplaceAll(filter, "tcp.SrcPort == 443)", fmt.Sprintf("tcp.SrcPort == 443 and tcp.DstPort == %d)", localPort))
+	args[0] = "--wf-raw=" + filter
+	return filter, args, nil
+}
+
 type Trial struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -101,6 +119,10 @@ type Trial struct {
 var ErrCleanupUnconfirmed = errors.New("Zapret2 process cleanup unconfirmed")
 
 func Start(ctx context.Context, base, ip string, strategy Strategy, log io.Writer) (*Trial, error) {
+	return start(ctx, base, ip, 0, strategy, log)
+}
+
+func start(ctx context.Context, base, ip string, localPort int, strategy Strategy, log io.Writer) (*Trial, error) {
 	if runtime.GOOS != "windows" {
 		return nil, errors.New("Zapret2 packet interception is Windows-only")
 	}
@@ -108,6 +130,9 @@ func Start(ctx context.Context, base, ip string, strategy Strategy, log io.Write
 		return nil, ctx.Err()
 	}
 	_, args, err := Target(ip, strategy)
+	if localPort != 0 {
+		_, args, err = FlowTarget(ip, localPort, strategy)
+	}
 	if err != nil {
 		return nil, err
 	}

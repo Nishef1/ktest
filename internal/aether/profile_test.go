@@ -6,6 +6,28 @@ import (
 	"time"
 )
 
+func TestFastNeverLaunchesForeignHelperBackends(t *testing.T) {
+	profiles, err := ParseProfiles(DefaultProfiles, "ech", "1.1.1.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--tor-only", "--tor", "--psiphon", "--psiphon-reverse", "--tor-reverse", "--upstream=socks5://127.0.0.1:9000"} {
+		profiles = append(profiles, Profile{Label: flag, Args: []string{"--masque", flag}})
+	}
+	fast := ProfilesForMode(profiles, "fast")
+	if len(fast) == 0 {
+		t.Fatal("Fast lost native Aether transports")
+	}
+	for _, p := range fast {
+		if p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--psiphon-reverse") || p.Has("--tor-reverse") || p.Has("--upstream") {
+			t.Fatalf("Fast launched a prohibited helper: %v", p.Args)
+		}
+	}
+	if len(ProfilesForMode(profiles, "balanced")) != len(profiles) {
+		t.Fatal("Balanced lost fallback methods")
+	}
+}
+
 func TestGoolEnrollmentUsesOnlyOuterMasqueForBothFlagForms(t *testing.T) {
 	for _, args := range [][]string{
 		{"--gool", "--h2", "--gool-peer", "192.0.2.1:2408"},

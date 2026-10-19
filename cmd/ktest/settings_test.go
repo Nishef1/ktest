@@ -149,8 +149,12 @@ func TestSavedModeAndCoverageDoNotOverrideWindscribeOwnership(t *testing.T) {
 		t.Fatalf("other policy settings leaked into Windscribe: %+v", ws)
 	}
 	fast := menu.menuConnectOptions("package", ModeFast)
-	if !fast.tun || fast.ws.cdnHost != "" || fast.ws.cdnSNI != "" || fast.exitSocks == "" {
-		t.Fatalf("ordinary-policy choices lost: %+v", fast)
+	if !fast.tun || fast.ws.cdnHost != "" || fast.ws.cdnSNI != "" || fast.exitSocks != "" {
+		t.Fatalf("Fast inherited an unidentified core or lost coverage: %+v", fast)
+	}
+	balanced := menu.menuConnectOptions("package", ModeBalanced)
+	if !balanced.tun || balanced.exitSocks != "127.0.0.1:19001" {
+		t.Fatalf("Balanced lost its external fallback preference: %+v", balanced)
 	}
 	psiphon := menu.menuConnectOptions("package", ModePsiphon)
 	if !psiphon.tun || psiphon.exitSocks != "" {

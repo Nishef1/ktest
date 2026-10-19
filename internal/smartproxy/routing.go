@@ -29,6 +29,19 @@ func destinationKey(host, port string) string {
 // destination's history, failures, latency, or preferred route.
 func (p *Proxy) memoryLocked(host, port string) *destinationMemory {
 	m := p.mem[destinationKey(host, port)]
+	if m == nil {
+		key := historyDestination(host, port)
+		if saved, ok := p.saved[key]; ok {
+			delete(p.saved, key)
+			if time.Since(saved.Updated) < p.cfg.MemoryTTL && time.Until(saved.Updated) < time.Minute {
+				m = &destinationMemory{winner: saved.Winner, updated: saved.Updated, routes: map[string]*routeScore{}}
+				for name, s := range saved.Routes {
+					m.routes[name] = &routeScore{wins: s.Wins, fails: s.Fails, ewmaMS: s.LatencyMS}
+				}
+				p.mem[destinationKey(host, port)] = m
+			}
+		}
+	}
 	if m != nil && time.Since(m.updated) < p.cfg.MemoryTTL {
 		return m
 	}

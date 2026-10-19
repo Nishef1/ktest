@@ -181,6 +181,9 @@ func ProfilesForMode(profiles []Profile, mode string) []Profile {
 		if mode == "windscribe" {
 			continue
 		}
+		if mode == "fast" && (p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") || p.Has("--upstream")) {
+			continue
+		}
 		if mode == "psiphon" && (!p.Psiphon() || p.Has("--tor-only") || p.Has("--masque") || p.Has("--wg") || p.Has("--gool") || p.Has("--mim") || p.Has("--gool-classic")) {
 			continue
 		}
@@ -238,7 +241,7 @@ func RunArgs(p Profile, port int, stateDir string) []string {
 		}
 		return false
 	}
-	if !p.Psiphon() {
+	if !p.Psiphon() && !p.Has("--tor-only") {
 		if !has("-4", "-6", "--dual", "--ip") {
 			args = append(args, "-4")
 		}
@@ -265,6 +268,9 @@ func RunArgs(p Profile, port int, stateDir string) []string {
 
 // AttemptTimeout includes the native startup limit and a readiness margin.
 func AttemptTimeout(p Profile) time.Duration {
+	if p.Has("--tor-only") {
+		return 7 * time.Minute
+	}
 	startup := 45 * time.Second
 	if duration, err := time.ParseDuration(p.Value("--startup-secs") + "s"); err == nil && duration >= 0 && duration <= time.Duration(1<<63-1)-20*time.Second {
 		startup = duration

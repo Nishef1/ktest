@@ -23,10 +23,10 @@ type Mode struct {
 // equivalence with the full Windows orchestration or device VPN coverage.
 func AndroidModes() []Mode {
 	return []Mode{
-		{"balanced", "Balanced", "Adaptive routes; foreign exit for TikTok / AI", true,
-			"Some desktop strategies are not yet available on Android."},
-		{"fast", "Fast", "Faster routes; foreign exit for TikTok / AI", true,
-			"Some desktop strategies are not yet available on Android."},
+		{"balanced", "Balanced", "Local routes first; automatic Aether / Psiphon / Tor fallback", true,
+			"Zapret2 is Windows-only. Protected services require a verified foreign exit."},
+		{"fast", "Fast", "Local routes first; only native Aether exits", true,
+			"No Xray, Psiphon, Tor or unidentified external SOCKS. Protected services still require a verified foreign exit."},
 		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
 			"Aether handles enrollment, scans and reconnect. A verified foreign exit is required."},
 		{"tor", "Aether to Tor", "Aether's built-in Tor backend", true,
@@ -56,6 +56,8 @@ func Title(id string) string {
 func Configure(id string, cfg *smartproxy.Config, protected func(string) bool) {
 	switch id {
 	case "balanced", "fast":
+		cfg.MaxParallel = 6
+		cfg.RecoverPinnedExit = true
 		cfg.ExitOnly = func(host string) bool {
 			return tiktokRequiresForeignExit(host) || (protected != nil && protected(host))
 		}

@@ -39,6 +39,15 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 	if err != nil {
 		return profiles, err
 	}
+	if mode == ModeBalanced {
+		hasTor := false
+		for _, p := range profiles {
+			hasTor = hasTor || p.Has("--tor-only")
+		}
+		if !hasTor {
+			profiles = append(profiles, aetherProfile{Label: "Tor-only", Args: []string{"--tor-only"}})
+		}
+	}
 	return profilesForMode(profiles, mode), nil
 }
 
@@ -46,6 +55,9 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 // tunnel before the final carrier can even start. That work cannot fit inside
 // the standard 45-second probe. Existing valid identities take the fast path.
 func profileAttemptBudget(p aetherProfile) time.Duration {
+	if p.Has("--tor-only") {
+		return 7 * time.Minute
+	}
 	// Aether's own startup deadline precedes independent SOCKS/exit checks.
 	budget := attemptTimeout(p) + 15*time.Second
 	if budget < 45*time.Second {
@@ -71,6 +83,7 @@ func profileAttemptBudget(p aetherProfile) time.Duration {
 // profile must not be cancelled before its own configured startup deadline.
 func (m *warpManager) searchBudget(indices []int) time.Duration {
 	budget := 40 * time.Second
+	ceiling := 250 * time.Second
 	forced := m.o.aetherMethod != "" && m.o.aetherMethod != "auto"
 	if !forced && len(indices) > 2 {
 		return budget
@@ -80,12 +93,15 @@ func (m *warpManager) searchBudget(indices []int) time.Duration {
 			continue
 		}
 		candidate := profileAttemptBudget(m.profs[i]) + 12*time.Second
+		if m.profs[i].Has("--tor-only") {
+			ceiling = 8 * time.Minute
+		}
 		if candidate > budget {
 			budget = candidate
 		}
 	}
-	if budget > 250*time.Second {
-		budget = 250 * time.Second
+	if budget > ceiling {
+		budget = ceiling
 	}
 	return budget
 }
@@ -176,6 +192,13 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, t
 // maxExits is how many tunnels are kept open at once.
 const maxExits = 3
 
+func (m *warpManager) capacity() int {
+	if m.o.mode == ModeBalanced || m.o.mode == ModeFast {
+		return 1
+	}
+	return maxExits
+}
+
 // run keeps established foreign TCP transports alive when Windscribe reports
 // Connected; killing one would also kill an OpenVPN session using that path.
 // Dead transports are removed immediately rather than advertised as healthy.
@@ -220,7 +243,7 @@ func (m *warpManager) run(ctx context.Context) {
 			}
 			continue
 		}
-		if len(active) < maxExits {
+		if len(active) < m.capacity() {
 			m.searching.Store(true)
 			found := m.search(ctx, active)
 			m.searching.Store(false)
@@ -257,12 +280,12 @@ func (m *warpManager) run(ctx context.Context) {
 		// When capacity is full, wait for the first failure. When partially
 		// available, back off before probing for another independent exit.
 		delay := m.recoveryDelay()
-		if len(active) >= maxExits {
+		if len(active) >= min(m.capacity(), len(m.profs)) {
 			delay = 0
 		} else if len(active) == 0 {
 			m.t.Line(toneWarn, "No permitted exit verified; retrying discovery in %s (%d compatible profiles). Saved identities are kept.", delay, len(m.profs))
 		} else {
-			m.t.Note("%d/%d exits active; checking alternatives in %s", len(active), maxExits, delay)
+			m.t.Note("%d/%d exits active; checking alternatives in %s", len(active), m.capacity(), delay)
 		}
 		var retry <-chan time.Time
 		var timer *time.Timer
@@ -328,7 +351,7 @@ func (m *warpManager) orderedCandidateIndices(active map[string]*warpFound, hist
 // Compare before exposing the initial choice. A cached winner gets one worker;
 // first-use discovery has a shared deadline rather than delaying the UI for minutes.
 func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) []*warpFound {
-	limit := maxExits - len(active)
+	limit := m.capacity() - len(active)
 	if limit <= 0 {
 		return nil
 	}
@@ -339,6 +362,9 @@ func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) 
 		// touching already-running ports or their pinned sessions.
 		m.attempted = nil
 		indices = m.orderedCandidateIndices(active, history)
+	}
+	if len(indices) == 0 {
+		return nil // nil means the entire inventory to compare, not zero candidates.
 	}
 	if len(active) == 0 && len(indices) > 0 {
 		first := m.profs[indices[0]]
@@ -357,7 +383,7 @@ func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) 
 			continue
 		default:
 		}
-		err := m.proxy.Add(smartproxy.Upstream{Name: "Exit: " + r.p.Label, Addr: fmt.Sprintf("127.0.0.1:%d", r.port), Rank: 5 + i, Exit: true, AIEligible: r.result.State == "verified", Late: m.o.mode != ModeFast})
+		err := m.proxy.Add(smartproxy.Upstream{Name: "Exit: " + r.p.Label, Addr: fmt.Sprintf("127.0.0.1:%d", r.port), Rank: 5 + i, Exit: true, AIEligible: r.result.State == "verified", Late: !m.o.mode.exitOnly()})
 		if err != nil {
 			r.rc.stop()
 			continue

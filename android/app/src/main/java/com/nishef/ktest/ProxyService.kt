@@ -174,12 +174,10 @@ class ProxyService : Service() {
                                         File(filesDir, "aether").absolutePath)
                                 } else if (mode == "balanced" || mode == "fast") {
                                     val privateDir = filesDir.canonicalPath
-                                    if (mode == "balanced") {
-                                        prepareBalancedNetwork(this@ProxyService)
-                                        val net = getSystemService(ConnectivityManager::class.java).activeNetwork
-                                            ?: error("Underlying network disappeared before connection")
-                                        watchBalancedNetwork(net.networkHandle)
-                                    }
+                                    prepareBalancedNetwork(this@ProxyService)
+                                    val net = getSystemService(ConnectivityManager::class.java).activeNetwork
+                                        ?: error("Underlying network disappeared before connection")
+                                    watchBalancedNetwork(net.networkHandle)
                                     val enabled = checkedFrontingOptIn(this@ProxyService, privateDir)
                                     if (enabled) {
                                         // The user must explicitly opt in, and the exact CA must

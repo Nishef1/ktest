@@ -43,6 +43,9 @@ type Upstream struct {
 	// Send, when set, writes the first flight instead of a plain Write. It is
 	// how built-in desync families cut the ClientHello.
 	Send func(c net.Conn, flight []byte) error
+	// Dial is an optional local packet-desync dialer. Trusted DNS and the
+	// destination policy are applied before it receives an address.
+	Dial func(context.Context, string, string) (net.Conn, error)
 	// Network is "tcp" (default) or "tcp6". IPv6 paths matter because some
 	// networks filter the IPv4 and IPv6 data planes differently.
 	Network string
@@ -129,12 +132,24 @@ type Config struct {
 	LocalOnly bool
 	// Stagger bounds the preferred path's head start before the small fallback wave.
 	Stagger time.Duration
+	// MaxParallel bounds speculative TLS attempts; zero retains full hedging.
+	MaxParallel int
 	// ConnectTimeout bounds dial plus SOCKS handshake; FirstByteTimeout bounds
 	// the wait for the server's first TLS record after the flight was sent.
 	ConnectTimeout   time.Duration
 	FirstByteTimeout time.Duration
 	// MemoryTTL bounds exact host:port history and initial sibling hints.
 	MemoryTTL time.Duration
+	// HistoryFile stores hashed destination hints in app-private storage.
+	// HistoryKey isolates networks and modes; history never authorizes exits.
+	HistoryFile string
+	HistoryKey  string
+	// EnsureExit starts/coalesces managed discovery only when a destination
+	// needs it. It must honor cancellation and return only after verification.
+	EnsureExit func(context.Context) error
+	// RecoverPinnedExit permits mixed modes to recover after the selected
+	// process is removed. A healthy session never rotates its protected exit.
+	RecoverPinnedExit bool
 	// Resolve (A records) and Resolve6 (AAAA records) are used for LocalDNS
 	// upstreams; nil leaves them on system DNS.
 	Resolve  Resolver
@@ -191,7 +206,7 @@ func (c *Config) defaults() {
 		c.FirstByteTimeout = 5 * time.Second
 	}
 	if c.MemoryTTL <= 0 {
-		c.MemoryTTL = 30 * time.Minute
+		c.MemoryTTL = 24 * time.Hour
 	}
 }
 
@@ -227,6 +242,7 @@ type Proxy struct {
 	mem             map[string]*destinationMemory
 	hints           map[string]memo
 	historyUpdates  uint64
+	saved           map[string]savedDestination
 	exitGeneration  uint64          // changes when the DNS-capable exit inventory changes
 	aiPinned        string          // first working AI exit stays selected until this session ends
 	bootstrapPinned string          // legacy verified foreign-exit dialer; never used for local bypass
@@ -285,6 +301,7 @@ func New(cfg Config) (*Proxy, error) {
 			p.exitGeneration++
 		}
 	}
+	p.loadHistory()
 	return p, nil
 }
 
@@ -369,12 +386,15 @@ func (p *Proxy) Remove(name string) {
 			delete(p.hints, host)
 		}
 	}
-	// The AI policy must not silently jump between identities; it remains
-	// pinned and fails closed if a previously chosen exit disappeared.
+	// Strict modes retain a dead pin. Mixed modes explicitly permit recovery
+	// after removal, while every healthy protected exit remains pinned.
 	// Windscribe's outer carrier may recover after a dead core; its own
 	// authenticated VPN retains ownership of application identity.
 	if p.bootstrapPinned == name {
 		p.bootstrapPinned = ""
+	}
+	if p.cfg.RecoverPinnedExit && p.aiPinned == name {
+		p.aiPinned = ""
 	}
 }
 
@@ -746,14 +766,23 @@ func (w winner) release() {
 }
 
 // race first tries the preferred path, then up to three concurrent candidates.
-// If these stay silent, all remaining normal routes join after a bounded
-// 250ms hedge. Explicit Late routes retain their separate last-resort gate.
+// Silent candidates expand to the configured speculative window.
+// Managed exits are requested on demand and can join this same ClientHello.
 func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (winner, error) {
 	began := time.Now()
 	if err := parent.Err(); err != nil {
 		return winner{}, err
 	}
 	order := p.order(host, port)
+	if len(order) == 0 && p.cfg.EnsureExit != nil {
+		exitCtx, stop := context.WithTimeout(parent, 45*time.Second)
+		err := p.cfg.EnsureExit(exitCtx)
+		stop()
+		if err != nil {
+			return winner{}, err
+		}
+		order = p.order(host, port)
+	}
 	if len(order) == 0 {
 		return winner{}, fmt.Errorf("%s: no permitted foreign exit; protected site blocked (fail-closed)", host)
 	}
@@ -775,7 +804,22 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	order = append(ordered, late...)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	results := make(chan outcome, len(order))
+	results := make(chan outcome, len(order)+8)
+	var exitResult <-chan error
+	exitRequested := false
+	requestExit := func() {
+		if exitRequested || p.cfg.EnsureExit == nil {
+			return
+		}
+		exitRequested = true
+		ready := make(chan error, 1)
+		exitResult = ready
+		go func() {
+			exitCtx, stop := context.WithTimeout(ctx, 45*time.Second)
+			defer stop()
+			ready <- p.cfg.EnsureExit(exitCtx)
+		}()
+	}
 	next, pending := 0, 0
 	launch := func(n int) {
 		for ; n != 0 && next < limit; n-- {
@@ -796,35 +840,70 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	hedge := time.NewTimer(wave + 250*time.Millisecond)
 	defer hedge.Stop()
 	expanded := false
+	parallel := p.cfg.MaxParallel
+	if parallel <= 0 {
+		parallel = len(order) + 8
+	}
 	refill := func() {
 		if expanded {
-			launch(-1)
+			launch(max(parallel-pending, 0))
 		} else {
-			launch(max(3-pending, 0))
+			launch(max(min(3, parallel)-pending, 0))
 		}
 	}
 	lateGate := time.NewTimer(lateAfter)
 	defer lateGate.Stop()
 	var lastErr error
-	for pending > 0 || next < len(order) {
+	for pending > 0 || next < len(order) || exitResult != nil || (!exitRequested && p.cfg.EnsureExit != nil) {
 		if pending == 0 && next >= limit && limit < len(order) {
 			limit = len(order) // everything else failed: the last resort may go
 			expanded = true
-			launch(-1)
+			refill()
+		}
+		if pending == 0 && next >= len(order) {
+			requestExit()
 		}
 		select {
 		case <-parent.Done():
 			go drain(results, pending)
 			return winner{}, parent.Err()
 		case <-lateGate.C:
+			requestExit()
+			// An available exit gets the next slot instead of waiting behind
+			// every untested variant of an already silent local method.
+			if next < limit && limit < len(order) {
+				rest := append([]*upstreamState(nil), order[next:limit]...)
+				order = append(append(order[:next:next], order[limit:]...), rest...)
+			}
 			limit = len(order)
 			expanded = true
-			launch(-1)
+			refill()
+		case err := <-exitResult:
+			exitResult = nil
+			if err != nil {
+				lastErr = err
+			} else {
+				known := map[string]bool{}
+				for _, u := range order {
+					known[u.Name] = true
+				}
+				var added []*upstreamState
+				for _, u := range p.order(host, port) {
+					if u.Exit && !known[u.Name] {
+						added = append(added, u)
+					}
+				}
+				rest := append([]*upstreamState(nil), order[next:]...)
+				order = append(append(order[:next:next], added...), rest...)
+				limit = len(order)
+			}
+			expanded = true
+			refill()
 		case <-timer.C:
 			refill()
 		case <-hedge.C:
 			expanded = true
-			launch(-1)
+			refill()
 		case r := <-results:
 			pending--
 			if parent.Err() != nil {
@@ -978,6 +1057,20 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 // to answer is kept. Only the application's own first flight is repeated, to
 // machines it was already sending it to.
 func (p *Proxy) plain(ctx context.Context, host, port string, flight []byte) (winner, error) {
+	w, err := p.plainAttempt(ctx, host, port, flight)
+	if err == nil || ctx.Err() != nil || p.cfg.EnsureExit == nil || p.HasVerifiedExit() {
+		return w, err
+	}
+	exitCtx, stop := context.WithTimeout(ctx, 45*time.Second)
+	err = p.cfg.EnsureExit(exitCtx)
+	stop()
+	if err != nil {
+		return winner{}, err
+	}
+	return p.plainAttempt(ctx, host, port, flight)
+}
+
+func (p *Proxy) plainAttempt(ctx context.Context, host, port string, flight []byte) (winner, error) {
 	all := p.order(host, port)
 	var cands []*upstreamState
 	for _, u := range all {
@@ -1236,16 +1329,25 @@ func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (
 		}
 	}
 	if u.Addr == "" {
+		if u.Dial != nil {
+			return u.Dial(dctx, network, net.JoinHostPort(host, port))
+		}
 		return d.DialContext(dctx, network, net.JoinHostPort(host, port))
 	}
 	conn, err := d.DialContext(dctx, "tcp", u.Addr)
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(dctx, func() { _ = conn.Close() })
+	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(p.cfg.ConnectTimeout))
 	if err := socksConnect(conn, host, port); err != nil {
 		_ = conn.Close()
 		return nil, err
+	}
+	if !stop() {
+		_ = conn.Close()
+		return nil, dctx.Err()
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn, nil

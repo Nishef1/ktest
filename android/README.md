@@ -175,6 +175,18 @@ downloaded or copied to writable app storage at runtime. ByeDPI is a local
 anti-DPI transport, so protected AI domains still require a separately verified
 foreign exit; it does not change the public exit IP.
 
+Balanced/Fast now request a packaged foreign exit automatically when real
+traffic exhausts or stalls the local routes, or immediately for protected
+services. Concurrent requests share discovery; local listeners remain usable.
+Balanced offers Aether, Psiphon/CDN and Tor. Fast excludes Xray and all
+Psiphon/Tor backends, allowing native Aether transports only. A successful
+profile and hashed destination ranking hints are stored privately per network
+and mode for 24 hours. A working core remains alive until disconnect or failure;
+the Go session reaps losing attempts and recovers after a dead core. Windows
+Zapret2 is not packaged or emulated on Android. These are implementation
+capabilities; native app feeds, media playback and handovers require device
+testing on the actual network.
+
 The shipped ABI set remains ARMv7 and arm64; x86_64 is an optional native-check
 target. The pinned arm64 executables meet at least 16 KiB ELF load alignment.
 The x86_64 helper executables have 4 KiB alignment and are not a claim of 16 KiB
@@ -209,7 +221,7 @@ Before calling this an Android port complete: wire the smallest required native-
 | Area | Implemented in source | Still required |
 | --- | --- | --- |
 | Shared Go connection | Shared SOCKS/HTTP lifecycle and managed native launch/cancel/exit handling | Full lifecycle/reconnect device evidence; no wholesale supervisor port |
-| Fast | Adaptive Go/ByeDPI/Xray route selection without preconnection calibration, packet DNS and verified-exit UDP | Physical-device startup speed and recovery evidence |
+| Fast | Adaptive Go/ByeDPI routes without preconnection calibration; automatic native Aether fallback, private network history, packet DNS and verified-exit UDP | Physical-device startup speed and recovery evidence |
 | Balanced | Bounded concurrent Go/ByeDPI/Xray preconnection calibration, three-trial finalists, network-bound 24-hour route cache, pinned target routes with an adaptive race for all other destinations (all local cores stay running), packet DNS and verified-exit UDP | Physical-device route, expiry/fail-closed and reconnect evidence; no automatic live switch |
 | Aether | Packaged core launch, method selection and optional external SOCKS; native scans/reconnect reused | Verified native egress and sustained traffic |
 | Tor / Psiphon | Existing Aether backends connected to Android, shared Tor verification and foreign-exit checks | Real egress and sustained traffic; process launch alone is insufficient |

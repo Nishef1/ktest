@@ -54,9 +54,9 @@ func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.Doma
 func (m ConnectionMode) message() string {
 	switch m {
 	case ModeBalanced:
-		return "Adaptive routing; TikTok and AI require a verified foreign exit and wait when unavailable."
+		return "Local routes first; on-demand Aether, Psiphon and Tor fallback. TikTok and AI require a verified foreign exit."
 	case ModeFast:
-		return "Speed first for ordinary sites; TikTok and AI require a verified foreign exit."
+		return "Local routes first; only native Aether exit transports, no Xray/Psiphon/Tor. TikTok and AI require a verified foreign exit."
 	case ModeWindscribe:
 		return "OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI, optional own Cloudflare hostname) plus IP-preserving local anti-DPI (Xray TCP fragmentation, ByeDPI, TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."
 	case ModeWindscribeAether:

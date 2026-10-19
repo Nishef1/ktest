@@ -80,6 +80,26 @@ func TestTargetExactPacketFilterAndPresets(t *testing.T) {
 	}
 }
 
+func TestFlowFilterIncludesTheOwnedPortInBothDirections(t *testing.T) {
+	filter, args, err := FlowTarget("198.51.100.23", 50123, Split)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"outbound and ip.DstAddr == 198.51.100.23 and tcp.DstPort == 443 and tcp.SrcPort == 50123", "inbound and ip.SrcAddr == 198.51.100.23 and tcp.SrcPort == 443 and tcp.DstPort == 50123"} {
+		if !strings.Contains(filter, part) {
+			t.Fatalf("filter escaped its owned socket: %s", filter)
+		}
+	}
+	if args[0] != "--wf-raw="+filter {
+		t.Fatal("launcher ignored the scoped filter")
+	}
+	for _, port := range []int{0, -1, 65536} {
+		if _, _, err := FlowTarget("198.51.100.23", port, Fake); err == nil {
+			t.Fatal("accepted an unscoped source port")
+		}
+	}
+}
+
 func TestTargetRejectsUnscopedOrPrivateAddresses(t *testing.T) {
 	for _, target := range []string{
 		"", "google.com", "127.0.0.1", "0.0.0.0",

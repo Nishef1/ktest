@@ -78,6 +78,23 @@ func TestFastAIHasNoDirectOrFrontingFallback(t *testing.T) {
 	}
 }
 
+func TestFastRejectsExplicitForeignHelpersBeforeStartingCores(t *testing.T) {
+	for _, method := range []string{"auto", "psiphon", "psiphon-cdn"} {
+		o := defaultConnectOptions(t.TempDir())
+		o.mode = ModeFast
+		o.aetherMethod = method
+		if (validateConnectOptions(o) == nil) != (method == "auto") {
+			t.Fatalf("Fast accepted incompatible method %s", method)
+		}
+	}
+	o := defaultConnectOptions(t.TempDir())
+	o.mode = ModeFast
+	o.exitSocks = "127.0.0.1:19001"
+	if validateConnectOptions(o) == nil {
+		t.Fatal("Fast accepted an unidentified core")
+	}
+}
+
 func TestStrictProxyCanStartWithoutVerifiedExit(t *testing.T) {
 	rules, _ := smartproxy.NewAIDomainRules("")
 	p, err := smartproxy.New(smartproxy.Config{ExitOnly: func(string) bool { return true }})

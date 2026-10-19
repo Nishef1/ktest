@@ -12,7 +12,7 @@ import (
 
 // fastCarrier is a private, adaptive Fast-mode proxy that only the packaged
 // Aether process uses as its --upstream. It gives WARP registration and the
-// MASQUE/Gool H2 tunnel the same Go cuts, ByeDPI and Xray race that Fast uses,
+// MASQUE/Gool H2 tunnel the same Go cuts and ByeDPI race that Fast uses,
 // for networks where Aether cannot reach Cloudflare directly.
 type fastCarrier struct {
 	address string
@@ -34,9 +34,6 @@ func startFastCarrier(ctx context.Context, nativeDir, privateDir string) (_ *fas
 			cores.stop()
 		}
 	}()
-	if privateDir != "" {
-		_ = attachAndroidXray(ctx, cores, nativeDir, privateDir) // optional, as in Fast
-	}
 	rules, err := smartproxy.NewAIDomainRules("")
 	if err != nil {
 		return nil, err

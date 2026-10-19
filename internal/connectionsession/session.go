@@ -38,6 +38,7 @@ func Start(parent context.Context, proxy *smartproxy.Proxy, address string) (*Se
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s := &Session{Proxy: proxy, SOCKS: listener, ctx: ctx, cancel: cancel, listeners: []net.Listener{listener}}
+	s.wg.Go(func() { proxy.MaintainHistory(ctx) })
 	s.serve("SOCKS", listener, func() error { return proxy.Serve(ctx, listener) })
 	return s, nil
 }

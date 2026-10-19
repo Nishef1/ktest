@@ -33,6 +33,7 @@ type proxySession struct {
 	localCores   *localCoreSet
 	xrayError    string
 	fronter      *front.Fronter
+	automatic    *automaticExit
 }
 
 type proxyDiagnostics struct {
@@ -125,6 +126,11 @@ func currentReportLocked() proxyReport {
 	if activeProxy.native != nil {
 		report.Native, report.Method = true, activeProxy.native.method
 	}
+	if activeProxy.automatic != nil {
+		if address, method, location := activeProxy.automatic.snapshot(); address != "" {
+			report.Upstream, report.Method, report.ExitLocation, report.Native = address, method, location, true
+		}
+	}
 	report.XrayError = activeProxy.xrayError
 	if activeProxy.localCores != nil {
 		for _, c := range activeProxy.localCores.cores {
@@ -190,6 +196,9 @@ func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, loc
 }
 
 func startProxyConfigured(parent context.Context, mode, upstream string, native *nativeOptions, localDir, frontDir, localStateDir string, testOnly bool) (report string, startErr error) {
+	if mode == "fast" && upstream != "" {
+		return "", errors.New("Fast only permits managed Aether exits; use Balanced for an external SOCKS core")
+	}
 	// Long upstream validation must never hold proxyMu: Android status polling
 	// calls ProxyStatus on the UI thread. Serialize only start calls here.
 	proxyStartMu.Lock()
@@ -312,7 +321,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 				localCores.stop()
 			}
 		}()
-		if localStateDir != "" {
+		if localStateDir != "" && mode != "fast" {
 			// Optional route only. A mismatched or unavailable Xray core never
 			// removes the already verified ByeDPI fallback paths.
 			if err := attachAndroidXray(startContext, localCores, localDir, localStateDir); err != nil {
@@ -347,6 +356,24 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		})
 	}
 	config := smartproxy.Config{Upstreams: upstreams, RecoverIPHostSNI: localDir != ""}
+	var automatic *automaticExit
+	keepAutomatic := false
+	if !testOnly && (mode == "balanced" || mode == "fast") {
+		config.HistoryFile, config.HistoryKey = mobileHistory(mode, localStateDir)
+		if localDir != "" && localStateDir != "" && upstream == "" {
+			automatic = newAutomaticExit(mode, localDir, localStateDir, config.HistoryKey)
+			defer func() {
+				if !keepAutomatic {
+					automatic.stop()
+				}
+			}()
+			config.EnsureExit = automatic.ensure
+			config.VerifyExit = func(ctx context.Context, u smartproxy.Upstream) error {
+				_, err := verifyLocalUpstream(ctx, u.Addr)
+				return err
+			}
+		}
+	}
 	diagnostics := &proxyDiagnostics{}
 	config.OnEvent = func(e smartproxy.Event) {
 		if e.Probe {
@@ -460,6 +487,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	if err != nil {
 		return "", err
 	}
+	if automatic != nil {
+		automatic.proxy = proxy
+	}
 	proxyMu.Lock()
 	defer proxyMu.Unlock()
 	if activeProxy != nil || proxyGeneration != generation {
@@ -488,12 +518,13 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		return "", fmt.Errorf("HTTP listener: %w", err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError}
+	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, automatic: automatic}
 	activeProxy = session
 	keepDNS = true
 	keepManaged = true
 	keepLocal = true
 	keepCarrier = true
+	keepAutomatic = true
 	if localCores != nil {
 		for _, child := range localCores.cores {
 			go func() {
@@ -555,6 +586,9 @@ func stopLocked() {
 	activeProxy = nil
 	s.cancel()
 	s.core.Stop()
+	if s.automatic != nil {
+		s.automatic.stop()
+	}
 	s.closeDNS()
 	if s.localCores != nil {
 		s.localCores.stop()

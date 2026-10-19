@@ -167,6 +167,8 @@ type measuredAetherExit struct {
 // Compare only before exposing the first exit to application traffic. Once
 // selected, protected streams retain the existing session-pinning policy.
 func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indices []int) []measuredAetherExit {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if indices == nil {
 		for i := range m.profs {
 			indices = append(indices, i)
@@ -191,12 +193,15 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 	speedSlots.Store(16) // at most 2 MiB of optional download payload per comparison
 	count := 2
 	if limit == 1 {
-		count = 1
+		history, _ := cachedNetwork(m.network, m.core)
+		if len(indices) > 0 {
+			if r, ok := history.Results[m.profs[indices[0]].ID()]; ok && r.State == "verified" && time.Since(r.Checked) < networkCacheTTL {
+				count = 1
+			}
+		}
 	}
 	for range count {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			for ctx.Err() == nil {
 				if m.monitor != nil && m.monitor.Connected() {
 					return
@@ -212,13 +217,19 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 				m.attempted[p.ID()] = true
 				mu.Unlock()
 				// A slow/blocked family cannot consume the whole comparison.
-				attempt, cancel := context.WithTimeout(ctx, profileAttemptBudget(p))
+				attempt, stopAttempt := context.WithTimeout(ctx, profileAttemptBudget(p))
 				up, rc, failure := m.try(attempt, i, p)
 				// The core must outlive this probe deadline when selected. try
 				// uses m's session context for the process, attempt for readiness.
 				r := measurementFor(p)
 				if up {
 					r = benchmarkAetherRoute(attempt, fmt.Sprintf("127.0.0.1:%d", aetherPort(i)), speed && speedSlots.Add(-1) >= 0)
+					if p.Has("--tor-only") && r.State == "verified" {
+						if err := probeTorExit(attempt, fmt.Sprintf("127.0.0.1:%d", aetherPort(i))); err != nil {
+							r.State = "failed"
+							r.Failure = "Tor identity was not verified"
+						}
+					}
 					r.ID, r.Label, r.Method = p.ID(), p.Label, p.Method()
 				} else {
 					r.Failure = failure
@@ -227,9 +238,9 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 						r.Failure = "attempt deadline exceeded: " + failure
 					}
 				}
-				cancel()
+				stopAttempt()
 				if ctx.Err() != nil {
-					if !m.diagnosis && m.processCtx != nil && m.processCtx.Err() == nil {
+					if !m.diagnosis && m.processCtx != nil && m.processCtx.Err() == nil && ctx.Err() == context.DeadlineExceeded {
 						r.State = "timeout"
 						r.Failure = "discovery budget expired; other candidates will be preferred on retry"
 						_ = saveMeasurement(m.network, m.core, r)
@@ -270,11 +281,15 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 				}
 				found = append(found, measuredAetherExit{&warpFound{p: p, port: aetherPort(i), rc: rc}, r})
 				mu.Unlock()
+				if limit == 1 && r.State == "verified" {
+					cancel()
+					return
+				}
 				if limit == 0 {
 					rc.stop()
 				} // diagnosis retains measurements, not every tunnel
 			}
-		}()
+		})
 	}
 	workers.Wait()
 	sort.SliceStable(found, func(i, j int) bool {
