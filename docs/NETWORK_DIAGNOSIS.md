@@ -160,3 +160,30 @@ These checks must distinguish **failed**, **not attempted**, and **not
 validated**. Never turn resolver failure into an automatic second VPN, a
 hidden foreign exit in local Windscribe mode, disabled TLS validation, or a
 claim that an untested method is blocked.
+
+### Android endpoint check and VPN coverage (2026-10-19)
+
+`Check HTTPS endpoints` checks the eight representative URLs through the active
+Go SOCKS listener. It now has a 30-second shared budget with three workers and
+a per-request share reserved for later waves. Three silent destinations must
+not prevent Discord and X from being attempted. With fronting active, this
+internal diagnostic explicitly trusts the session's existing constrained public
+CA, as manual route diagnostics do; certificate and hostname verification stay
+enabled. The result explains that other Android apps may reject that CA.
+
+On `KTest_API_35` / `emulator-5556`, the reproduced result changed from two
+successful requests, four failures and two skipped requests to five successful
+requests and three timeouts. YouTube, Google, Instagram, Discord and X passed;
+Telegram, Telegram Web and TikTok timed out. This is partial recovery, not
+all-site acceptance or proof that a foreign exit is available.
+
+VPN and Both request the same device-wide Android VPN route; Both also offers
+the local proxy. KTest's own UID is excluded to avoid routing its outbound
+sockets back into itself. The independent VPN probe app uses a separate UID.
+With the updated app, that probe observed an active VPN and passed system DNS,
+UDP DNS, Cloudflare HTTPS, Google HTTPS and UDP STUN. Cloudflare reported an IR
+exit: device-wide interception does not imply a foreign VPN exit in Balanced.
+On this emulator, Android installed an unreachable IPv6 default route rather
+than a working IPv6 route. The probe must exclude unreachable routes when
+deciding whether IPv6 HTTPS should be tested. These samples do not establish
+support for every application's UDP traffic or native-app certificate policy.

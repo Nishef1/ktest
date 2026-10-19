@@ -34,6 +34,7 @@ type proxySession struct {
 	localCores   *localCoreSet
 	xrayError    string
 	fronter      *front.Fronter
+	frontDir     string
 	automatic    *automaticExit
 }
 
@@ -547,6 +548,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	// The session owns the listeners; Android only consumes their addresses.
 	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, automatic: automatic}
 	activeProxy = session
+	session.frontDir = frontDir
 	if !testOnly && localStateDir != "" {
 		refreshRangesInBackground(ctx, localStateDir, core.SOCKS.Addr().String())
 	}

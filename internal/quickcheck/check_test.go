@@ -112,6 +112,27 @@ func TestRepresentativeChecksShareBudgetAndLimitConcurrency(t *testing.T) {
 	}
 }
 
+func TestSlowFirstWaveDoesNotSkipLaterEndpoints(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/slow") {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	var targets []Target
+	for _, path := range []string{"/slow1", "/slow2", "/slow3", "/four", "/five", "/six", "/seven", "/eight"} {
+		targets = append(targets, Target{path, srv.URL + path, http.MethodHead, 204})
+	}
+	results := runTargets(context.Background(), srv.Client(), targets, 900*time.Millisecond)
+	for i, result := range results {
+		if result.Skipped || (i >= 3 && !result.Success) {
+			t.Fatalf("first wave starved endpoint %d: %+v", i, result)
+		}
+	}
+}
+
 func TestServiceRefusalAndUncheckedControlAreNotBypassProof(t *testing.T) {
 	a := Compare([]Result{{Target: "restricted", Reachable: true, Status: 403}, {Target: "unmeasured-control", Success: true}}, []Result{{Target: "unmeasured-control", Skipped: true}})
 	if a[0].Kind != "service_response" || a[1].Kind != "baseline_unknown" {

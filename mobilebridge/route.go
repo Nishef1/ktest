@@ -2,6 +2,7 @@ package mobilebridge
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net"
@@ -27,6 +28,11 @@ func CheckRoute() (string, error) {
 		return "", errors.New("local proxy is not running")
 	}
 	addr := activeProxy.socks.Addr().String()
+	var probeTLS *tls.Config
+	fronting := activeProxy.fronter != nil
+	if fronting {
+		probeTLS = routeProbeTLS(activeProxy.fronter.Upstream(), activeProxy.frontDir)
+	}
 	proxyMu.Unlock()
 	_, portText, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -36,12 +42,15 @@ func CheckRoute() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 31*time.Second)
 	defer cancel()
-	results := quickcheck.Run(ctx, port, 9*time.Second)
+	results := quickcheck.RunWithTLS(ctx, port, 30*time.Second, probeTLS)
 	check := routeCheck{
 		Targets: results,
 		Note:    "Only listed HTTPS targets were checked through the SOCKS5 listener. This does not verify a VPN, exit country, or traffic from other apps.",
+	}
+	if fronting {
+		check.Note += " This internal check trusts this session's local fronting CA; other Android apps may reject it."
 	}
 	for _, result := range results {
 		if !result.Skipped {

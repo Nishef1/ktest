@@ -263,7 +263,8 @@ public final class MainActivity extends Activity {
             LinkProperties properties = active == null ? null : manager.getLinkProperties(active);
             if (properties == null) return false;
             for (RouteInfo route : properties.getRoutes()) {
-                if (route.getDestination().getPrefixLength() == 0 &&
+                if (route.getType() == RouteInfo.RTN_UNICAST &&
+                    route.getDestination().getPrefixLength() == 0 &&
                     route.getDestination().getAddress() instanceof Inet6Address) {
                     return true;
                 }

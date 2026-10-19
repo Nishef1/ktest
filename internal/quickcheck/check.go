@@ -44,8 +44,15 @@ func Targets() []Target {
 }
 
 func Run(ctx context.Context, socksPort int, timeout time.Duration) []Result {
+	return RunWithTLS(ctx, socksPort, timeout, nil)
+}
+
+// RunWithTLS lets an explicit internal diagnostic trust its own constrained
+// fronting CA. A nil config retains the ordinary system certificate checks.
+// This does not change certificate trust for any other application.
+func RunWithTLS(ctx context.Context, socksPort int, timeout time.Duration, config *tls.Config) []Result {
 	proxy, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", socksPort))
-	return run(ctx, http.ProxyURL(proxy), timeout)
+	return runWithTLS(ctx, http.ProxyURL(proxy), timeout, config)
 }
 
 // RunDirect verifies ordinary-site controls without an HTTP/SOCKS proxy.
@@ -55,12 +62,21 @@ func RunDirect(ctx context.Context, timeout time.Duration) []Result {
 }
 
 func run(ctx context.Context, proxyFn func(*http.Request) (*url.URL, error), timeout time.Duration) []Result {
+	return runWithTLS(ctx, proxyFn, timeout, nil)
+}
+
+func runWithTLS(ctx context.Context, proxyFn func(*http.Request) (*url.URL, error), timeout time.Duration, config *tls.Config) []Result {
 	if timeout <= 0 {
 		timeout = 8 * time.Second
 	}
+	if config == nil {
+		config = &tls.Config{MinVersion: tls.VersionTLS12}
+	} else {
+		config = config.Clone()
+	}
 	transport := &http.Transport{
 		Proxy:                  proxyFn,
-		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig:        config,
 		DisableKeepAlives:      true,
 		ForceAttemptHTTP2:      true,
 		MaxResponseHeaderBytes: 32 << 10,
@@ -91,7 +107,14 @@ func runTargets(parent context.Context, client *http.Client, targets []Target, b
 	}
 	close(jobs)
 	var wg sync.WaitGroup
-	for w := 0; w < min(3, len(targets)); w++ {
+	workers := min(3, len(targets))
+	if workers == 0 {
+		return out
+	}
+	// Reserve time for every wave. Otherwise three silent first requests can
+	// consume the entire shared budget and later sites never get an attempt.
+	perTarget := budget / time.Duration((len(targets)+workers-1)/workers)
+	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -99,7 +122,9 @@ func runTargets(parent context.Context, client *http.Client, targets []Target, b
 				if ctx.Err() != nil {
 					return
 				}
-				out[i] = checkTarget(ctx, client, targets[i])
+				attempt, stop := context.WithTimeout(ctx, perTarget)
+				out[i] = checkTarget(attempt, client, targets[i])
+				stop()
 			}
 		}()
 	}
