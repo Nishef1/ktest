@@ -103,7 +103,6 @@ func TunConfig(socksPort, mtu int) ([]byte, error) {
 		"log": map[string]any{"loglevel": "warning", "access": "none"},
 		"inbounds": []any{map[string]any{
 			"tag":      "ktest-tun",
-			"port":     0,
 			"protocol": "tun",
 			"settings": map[string]any{"name": "ktest-tun", "mtu": mtu},
 			"sniffing": map[string]any{
