@@ -61,6 +61,47 @@ See [connection policies](CONNECTION_MODES.md), [Windscribe tests](WINDSCRIBE_BO
 
 The published Aether 2.3.0 may re-enable WARP via a filtered API on each MASQUE startup even with a saved identity. CluvexStudio/Aether #147 fixes this in newer source, not in the latest published v2.3.0 artifact. Increasing ktest timeouts cannot solve a blocked API. Do not silently replace the pinned binary with an unaudited snapshot. The upstream TLS verification default is off; --tls-verify is supported but should be validated against the intended Cloudflare TLS endpoint before enabling for all methods. Preserve a fail-closed verified-foreign-exit policy regardless of the upstream core's exit-location claim.
 
+### Native-only Windows investigation (2026-10-19)
+
+A bounded comparison on the current Windows system route found **no verified
+native Aether exit**. Psiphon and Tor were disabled throughout. This is a
+sample of this route at this time, not evidence that every gateway or another
+ISP is blocked. Android was not exercised in this investigation.
+
+The published [v2.3.0](https://github.com/CluvexStudio/Aether/releases/tag/v2.3.0)
+was compared with an isolated build of upstream
+[`577a4c8`](https://github.com/CluvexStudio/Aether/commit/577a4c8dd18b08ddfdc3ad28a92e356d68cfa27c),
+including [PR #147](https://github.com/CluvexStudio/Aether/pull/147), built with
+`--no-default-features`. Fresh identities, settings and listeners were kept
+outside the user's configuration. The production core was not replaced.
+
+| Stage / candidate | Observed result |
+| --- | --- |
+| Fresh MASQUE and WireGuard registration over ECH | Succeeded without Psiphon/Tor; the newer core also enabled WARP before saving the identities |
+| Published v2.3.0 native H2/ECH, H3/ECH and aggressive WireGuard samples | No validated SOCKS exit within the comparison budget; unfinished candidates remain untested |
+| Ordinary `www.cloudflare.com` TLS on `162.159.197.1:443` | Certificate-verified HTTPS succeeded; the native MASQUE SNI on the same address timed out before TLS |
+| Newer H2 core, native MASQUE SNI with ECH, gateways `162.159.197.1:443` and `162.159.199.1:443` | ECH accepted and TLS/H2 completed, then CONNECT-IP returned HTTP 400; no tunnel |
+| Newer H2 core over the local Go/ByeDPI carrier | TLS/H2 completed, then CONNECT-IP returned HTTP 400 on both sampled gateways; no tunnel |
+| Alternative H2 SNI (`www.cloudflare.com`, `cloudflareaccess.com`) | TLS/H2 completed in the tested cases, then CONNECT-IP returned HTTP 400 |
+| Local Xray freedom / TLS fragmentation carrier | TLS handshake ended before tunnel validation |
+| Newer H3/ECH and obfuscated WireGuard samples | No validated SOCKS exit within their bounded attempts |
+
+An additional H2/ECH attempt with `--tls-verify` failed the core's certificate
+verification. Therefore the HTTP 400 responses seen with upstream's default
+outer TLS policy do not authenticate the responding gateway. They do not by
+themselves identify DPI, a server-side rejection, or stale certificate pins.
+No end-to-end HTTPS certificate check was disabled to obtain a passing result.
+
+ECH can recover **registration** and some outer TLS handshakes here; neither
+proves a working WARP data path. More timeout or a different SNI alone is not
+a demonstrated repair. Before adopting the newer core, require CONNECT-IP
+acceptance and real certificate-verified HTTPS through its SOCKS listener,
+then validate exit policy separately. Its CLI is also incompatible with some
+2.3.0 profiles (`--api-address` replaces `--enroll-address`, and some fragment
+flags were removed), so replacing the binary alone is not a safe update.
+Nested Gool/MASQUE variants were not independently validated; they still need
+their outer native tunnel to work.
+
 ## Windows TUN privacy boundary and process isolation
 
 The whole-PC Windows TUN currently uses `strict_route=false` to keep its physical bootstrap DNS resolver usable. This **does not provide a DNS kill switch**, and Windows may send DNS queries on another physical network interface. A successful TCP system-route probe cannot prove DNS privacy, IPv6 privacy, or UDP tunneling. sing-box documents `strict_route` as a Windows DNS-leak safeguard but also warns of application compatibility problems; do not blindly enable it without replacing the helper bootstrap resolver and verifying behavior across connect/disconnect, sleep, VPN changes and dual-stack networks.
