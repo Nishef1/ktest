@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -30,6 +29,7 @@ type nativeCore struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	err     error // read only after done closes
+	log     *stageLog
 }
 
 // StartNativeProxy runs the packaged Aether core, including its existing Tor
@@ -114,11 +114,11 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 		args = append(args, "--upstream", "socks5://"+o.carrier)
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
-	n := &nativeCore{address: address, method: p.Method(), cancel: cancel, done: make(chan struct{})}
+	n := &nativeCore{address: address, method: p.Method(), cancel: cancel, done: make(chan struct{}), log: newStageLog()}
 	go func() {
-		// Raw native output can contain identifiers or credentials. Do not
-		// forward it to the UI, Android logcat or shared storage.
-		n.err = aether.Run(runCtx, paths.Aether, args, io.Discard)
+		// Raw native output can contain identifiers or credentials. Only
+		// redacted warnings reach the UI; nothing goes to logcat or storage.
+		n.err = aether.Run(runCtx, paths.Aether, args, n.log)
 		close(n.done)
 	}()
 	return n, nil
@@ -138,7 +138,11 @@ func verifyModeUpstream(ctx context.Context, mode, address string) (observedExit
 }
 
 func waitNative(ctx context.Context, mode string, n *nativeCore) (observedExit, error) {
-	return waitNativeWithProbe(ctx, mode, n, verifyModeUpstream)
+	checked, err := waitNativeWithProbe(ctx, mode, n, verifyModeUpstream)
+	if last := n.log.last(); err != nil && last != "" {
+		err = fmt.Errorf("%w; core said: %s", err, last)
+	}
+	return checked, err
 }
 
 // The probe can complete just as an owned Aether process exits. Never accept

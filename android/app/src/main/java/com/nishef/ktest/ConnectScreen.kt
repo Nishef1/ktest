@@ -479,6 +479,22 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
             if (viaFast && method != "auto" && method !in setOf("masque-h2", "gool-h2", "mim-h2"))
                 Note("This method uses UDP or its own helper and cannot go through Fast. Choose Default or an HTTP/2 method.", Tone.Warn)
         }
+        var coreLog by remember { mutableStateOf("") }
+        LaunchedEffect(Unit) {
+            while (true) {
+                coreLog = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { Mobilebridge.nativeLog() }.getOrDefault("")
+                }
+                delay(2000)
+            }
+        }
+        if (coreLog.isNotBlank()) {
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(K.bg).padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Core warnings", color = K.muted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
+            }
+        }
         Note("The packaged core finds gateways and reconnects by itself. If a method cannot connect, disconnect and try another. First-time setup can take several minutes.")
     }
 }
