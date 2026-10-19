@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -294,19 +295,24 @@ func realPrivateDirectory(dir string) bool {
 	if filepath.Dir(dir) == dir {
 		return false
 	}
-	// Reject a symlink at the caller-owned leaf, but do not compare canonical
-	// path strings: Windows may change component casing/aliases, and Android
-	// intentionally exposes equivalent private paths through platform parents.
-	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return false
+	// An arbitrary symlink in any caller-controlled ancestor would permit
+	// scans to write outside private storage. Android may expose the platform
+	// /data/user/0 alias; that known OS-owned mapping is the only exception.
+	for p := dir; ; p = filepath.Dir(p) {
+		info, err := os.Lstat(p)
+		if err != nil || !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			return false
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if runtime.GOOS != "android" || p != "/data/user/0" && p != "/data/user" {
+				return false
+			}
+		}
+		if filepath.Dir(p) == p {
+			break
+		}
 	}
-	real, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return false
-	}
-	resolved, err := os.Stat(real)
-	return err == nil && resolved.IsDir() && os.SameFile(info, resolved)
+	return true
 }
 func cdnPrivateDirectory(privateDir string) (string, error) {
 	if !realPrivateDirectory(privateDir) {
