@@ -35,5 +35,6 @@ build.write_text(source)
 PY
 bash "$check_dir/android/scripts/fetch-hev-aar.sh"
 gradle -p "$check_dir/android" :app:compileDebugKotlin :app:processDebugMainManifest \
+  :vpnprobe:compileDebugJavaWithJavac :vpnprobe:processDebugMainManifest \
   --no-daemon --max-workers=2 --console=plain
-echo "Android source and real HEV manifest checks passed; native linking, TUN and device behavior require separate validation."
+echo "Android app/probe source and real HEV manifest checks passed; native linking, TUN and device behavior require separate validation."

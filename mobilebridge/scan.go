@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -287,27 +288,35 @@ func cdnProvider(p string) bool {
 }
 
 func realPrivateDirectory(dir string) bool {
+	if !filepath.IsAbs(dir) {
+		return false
+	}
 	dir = filepath.Clean(dir)
-	if !filepath.IsAbs(dir) || filepath.Dir(dir) == dir {
+	if filepath.Dir(dir) == dir {
 		return false
 	}
-	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return false
+	// An arbitrary symlink in any caller-controlled ancestor would permit
+	// scans to write outside private storage. Android may expose the platform
+	// /data/user/0 alias; that known OS-owned mapping is the only exception.
+	for p := dir; ; p = filepath.Dir(p) {
+		info, err := os.Lstat(p)
+		if err != nil || !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			return false
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if runtime.GOOS != "android" || p != "/data/user/0" && p != "/data/user" {
+				return false
+			}
+		}
+		if filepath.Dir(p) == p {
+			break
+		}
 	}
-	real, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return false
-	}
-	if filepath.Separator == '\\' {
-		return strings.EqualFold(real, dir)
-	}
-	return real == dir
+	return true
 }
-
 func cdnPrivateDirectory(privateDir string) (string, error) {
 	if !realPrivateDirectory(privateDir) {
-		return "", errors.New("scan storage requires a real absolute private directory, without symlinks or a filesystem root")
+		return "", errors.New("scan storage requires a real absolute private directory leaf, not a symlink or filesystem root")
 	}
 	dir := filepath.Join(privateDir, "cdn-scans")
 	if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, os.ErrExist) {

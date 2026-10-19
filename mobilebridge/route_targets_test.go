@@ -207,8 +207,10 @@ func TestRouteDirectoryAllowsPlatformAncestorMapping(t *testing.T) {
 		t.Skipf("platform alias fixture unavailable: %v", err)
 	}
 	got, err := realRouteDirectory(filepath.Join(alias, "app", "files"))
-	if err != nil || got != leaf {
-		t.Fatalf("legitimate platform ancestor mapping rejected: %s %v", got, err)
+	gotInfo, gotStatErr := os.Stat(got)
+	leafInfo, leafStatErr := os.Stat(leaf)
+	if err != nil || gotStatErr != nil || leafStatErr != nil || !os.SameFile(gotInfo, leafInfo) {
+		t.Fatalf("legitimate platform ancestor mapping rejected: %s %v (stat: %v, %v)", got, err, gotStatErr, leafStatErr)
 	}
 	if _, err := SaveRouteTarget(filepath.Join(alias, "app", "files"), "mapped", "Mapped", "https://youtube.com/", true); err != nil {
 		t.Fatal(err)

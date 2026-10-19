@@ -39,6 +39,7 @@ class ProxyService : Service() {
     companion object {
         const val ACTION_CONNECT = "com.nishef.ktest.CONNECT"
         const val ACTION_STOP = "com.nishef.ktest.DISCONNECT"
+        private const val ACTION_RECONNECT = "com.nishef.ktest.RECONNECT_AFTER_NETWORK_CHANGE"
         const val EXTRA_MODE = "mode"
         const val EXTRA_UPSTREAM = "upstream"
         const val EXTRA_METHOD = "method"
@@ -87,6 +88,11 @@ class ProxyService : Service() {
     @Volatile private var stopping = false
     @Volatile private var networkWatch: ConnectivityManager.NetworkCallback? = null
     @Volatile private var networkInvalidated = false
+    @Volatile private var activeRequest: Intent? = null
+    @Volatile private var pendingReconnect: Intent? = null
+    @Volatile private var pendingUnderlyingNetwork: Network? = null
+    @Volatile private var reconnectJob: Job? = null
+    @Volatile private var reconnectEpoch = 0
 
     // Reconnect after a network handover to refresh DNS and transport state.
     private fun watchBalancedNetwork(expectedHandle: Long) {
@@ -98,10 +104,10 @@ class ProxyService : Service() {
                 // Our own TUN can briefly appear as a new default network on
                 // some devices; it is not an underlying Wi-Fi/cellular handover.
                 if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-                    KTestVpnService.state in setOf("preparing", "tun_running_unverified")) return
+                    KTestVpnService.state in setOf("starting", "preparing", "tun_running_unverified", "stopping")) return
                 if (network.networkHandle != expectedHandle &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-                    invalidateBalancedNetwork()
+                    invalidateBalancedNetwork(network)
                 }
             }
             override fun onLost(network: Network) {
@@ -111,7 +117,7 @@ class ProxyService : Service() {
                 worker.launch {
                     delay(350)
                     val stillPresent = manager.allNetworks.any { it.networkHandle == expectedHandle }
-                    if (!stillPresent) invalidateBalancedNetwork()
+                    if (!stillPresent) invalidateBalancedNetwork(null)
                 }
             }
         }
@@ -119,12 +125,52 @@ class ProxyService : Service() {
         networkWatch = cb
     }
 
-    private fun invalidateBalancedNetwork() {
-        if (!wanted || networkInvalidated) return
+    /** Debounce network handovers, then rebuild the entire session on the new underlying network. */
+    private fun invalidateBalancedNetwork(candidate: Network?) {
+        if (!wanted || activeRequest == null) return
+        if (candidate != null) {
+            val caps = getSystemService(ConnectivityManager::class.java).getNetworkCapabilities(candidate)
+                ?: return
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
+            pendingUnderlyingNetwork = candidate
+        }
         networkInvalidated = true
-        lastError = "Underlying network changed. Reconnect to refresh network paths."
-        runCatching {
-            startService(Intent(this, ProxyService::class.java).apply { action = ACTION_STOP })
+        lastError = "Underlying network changed. KTest is recovering the connection automatically."
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = worker.launch {
+            val manager = getSystemService(ConnectivityManager::class.java)
+            val deadline = SystemClock.elapsedRealtime() + 20_000L
+            while (wanted && isActive && SystemClock.elapsedRealtime() < deadline) {
+                val network = pendingUnderlyingNetwork
+                if (network != null) {
+                    val caps = manager.getNetworkCapabilities(network)
+                    val stillPresent = manager.allNetworks.any { it.networkHandle == network.networkHandle }
+                    if (caps != null && stillPresent &&
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                        delay(700)
+                        val stableCaps = manager.getNetworkCapabilities(network)
+                        val stable = manager.allNetworks.any { it.networkHandle == network.networkHandle }
+                        if (wanted && stable && stableCaps != null &&
+                            stableCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                            val request = activeRequest?.let { Intent(it).apply { action = ACTION_CONNECT } }
+                            if (request != null) {
+                                pendingReconnect = request
+                                startService(Intent(this@ProxyService, ProxyService::class.java).apply {
+                                    action = ACTION_RECONNECT
+                                })
+                            }
+                            return@launch
+                        }
+                    } else {
+                        pendingUnderlyingNetwork = null
+                    }
+                }
+                delay(250)
+            }
+            if (wanted && networkInvalidated) {
+                lastError = "No stable replacement internet network appeared within 20 seconds."
+                startService(Intent(this@ProxyService, ProxyService::class.java).apply { action = ACTION_STOP })
+            }
         }
     }
 
@@ -154,6 +200,12 @@ class ProxyService : Service() {
                 val method = intent.getStringExtra(EXTRA_METHOD) ?: "auto"
                 val title = intent.getStringExtra(EXTRA_TITLE) ?: mode.replaceFirstChar { it.uppercase() }
                 val vpn = intent.getBooleanExtra(EXTRA_VPN, false)
+                reconnectJob?.cancel()
+                reconnectJob = null
+                pendingReconnect = null
+                pendingUnderlyingNetwork = null
+                networkInvalidated = false
+                activeRequest = Intent(intent)
                 wanted = true
                 lastError = null
                 connectedAt = 0
@@ -262,21 +314,110 @@ class ProxyService : Service() {
                     }
                 }
             }
-            ACTION_STOP -> {
+            ACTION_RECONNECT -> {
+                val request = pendingReconnect
+                if (request == null || stopping) return START_NOT_STICKY
+                pendingReconnect = null
+                val epoch = ++reconnectEpoch
                 clearNetworkWatch()
+                reconnectJob?.cancel()
+                reconnectJob = null
                 wanted = false
                 connectedAt = 0
                 stopVpn()
                 stopping = true
-                startup?.cancel()
+                val oldStartup = startup
+                oldStartup?.cancel()
+                Mobilebridge.cancelProxyStart()
+                worker.launch {
+                    // Wait for the canceled session's finally block to finish
+                    // before starting another Go session; otherwise stale cleanup
+                    // could stop the replacement immediately after it connects.
+                    oldStartup?.join()
+                    mutex.withLock { Mobilebridge.stopProxy() }
+                    var vpnStopped = true
+                    if (request.getBooleanExtra(EXTRA_VPN, false)) {
+                        try {
+                            withTimeout(8_000L) {
+                                while (KTestVpnService.state !in setOf("disconnected", "failed", "revoked")) {
+                                    delay(100)
+                                }
+                            }
+                        } catch (_: TimeoutCancellationException) {
+                            vpnStopped = false
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        // A user disconnect or newer session invalidates this restart.
+                        if (epoch != reconnectEpoch) {
+                            stopping = false
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelfResult(startId)
+                            return@withContext
+                        }
+                        stopping = false
+                        if (vpnStopped) {
+                            // Keep the foreground service alive until ACTION_CONNECT
+                            // refreshes its notification, avoiding background-start
+                            // restrictions during an automatic handover.
+                            startForegroundService(request)
+                        } else {
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            lastError = "The old VPN did not shut down cleanly; automatic reconnect was stopped."
+                            activeRequest = null
+                            stopSelfResult(startId)
+                        }
+                    }
+                }
+            }
+            ACTION_STOP -> {
+                val wasVpn = activeRequest?.getBooleanExtra(EXTRA_VPN, false) == true
+                reconnectEpoch++
+                clearNetworkWatch()
+                reconnectJob?.cancel()
+                reconnectJob = null
+                pendingReconnect = null
+                pendingUnderlyingNetwork = null
+                networkInvalidated = false
+                activeRequest = null
+                wanted = false
+                connectedAt = 0
+                stopVpn()
+                stopping = true
+                val oldStartup = startup
+                oldStartup?.cancel()
                 // Invalidate a blocked/slow Go startup immediately.
                 Mobilebridge.cancelProxyStart()
                 worker.launch {
+                    // Do not mark the service ready for a new connect until the
+                    // canceled startup has completed its own cleanup.
+                    oldStartup?.join()
                     mutex.withLock { Mobilebridge.stopProxy() }
+                    var vpnStopped = true
+                    if (wasVpn) {
+                        try {
+                            withTimeout(8_000L) {
+                                while (KTestVpnService.state !in setOf("disconnected", "failed", "revoked")) {
+                                    delay(100)
+                                }
+                            }
+                        } catch (_: TimeoutCancellationException) {
+                            vpnStopped = false
+                        }
+                    }
                     withContext(Dispatchers.Main) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopping = false
-                        stopSelfResult(startId)
+                        if (vpnStopped) {
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopping = false
+                            stopSelfResult(startId)
+                        } else {
+                            // Fail closed: do not accept another session while
+                            // Android may still have the old TUN interface open.
+                            lastError = "The old VPN did not shut down cleanly; reconnect is blocked."
+                            stopping = true
+                            getSystemService(NotificationManager::class.java)
+                                .notify(NOTIFICATION_ID, notification("VPN shutdown needs attention"))
+                        }
                     }
                 }
             }
@@ -302,8 +443,10 @@ class ProxyService : Service() {
     private fun startVpn() {
         // Errors must propagate to the active connection, not leave the UI
         // showing a functioning device VPN when only local SOCKS is live.
+        val underlyingHandle = getSystemService(ConnectivityManager::class.java).activeNetwork?.networkHandle ?: -1L
         startForegroundService(Intent(this, KTestVpnService::class.java).apply {
             action = KTestVpnService.ACTION_START
+            putExtra(KTestVpnService.EXTRA_UNDERLYING_NETWORK_HANDLE, underlyingHandle)
         })
     }
 

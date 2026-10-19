@@ -198,6 +198,12 @@ internal fun SettingsScreen(
                 else vpn.optString("reason", "Waiting for validated packet routing support (UDP, DNS and IPv6)."),
                 color = K.muted, fontSize = 12.sp, lineHeight = 17.sp
             )
+            vpn.optString("packet_adapter").takeIf { it.isNotBlank() }?.let {
+                KeyValue("Packet engine", it, mono = true)
+            }
+            vpn.optString("fallback_reason").takeIf { it.isNotBlank() }?.let {
+                Note("Automatic packet-adapter recovery: $it", Tone.Warn)
+            }
             vpnError?.let { Note(it, Tone.Danger) }
             if (vpn.optBoolean("available") || vpnServiceState == "tun_running_unverified") {
                 SecondaryButton(if (vpnServiceState == "tun_running_unverified") "Stop VPN" else "Start system VPN",
