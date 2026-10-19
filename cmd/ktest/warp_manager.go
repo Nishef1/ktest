@@ -135,6 +135,7 @@ type warpManager struct {
 	failedSweeps  int
 	carrierMu     sync.Mutex
 	carrier       *connectionsession.Session
+	psiphonEdges  []string
 }
 
 func (m *warpManager) localCarrier(ctx context.Context) (string, error) {
@@ -145,8 +146,12 @@ func (m *warpManager) localCarrier(ctx context.Context) (string, error) {
 		if owner == nil {
 			owner = ctx
 		}
+		source := m.proxy
+		if m.o.carrierSource != nil {
+			source = m.o.carrierSource
+		}
 		var err error
-		m.carrier, err = connectionsession.StartLocalCarrier(owner, m.proxy)
+		m.carrier, err = connectionsession.StartLocalCarrier(owner, source)
 		if err != nil {
 			return "", err
 		}
@@ -196,6 +201,9 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, t
 	}
 	if len(monitors) > 0 {
 		m.monitor = monitors[0]
+	}
+	if o.mode == ModePsiphon {
+		m.psiphonEdges = supportedPsiphonEdges(ctx, aetherBinary(o.base))
 	}
 	t.Note("Aether v2.3.0 upstream limitation: MASQUE TLS peer verification defaults off; --tls-verify alone without pins does not establish trust. ktest verifies sampled HTTPS exits independently.")
 	m.searching.Store(true)
@@ -494,7 +502,19 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 			}
 			return false, nil, "invalid local anti-DPI carrier"
 		}
+	} else if m.o.carrierSource != nil && carriesExit(p) {
+		// Psiphon/Tor own their exit; the carrier only shapes how they leave
+		// Iran. Without it they still try their own transports directly.
+		address, err := m.localCarrier(ctx)
+		if err == nil {
+			args, err = withCarrier(args, address)
+		}
+		if err != nil {
+			args = aetherRunArgs(i, p, port)
+			m.t.Note("%s: local anti-DPI carrier unavailable (%v); dialing directly", p.Label, err)
+		}
 	}
+	args = withPsiphonEdges(args, p, m.psiphonEdges)
 	go func() {
 		defer close(rc.done)
 		if logFile != nil {

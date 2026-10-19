@@ -112,6 +112,9 @@ type connectOptions struct {
 	verbose             bool
 	stopHint            string
 	aetherMethod        string
+	// carrierSource holds the anti-DPI routes that carry a Psiphon or Tor
+	// core; the exit-only proxy of those modes has none of its own.
+	carrierSource *smartproxy.Proxy
 }
 
 // A local MITM CA powers optional website fronting, not WARP/Aether tunnels.
@@ -599,6 +602,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 
 	// 2. The cores that carry the external paths.
+	// Psiphon and Tor dial out through Aether; their local carrier needs the
+	// same anti-DPI cores even though the exit-only proxy never uses them.
+	carried := (o.mode == ModePsiphon || o.mode == ModeTor) && o.exitSocks == "" && !o.noWarp
 	var cores []*pathCore
 	var skipped []string
 	add := func(name string, port int, localDNS, localBypass bool, mk func(io.Writer) (launcher, error)) {
@@ -632,7 +638,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 		}
 	}
-	if o.strategies > 0 && (!o.mode.exitOnly() || o.mode == ModeAether) {
+	if o.strategies > 0 && (!o.mode.exitOnly() || o.mode == ModeAether || carried) {
 		bin := byeDPIBinary(o.base)
 		list, _, err := loadStrategies(o.base)
 		switch {
@@ -737,9 +743,23 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// 3. Assemble the race. Initial order is the initial head start: the uncut
 	// baseline first, so unblocked sites never pay for a cut ClientHello.
-	var ups []smartproxy.Upstream
+	var ups, carrierUps []smartproxy.Upstream
 	if !o.noDirect && (!o.mode.exitOnly() || o.mode == ModeAether) && o.mode != ModeWindscribe {
 		ups = append(ups, smartproxy.PlainUpstreams()...)
+	}
+	if carried {
+		// Only the carrier gets these; the exit-only proxy stays fail-closed.
+		if !o.noDirect {
+			carrierUps = append(carrierUps, smartproxy.PlainUpstreams()...)
+		}
+		for _, c := range up {
+			carrierUps = append(carrierUps, smartproxy.Upstream{Name: c.name, Addr: fmt.Sprintf("127.0.0.1:%d", c.port), LocalDNS: c.localDNS, Rank: 2, LocalBypass: c.localBypass})
+		}
+		if !o.noSelf {
+			carrierUps = append(carrierUps, smartproxy.DesyncUpstreams()...)
+		}
+		carrierUps = append(carrierUps, localZapretUpstreams(o.base)...)
+		up = nil
 	}
 	for _, c := range up {
 		rank := 2
@@ -920,6 +940,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		return 2
 	}
 	liveProxy.Store(proxy)
+	if carried {
+		if o.carrierSource, err = newCarrierSource(carrierUps, cfg); err != nil {
+			t.Note("local anti-DPI carrier unavailable (%v); %s dials directly", err, o.mode)
+		}
+	}
 	connection, err := connectionsession.Start(ctx, proxy, o.listen)
 	if err != nil {
 		t.Line(toneFail, "cannot listen on %s: %v", o.listen, err)

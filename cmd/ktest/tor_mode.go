@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
+	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/egresscheck"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -14,6 +15,21 @@ const torOnlyPort = 18991
 
 func probeTorExit(ctx context.Context, socks string) error {
 	return egresscheck.ProbeTorExit(ctx, socks)
+}
+
+// carriedTorArgs starts a local anti-DPI carrier fed by source and routes the
+// Tor-only core through it.
+func carriedTorArgs(ctx context.Context, args []string, source *smartproxy.Proxy) ([]string, *connectionsession.Session, error) {
+	carrier, err := connectionsession.StartLocalCarrier(ctx, source)
+	if err != nil {
+		return nil, nil, err
+	}
+	carried, err := withCarrier(args, carrier.SOCKS.Addr().String())
+	if err != nil {
+		carrier.Stop()
+		return nil, nil, err
+	}
+	return carried, carrier, nil
 }
 
 // startTor boots the bundled Aether Tor-only feature, with bridge discovery
@@ -37,6 +53,17 @@ func startTor(ctx context.Context, o connectOptions, p *smartproxy.Proxy, t *ter
 		logs.tee = t.w
 	}
 	args := []string{"--tor-only", "--bind", fmt.Sprintf("127.0.0.1:%d", torOnlyPort), "--log-level", "warn"}
+	stopCarrier := func() {}
+	if o.carrierSource != nil {
+		// Tor's bridges dial through the local anti-DPI carrier; the exit
+		// is still verified as Tor below before anything is registered.
+		carried, carrier, err := carriedTorArgs(torCtx, args, o.carrierSource)
+		if err != nil {
+			t.Note("Tor: local anti-DPI carrier unavailable (%v); dialing directly", err)
+		} else {
+			args, stopCarrier = carried, carrier.Stop
+		}
+	}
 	go func() { rc.err = aether.Run(torCtx, bin, args, logs); close(rc.done) }()
 	verified := make(chan struct{})
 	go func() {
@@ -74,5 +101,6 @@ func startTor(ctx context.Context, o connectOptions, p *smartproxy.Proxy, t *ter
 		cancel()
 		rc.stop()
 		<-verified
+		stopCarrier()
 	}
 }
