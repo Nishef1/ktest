@@ -138,7 +138,6 @@ func startHevFallbackLocked() bool {
 	return true
 }
 
-
 const maxVpnRecoveryAttempts = 3
 
 // recoverStoppedPacketAdapterLocked runs only while vpnMu is held. It gives
@@ -241,6 +240,7 @@ func vpnReportLocked() vpnReport {
 				state.Reason = "Packet adapter is running; per-connection route selection remains owned by Go."
 			} else {
 				state.Active = false
+				state.FallbackReason = xrayFallbackReason
 				state.Reason = "The packet adapter stopped and automatic fallback failed; VPN traffic is not verified."
 			}
 		} else if xrayTun != nil {
