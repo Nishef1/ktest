@@ -78,12 +78,12 @@ func (d *blockingStopAdapter) Stop() {
 	d.stopOnce.Do(func() { close(d.stopStarted) })
 	<-d.releaseStop
 }
-func (d *blockingStopAdapter) IsRunning() bool   { return d.running.Load() }
+func (d *blockingStopAdapter) IsRunning() bool { return d.running.Load() }
 func (d *blockingStopAdapter) release() {
 	d.releaseOnce.Do(func() { close(d.releaseStop) })
 }
-func (*blockingStopAdapter) SupportsUDP() bool   { return true }
-func (*blockingStopAdapter) SupportsIPv6() bool  { return true }
+func (*blockingStopAdapter) SupportsUDP() bool  { return true }
+func (*blockingStopAdapter) SupportsIPv6() bool { return true }
 
 func resetVpnTestState() {
 	StopVpnTun()
@@ -191,7 +191,6 @@ func TestVpnAutomaticallyFallsBackWhenXrayExits(t *testing.T) {
 		t.Fatalf("Xray exit did not trigger automatic HEV recovery: report=%+v xray=%+v hev=%+v", report, xray, hev)
 	}
 }
-
 
 func TestVpnRecoversWithXrayWhenHEVFallbackStops(t *testing.T) {
 	resetVpnTestState()
