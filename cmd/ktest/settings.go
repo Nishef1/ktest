@@ -92,6 +92,12 @@ func loadPreferences(base string) (userSettings, string, connectOptions, error) 
 
 func optionsForMode(o connectOptions, mode ConnectionMode) connectOptions {
 	o.mode = mode
+	// The ordinary-site policies search all exit methods. A method chosen in
+	// Aether's submenu must not silently restrict their fallback inventory.
+	// runConnect reapplies explicit CLI experiments after these defaults.
+	if mode == ModeBalanced || mode == ModeFast {
+		o.aetherMethod = "auto"
+	}
 	if mode != ModeWindscribe {
 		o.ws.zapret = ""
 	}

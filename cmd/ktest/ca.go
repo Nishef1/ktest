@@ -231,17 +231,38 @@ func (t *terminal) frontSetup(readLine func() (string, bool)) bool {
 	u := t.ui
 	for {
 		caStatus(u)
+		if t.options.noFront {
+			u.Line(toneWarn, "Website fronting is disabled (-no-front), even with a trusted CA. Type ENABLE to allow it in Balanced/Fast.")
+		} else {
+			u.Note("Website fronting is enabled when the CA is trusted. Type DISABLE to turn it off in Balanced/Fast.")
+		}
 		status := inspectCertificate()
 		switch status.state {
 		case "ok", "outdated":
-			u.Printf("  Type RENEW to replace and install the certificate, REMOVE to delete it, or Enter to go back > ")
-			ans, ok := readLine()
-			if !ok {
-				return false
+			u.Printf("  RENEW certificate / REMOVE certificate / ENABLE fronting / DISABLE fronting / Enter = back > ")
+		case "invalid":
+			u.Printf("  Repair the files shown above; ENABLE / DISABLE fronting / Enter = back > ")
+		default:
+			u.Printf("  y = create/install trust (Windows asks for confirmation) / ENABLE fronting / DISABLE fronting / Enter = back > ")
+		}
+		ans, ok := readLine()
+		if !ok {
+			return false
+		}
+		if ans == "" || isBackChoice(ans) {
+			return true
+		}
+		if strings.EqualFold(ans, "ENABLE") || strings.EqualFold(ans, "DISABLE") {
+			t.options.noFront = strings.EqualFold(ans, "DISABLE")
+			value := "false"
+			if t.options.noFront {
+				value = "true"
 			}
-			if ans == "" || isBackChoice(ans) {
-				return true
-			}
+			t.rememberConnect("no-front", value)
+			continue
+		}
+		switch status.state {
+		case "ok", "outdated":
 			switch strings.ToUpper(ans) {
 			case "RENEW":
 				if caRemove(u, true) == 0 {
@@ -250,27 +271,11 @@ func (t *terminal) frontSetup(readLine func() (string, bool)) bool {
 			case "REMOVE":
 				caRemove(u, true)
 			default:
-				u.Line(toneWarn, "Select RENEW, REMOVE, or 0 to go back.")
+				u.Line(toneWarn, "Select RENEW, REMOVE, ENABLE, DISABLE, or 0 to go back.")
 			}
 		case "invalid":
-			u.Printf("  Repair the files shown above; Enter / 0 = back > ")
-			ans, ok := readLine()
-			if !ok {
-				return false
-			}
-			if ans == "" || isBackChoice(ans) {
-				return true
-			}
 			u.Line(toneWarn, "Press Enter or 0 to go back.")
 		default:
-			u.Printf("  Type y to create/install trust (Windows asks for confirmation), or Enter to go back > ")
-			ans, ok := readLine()
-			if !ok {
-				return false
-			}
-			if ans == "" || isBackChoice(ans) {
-				return true
-			}
 			if isYes(ans) || strings.EqualFold(ans, "INSTALL") {
 				caInstall(u)
 			} else {

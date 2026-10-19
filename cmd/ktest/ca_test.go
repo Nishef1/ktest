@@ -11,6 +11,39 @@ import (
 	"github.com/Nishef1/ktest/internal/front"
 )
 
+func TestFrontSetupCanRestoreDisabledRoutingWithoutChangingTrust(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KTEST_CA_DIR", dir)
+	path := filepath.Join(t.TempDir(), "settings.json")
+	var output bytes.Buffer
+	menu := &terminal{ui: plainTerm(&output), settingsFile: path,
+		settings: userSettings{Connect: map[string]string{"no-front": "true", "tun": "true"}},
+		options:  connectOptions{noFront: true, tun: true}}
+	answers := []string{"ENABLE", "DISABLE", "ENABLE", ""}
+	if !menu.frontSetup(func() (string, bool) {
+		if len(answers) == 0 {
+			return "", false
+		}
+		answer := answers[0]
+		answers = answers[1:]
+		return answer, true
+	}) {
+		t.Fatal("setup did not return to the menu")
+	}
+	if menu.options.noFront || menu.settings.Connect["no-front"] != "false" {
+		t.Fatal("fronting stayed disabled after ENABLE")
+	}
+	t.Setenv("KTEST_SETTINGS_FILE", path)
+	_, _, saved, err := loadPreferences("package")
+	if err != nil || saved.noFront || !saved.tun {
+		t.Fatalf("fronting choice was not saved independently: %+v, %v", saved, err)
+	}
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 0 {
+		t.Fatal("routing toggle changed CA files or trust", err)
+	}
+}
+
 func TestCertificateHealthIncludesSystemTrustExpiryAndSupportedSites(t *testing.T) {
 	ca, err := front.Create(t.TempDir(), front.PermittedDomains(front.DefaultFamilies()))
 	if err != nil {

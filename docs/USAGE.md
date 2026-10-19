@@ -111,6 +111,8 @@ What ktest does to keep this safe:
 * Connect enables it only when the system reports the CA as trusted (`-front` forces it, `-no-front` forbids it). If applications keep refusing the certificate (Firefox has its own store: set `security.enterprise_roots.enabled` to true in about:config), fronting switches itself off after three refusals so nothing breaks.
 * Several fronts are tried per family and ranked by what worked on your network, because a server name that is open on one operator is closed on the next. Add your own in `profiles/fronts.txt`: one line `family sni [dial]` (`-` = no SNI, `@own` = the site's own address). Diagnose tests every front without any certificate and shows which ones this network allows.
 
+The certificate screen in Setup shows whether fronting is enabled. `ENABLE` / `DISABLE` saves that routing choice without changing the certificate or system trust. Installing or renewing the CA alone does not override a saved `-no-front`. Balanced/Fast search all Aether exit methods automatically, independently of a method saved in the Aether submenu; an explicit `connect -aether-method ...` still isolates a method for experiments.
+
 When no trusted address for a site exists at all (system DNS poisoned and encrypted DNS filtered, as in a field log from a filtered network), a family may carry edge address hints (Meta does): any address of the family's edge serves every site of the family. Google needs no DNS: the address of `www.google.com` serves YouTube and the rest.
 
 Limits: only HTTPS on port 443 for the listed families; applications that pin certificates refuse it; Google may still refuse sanctioned content for an Iranian address, and fronting does not change your IP.

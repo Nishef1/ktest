@@ -158,6 +158,25 @@ func TestSavedModeAndCoverageDoNotOverrideWindscribeOwnership(t *testing.T) {
 	}
 }
 
+func TestOrdinaryPoliciesDoNotInheritAnIsolatedAetherMethod(t *testing.T) {
+	o := defaultConnectOptions("package")
+	o.aetherMethod = "gool-h2"
+	for _, mode := range []ConnectionMode{ModeBalanced, ModeFast} {
+		got := optionsForMode(o, mode)
+		if got.aetherMethod != "auto" {
+			t.Fatalf("%s inherited a single-method exit search: %q", mode, got.aetherMethod)
+		}
+		// An explicit experiment still overrides policy defaults, as in runConnect.
+		flags := connectFlagSet(&got)
+		if err := flags.Parse([]string{"-aether-method", "gool-h2"}); err != nil || got.aetherMethod != "gool-h2" {
+			t.Fatalf("explicit method override lost: %+v, %v", got, err)
+		}
+	}
+	if got := optionsForMode(o, ModeAether); got.aetherMethod != "gool-h2" {
+		t.Fatal("Aether's explicitly selected method was lost")
+	}
+}
+
 func TestInvalidSettingsArePreservedAndRemovedFlagsCannotDisableProtection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	t.Setenv("KTEST_SETTINGS_FILE", path)
