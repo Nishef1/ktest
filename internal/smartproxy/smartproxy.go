@@ -779,12 +779,17 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 		err := p.cfg.EnsureExit(exitCtx)
 		stop()
 		if err != nil {
+			if parent.Err() == nil {
+				p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Took: time.Since(began), Err: err.Error()})
+			}
 			return winner{}, err
 		}
 		order = p.order(host, port)
 	}
 	if len(order) == 0 {
-		return winner{}, fmt.Errorf("%s: no permitted foreign exit; protected site blocked (fail-closed)", host)
+		err := fmt.Errorf("%s: no permitted foreign exit; protected site blocked (fail-closed)", host)
+		p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Took: time.Since(began), Err: err.Error()})
+		return winner{}, err
 	}
 	// Late paths go to the back, behind a gate that opens when everything else
 	// has failed or after lateAfter.

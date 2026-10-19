@@ -158,6 +158,22 @@ func TestHealthyLocalConnectionNeverRequestsATunnel(t *testing.T) {
 	}
 }
 
+func TestProtectedDiscoveryFailureReachesConnectionDiagnostics(t *testing.T) {
+	events := make(chan Event, 1)
+	p, _ := New(Config{ExitOnly: func(string) bool { return true }, EnsureExit: func(context.Context) error { return context.DeadlineExceeded }, OnEvent: func(e Event) { events <- e }})
+	if _, err := p.race(context.Background(), "protected.example", "443", clientHello()); err == nil {
+		t.Fatal("unavailable exit reported success")
+	}
+	select {
+	case e := <-events:
+		if e.OK || e.Err == "" || e.Host != "protected.example" {
+			t.Fatalf("failed discovery misreported: %+v", e)
+		}
+	default:
+		t.Fatal("exit timeout was invisible to the UI")
+	}
+}
+
 func TestCancelInterruptsAStalledSOCKSHandshake(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
