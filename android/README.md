@@ -27,7 +27,7 @@ The Go policy catalog has all seven desktop modes, but **not every launcher is a
 | Fast | Same native/local routes with the shared Fast policy |
 | Aether | Managed packaged core with native method selection; optional existing loopback SOCKS path |
 | Aether to Tor | Managed Aether Tor-only backend; Tor Project and foreign-exit checks required before connection is active |
-| Windscribe | Disabled pending portable original WStunnel / Xray / ByeDPI orchestration |
+| Windscribe | Proxy-only: fixed loopback HTTP proxy (127.0.0.1:18118) with ByeDPI and ClientHello cuts only, for a Windscribe OpenVPN TCP profile in OpenVPN for Android (`http-proxy`; exclude KTest from that VPN). No KTest VPN, exits, fronting or WStunnel |
 | Aether to Psiphon | Managed Aether Psiphon / CDN profiles; bundled shirokhorshid helper, no external SOCKS substitution |
 | Windscribe through Aether | Disabled until the original two-core carrier is portable |
 

@@ -98,8 +98,11 @@ internal fun ConnectScreen(
         }
         if (activeMode.id == "fast") Note("Fast starts each site with the best route the tests confirmed and keeps adapting during use. TikTok and AI require a verified foreign exit.")
         PublicIpPanel(state == LinkState.Active)
-        CoverageCard(coverage, onCoverage, !locked)
+        if (activeMode.id != "windscribe") CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
+        if (activeMode.id == "windscribe") {
+            WindscribeOpenVpnPanel(status.optString("http").ifBlank { Mobilebridge.windscribeHTTPProxy() }, onCopy)
+        }
         if (activeMode.id in nativeModes) {
             NativeMethodPanel(activeMode.id, nativeMethod, onNativeMethod, !locked)
         }
@@ -626,6 +629,27 @@ private fun EndpointRow(label: String, address: String, onCopy: (String) -> Unit
             Icon(if (copied) KIcons.Check else KIcons.Copy, "Copy $label address",
                 tint = if (copied) K.mint else K.muted, modifier = Modifier.size(18.dp))
         }
+    }
+}
+
+@Composable
+private fun WindscribeOpenVpnPanel(httpAddress: String, onCopy: (String) -> Unit) {
+    val host = httpAddress.substringBeforeLast(':')
+    val port = httpAddress.substringAfterLast(':')
+    val line = "http-proxy $host $port"
+    Panel {
+        SectionLabel("Chain Windscribe through OpenVPN for Android")
+        Text("The Windscribe app cannot use a proxy. Use a Windscribe OpenVPN config instead; KTest carries its TCP through local anti-DPI.",
+            color = K.muted, fontSize = 12.sp, lineHeight = 17.sp)
+        EndpointRow("HTTP", httpAddress, onCopy)
+        EndpointRow("Line", line, onCopy)
+        for (step in listOf(
+            "1. In Windscribe's config generator (Pro), download an OpenVPN config with protocol TCP.",
+            "2. Add the line above to the .ovpn file, or set HTTP proxy $host port $port in OpenVPN for Android → profile → Connection.",
+            "3. Import it into OpenVPN for Android. Under Allowed apps, exclude KTest, or KTest's own traffic loops into the tunnel.",
+            "4. Connect KTest here first, then the profile in OpenVPN for Android."
+        )) Text(step, color = K.text, fontSize = 13.sp, lineHeight = 18.sp)
+        Note("Only ByeDPI and ClientHello cuts are used: no foreign exit, fronting or WStunnel. UDP configs and the Windscribe app itself are not supported.", Tone.Warn)
     }
 }
 

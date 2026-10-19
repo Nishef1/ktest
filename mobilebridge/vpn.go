@@ -164,6 +164,11 @@ func AttachVpnTun(fd int) error {
 		return errors.New("Android VPN dataplane is already running")
 	}
 	proxyMu.Lock()
+	if activeProxy.mode == "windscribe" {
+		// OpenVPN for Android owns the device VPN in this chain.
+		proxyMu.Unlock()
+		return errors.New("Windscribe mode is proxy-only; OpenVPN for Android provides the VPN")
+	}
 	endpoint := activeProxy.socks.Addr().String()
 	proxyMu.Unlock()
 	if !packetAdapter.Start(fd, endpoint) || !packetAdapter.IsRunning() {

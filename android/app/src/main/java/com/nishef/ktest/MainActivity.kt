@@ -94,6 +94,8 @@ private fun KTestApp() {
     val routeTargets = remember { RouteTargetsState() }
     val running = status.optBoolean("running")
     val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
+    // Windscribe is proxy-only: OpenVPN for Android owns the device VPN.
+    val effectiveCoverage = if (activeMode.id == "windscribe") "proxy" else coverage
     val manualTesting = routePlan.manualBusy
     val offline = !running && !connecting && !connectAfterConsent && !routePlan.busy &&
         vpnState != "preparing" && vpnState != "tun_running_unverified"
@@ -146,7 +148,7 @@ private fun KTestApp() {
                     putExtra(ProxyService.EXTRA_TITLE, activeMode.title)
                     putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
                     putExtra(ProxyService.EXTRA_METHOD, nativeMethod)
-                    putExtra(ProxyService.EXTRA_VPN, coverage != "proxy")
+                    putExtra(ProxyService.EXTRA_VPN, effectiveCoverage != "proxy")
                 })
         } catch (e: Exception) {
             error = e.message ?: "Unable to start the connection"
@@ -301,7 +303,7 @@ private fun KTestApp() {
                                     ProxyService.lastError = null
                                 }
                             },
-                            coverage = coverage, vpnActive = vpnState == "tun_running_unverified",
+                            coverage = effectiveCoverage, vpnActive = vpnState == "tun_running_unverified",
                             onCoverage = { coverage = it; prefs.edit().putString("coverage", it).apply() },
                             onPower = {
                                 error = null
@@ -311,7 +313,7 @@ private fun KTestApp() {
                                     })
                                     connecting = false
                                 } else if (activeMode.available && !connectBlocked) {
-                                    val consent = if (coverage != "proxy") VpnService.prepare(context) else null
+                                    val consent = if (effectiveCoverage != "proxy") VpnService.prepare(context) else null
                                     if (consent != null) {
                                         connectAfterConsent = true
                                         vpnConsent.launch(consent)

@@ -270,6 +270,18 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		if native == nil {
 			return "", errors.New("this mode requires its managed Aether backend")
 		}
+	case "windscribe":
+		// Proxy-only bridge for an OpenVPN TCP client: local anti-DPI only.
+		// The exits, fronting and native cores of other modes are refused here,
+		// before anything starts, not only by the smart proxy's own policy.
+		switch {
+		case upstream != "" || native != nil:
+			return "", errors.New("Windscribe local-only mode prohibits foreign exits")
+		case frontDir != "":
+			return "", errors.New("Windscribe local-only mode prohibits fronting")
+		case localDir == "":
+			return "", errors.New("Windscribe mode requires the packaged ByeDPI cores")
+		}
 	default:
 		return "", fmt.Errorf("mode %q is not available in this Android build", mode)
 	}
@@ -310,7 +322,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}()
 		upstream = managed.address
 	}
-	if mode != "balanced" && mode != "fast" && upstream == "" {
+	if mode != "balanced" && mode != "fast" && mode != "windscribe" && upstream == "" {
 		return "", errors.New("a local SOCKS5 upstream is required for this mode")
 	}
 	rules, err := smartproxy.NewAIDomainRules("")
@@ -320,12 +332,15 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	var upstreams []smartproxy.Upstream
 	if mode == "balanced" || mode == "fast" {
 		upstreams = append(smartproxy.PlainUpstreams(), smartproxy.DesyncUpstreams()...)
+	} else if mode == "windscribe" {
+		// The built-in ClientHello cuts only; plain TCP is not a local bypass.
+		upstreams = smartproxy.DesyncUpstreams()
 	}
 	var localCores *localCoreSet
 	var xrayError string
 	keepLocal := false
 	if localDir != "" {
-		localCores, err = launchAndroidLocalCores(startContext, localDir, testOnly)
+		localCores, err = launchLocalCores(startContext, localDir, testOnly)
 		if err != nil {
 			return "", err
 		}
@@ -334,7 +349,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 				localCores.stop()
 			}
 		}()
-		if localStateDir != "" {
+		if localStateDir != "" && mode != "windscribe" {
 			// Fast uses every local method too. Optional route only. A mismatched or unavailable Xray core never
 			// removes the already verified ByeDPI fallback paths.
 			if err := attachAndroidXray(startContext, localCores, localDir, localStateDir); err != nil {
@@ -538,7 +553,12 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		cancel()
 		return "", fmt.Errorf("SOCKS listener: %w", err)
 	}
-	httpAddress, err := core.StartHTTP("127.0.0.1:0", nil)
+	httpListen := "127.0.0.1:0"
+	if mode == "windscribe" {
+		// An OpenVPN profile names its http-proxy port, so it must not change.
+		httpListen = windscribeHTTPAddress
+	}
+	httpAddress, err := core.StartHTTP(httpListen, nil)
 	if err != nil {
 		cancel()
 		core.Stop()
