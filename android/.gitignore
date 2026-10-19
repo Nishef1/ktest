@@ -1,6 +1,7 @@
 /.gradle/
 /build/
 /app/build/
+/vpnprobe/build/
 /app/libs/*.aar
 /local.properties
 /.idea/
