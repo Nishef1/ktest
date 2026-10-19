@@ -93,7 +93,7 @@ internal fun RouteTargetsPanel(
     Panel {
         SectionLabel("Balanced / Fast targets")
         Text("Custom HTTPS destinations", color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        Note("Targets define optional diagnostic requests and exact-host fronting preferences. Edit while disconnected; Connect does not require a test and adapts during use.")
+        Note("Targets define diagnostic requests. With fronting enabled every Google, YouTube, X, Meta and Fastly host can be fronted; switch it off here to exclude one exact host.")
         if (!editable) Note("Disconnect and finish any startup or manual test before adding, editing or removing targets.", Tone.Warn)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SecondaryButton("Add target", { s.edit() }, Modifier.weight(1f), enabled = canEdit)
@@ -111,7 +111,7 @@ internal fun RouteTargetsPanel(
                     keyboardType = KeyboardType.Uri, singleLine = false, minLines = 2,
                     supporting = "No credentials or fragments. This path is used only by the test.")
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Request optional fronting for this exact host", modifier = Modifier.weight(1f),
+                    Text("Allow fronting for this host", modifier = Modifier.weight(1f),
                         color = K.text, fontSize = 13.sp)
                     Switch(s.fronting, { s.fronting = it }, enabled = canEdit,
                         colors = SwitchDefaults.colors(checkedThumbColor = K.bg, checkedTrackColor = K.mint,
@@ -166,7 +166,7 @@ internal fun RouteTargetsPanel(
             onDismissRequest = { if (!s.busy) s.deleteTarget = null },
             containerColor = K.surface,
             title = { Text("Remove ${target.optString("name")}?", color = K.text) },
-            text = { Text("Remove this target from calibration and its exact-host fronting preferences? The CA and protected-domain rules remain in force.", color = K.muted) },
+            text = { Text("Remove this target from tests? Its host returns to the default fronting policy. The CA and protected-domain rules remain in force.", color = K.muted) },
             confirmButton = {
                 TextButton(onClick = {
                     val id = target.optString("id")

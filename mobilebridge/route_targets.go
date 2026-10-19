@@ -29,7 +29,7 @@ const routeTargetsFile = "route-targets.json"
 
 var routeTargetsMu sync.Mutex
 
-// Fronting is an exact-host opt-in, independent of the URL path used in tests.
+// Fronting false excludes the exact host from family-wide fronting; the URL path is only for tests.
 // It neither extends the local CA nor changes protected-domain routing policy.
 type routeTarget struct {
 	ID       string `json:"id"`
@@ -228,6 +228,11 @@ func routeTargetsRevision(targets []routeTarget) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// With fronting enabled, every host of a fronting family (Google, YouTube,
+// X, Meta, Fastly sites) may be fronted, as on Windows: YouTube alone needs
+// googlevideo, ytimg and ggpht hosts no one lists by hand. A saved target
+// with fronting switched off is the exception for its exact host. An app that
+// refuses the CA only loses fronting for that host; other routes take over.
 func routeFrontingAllowed(targets []routeTarget, host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	protected, _ := smartproxy.NewAIDomainRules("")
@@ -235,15 +240,12 @@ func routeFrontingAllowed(targets []routeTarget, host string) bool {
 		return false
 	}
 	for _, target := range targets {
-		if !target.Fronting {
-			continue
-		}
 		u, err := targetURL(target.URL)
-		if err == nil && u.Hostname() == host && (u.Port() == "" || u.Port() == "443") {
-			return true
+		if err == nil && u.Hostname() == host && (u.Port() == "" || u.Port() == "443") && !target.Fronting {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func writeRouteTargets(dir string, targets []routeTarget) error {
@@ -295,7 +297,7 @@ func routeTargetsJSON(dir string, targets []routeTarget) (string, error) {
 	protected, _ := smartproxy.NewAIDomainRules("")
 	for _, target := range targets {
 		u, _ := targetURL(target.URL)
-		info := routeTargetInfo{routeTarget: target, Note: "Fronting is scoped to this exact hostname; the path is used only for diagnostics. CA trust and target reachability are not verified."}
+		info := routeTargetInfo{routeTarget: target, Note: "Fronting off excludes this exact hostname; the path is used only for diagnostics. CA trust and target reachability are not verified."}
 		if fam := front.Lookup(front.DefaultFamilies(), u.Hostname()); fam != nil {
 			info.Family = fam.Name
 			info.Supported = u.Port() == "" || u.Port() == "443"
@@ -315,7 +317,7 @@ func routeTargetsJSON(dir string, targets []routeTarget) (string, error) {
 		Targets  []routeTargetInfo `json:"targets"`
 		Revision string            `json:"revision"`
 		Note     string            `json:"note"`
-	}{infos, routeTargetsRevision(targets), "Removing a target changes tests and exact-host fronting rules only. Protected-domain policy and CA constraints remain in force."})
+	}{infos, routeTargetsRevision(targets), "Removing a target changes tests and its fronting exclusion only. Protected-domain policy and CA constraints remain in force."})
 	return string(raw), err
 }
 

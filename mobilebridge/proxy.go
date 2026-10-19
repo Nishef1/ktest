@@ -550,6 +550,11 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	if !testOnly && localStateDir != "" {
 		refreshRangesInBackground(ctx, localStateDir, core.SOCKS.Addr().String())
 	}
+	if automatic != nil {
+		// Warm the foreign exit up now, in parallel with local routes, so the
+		// first address-blocked or AI site does not wait for its bootstrap.
+		go func() { _ = automatic.ensure(ctx) }()
+	}
 	keepDNS = true
 	keepManaged = true
 	keepLocal = true

@@ -450,3 +450,17 @@ func TestSeedsOrderTheFirstRaceOnlyUntilLiveResultsArrive(t *testing.T) {
 		t.Fatal("a failing seed stayed first")
 	}
 }
+
+func TestRefusedTakeoverWithdrawsItsPriorCredit(t *testing.T) {
+	p, _ := New(Config{Upstreams: []Upstream{{Name: "plain: no cutting"},
+		{Name: "Front", Takeover: func(context.Context, string, string, []byte) (Session, error) { return nil, errors.New("unused") }}}})
+	p.recordOutcome(p.ups[0], "video.example", "443", KindReset, time.Second)
+	p.record(p.ups[1], "video.example", "443", true, time.Millisecond)
+	if p.priors[KindReset].wins[FamilyFront] != 1 {
+		t.Fatal("prepared takeover not credited")
+	}
+	p.rejectTakeover("video.example", "443", "Front")
+	if pr := p.priors[KindReset]; pr.wins[FamilyFront] != 0 || pr.losses[FamilyFront] != 1 {
+		t.Fatalf("refused takeover still counted as a win: %+v", *pr)
+	}
+}

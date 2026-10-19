@@ -301,6 +301,22 @@ func (p *Proxy) rejectTakeover(host, port, path string) {
 	s.fails++
 	s.rejected = true
 	s.kind = KindBlockPage // the client refused the certificate presented
+	// The takeover was credited to the network priors when it was prepared;
+	// an application that refused it means the family did not work here.
+	for _, u := range p.ups {
+		if u.Name == path && m.credited == u.family && m.kind != KindNone {
+			if pr := p.priors[m.kind]; pr != nil && pr.wins[u.family] > 0 {
+				pr.wins[u.family]--
+				pr.add(pr.losses, u.family)
+			}
+			m.credited = ""
+			if m.failed == nil {
+				m.failed = map[string]bool{}
+			}
+			m.failed[u.family] = true
+			break
+		}
+	}
 	if m.winner == path {
 		m.winner = ""
 	}

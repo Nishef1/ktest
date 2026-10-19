@@ -58,7 +58,8 @@ func mobileHistory(mode, dir string) (string, string) {
 func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &automaticExit{ctx: ctx, cancel: cancel, done: make(chan struct{}), mode: mode, historyKey: key,
-		options: nativeOptions{libraryDir: libraryDir, stateDir: filepath.Join(stateDir, "automatic-exits")}}
+		// privateDir lets Psiphon's CDN fronting try this network's verified edges.
+		options: nativeOptions{libraryDir: libraryDir, stateDir: filepath.Join(stateDir, "automatic-exits"), privateDir: stateDir}}
 	a.attempt = func(ctx context.Context, p aether.Profile) (*nativeCore, observedExit, error) {
 		o := a.options
 		o.profile = &p

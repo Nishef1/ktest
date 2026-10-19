@@ -76,7 +76,7 @@ func TestRouteTargetsPersistEditsAndRemovalOfDefaults(t *testing.T) {
 	}
 }
 
-func TestRouteTargetValidationAndExactHostScope(t *testing.T) {
+func TestRouteTargetValidationAndFamilyScope(t *testing.T) {
 	dir := t.TempDir()
 	for _, raw := range []string{"http://youtube.com/", "https://u:p@youtube.com/", "https://youtube.com/#x", "https://youtube.com/#", "https://youtube.com/\r\nHost: evil", "https://youtube.com/%0d%0aHost:evil", "https://bad..example/", "https://youtube.com:bad/"} {
 		if _, err := SaveRouteTarget(dir, "invalid", "Bad", raw, true); err == nil {
@@ -87,7 +87,13 @@ func TestRouteTargetValidationAndExactHostScope(t *testing.T) {
 	if !routeFrontingAllowed(targets, "WWW.YOUTUBE.COM.") {
 		t.Fatal("exact enabled host not matched")
 	}
-	for _, host := range []string{"youtube.com", "sub.www.youtube.com", "www.youtube.com.evil.example", "gemini.google.com", "unlisted.example"} {
+	// The whole family is covered, as on Windows; AI and non-family hosts never.
+	for _, host := range []string{"youtube.com", "rr5---sn-u14g55-5f.googlevideo.com", "i.ytimg.com"} {
+		if !routeFrontingAllowed(targets, host) {
+			t.Errorf("family host %s not fronted", host)
+		}
+	}
+	for _, host := range []string{"www.youtube.com.evil.example", "gemini.google.com", "unlisted.example"} {
 		if routeFrontingAllowed(targets, host) {
 			t.Errorf("fronting scope widened to %s", host)
 		}
