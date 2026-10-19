@@ -139,7 +139,20 @@ func (a *xrayTunPacketAdapter) Start(fd int, socksAddress string) bool {
 	if err != nil {
 		return fail(fmt.Errorf("local Go SOCKS listener is not ready: %w", err))
 	}
+	_ = probe.SetDeadline(time.Now().Add(700 * time.Millisecond))
+	if _, err := probe.Write([]byte{5, 1, 0}); err != nil {
+		_ = probe.Close()
+		return fail(fmt.Errorf("local Go SOCKS greeting failed: %w", err))
+	}
+	greeting := make([]byte, 2)
+	if _, err := io.ReadFull(probe, greeting); err != nil {
+		_ = probe.Close()
+		return fail(fmt.Errorf("local Go SOCKS greeting response failed: %w", err))
+	}
 	_ = probe.Close()
+	if greeting[0] != 5 || greeting[1] != 0 {
+		return fail(errors.New("local Go SOCKS listener did not accept unauthenticated SOCKS5"))
+	}
 
 	binary, err := xraycfg.AndroidBinary(a.nativeDir, runtime.GOARCH)
 	if err != nil {
