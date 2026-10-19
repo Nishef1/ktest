@@ -30,7 +30,7 @@ func CloudflareCandidates(max int) ([]string, error) {
 	if max < 1 {
 		return nil, errors.New("candidate budget must be positive")
 	}
-	next, err := cloudflareIterator(max)
+	next, err := prefixIterator(prefixesFor("cloudflare"), max)
 	if err != nil {
 		return nil, err
 	}
@@ -51,13 +51,15 @@ func CloudflareCandidates(max int) ([]string, error) {
 // selected inventory/budget is exhausted. It is consumed by one goroutine.
 type CandidateIterator func(context.Context) (ip string, ok bool, err error)
 
-func cloudflareIterator(budget int) (CandidateIterator, error) {
+// prefixIterator permutes every block of a provider inventory and interleaves
+// the blocks, so a short scan already covers many prefixes.
+func prefixIterator(prefixes []string, budget int) (CandidateIterator, error) {
 	type block struct {
 		base         uint32
 		size, cursor uint64
 	}
-	blocks := make([]block, 0, len(cloudflareIPv4))
-	for _, raw := range cloudflareIPv4 {
+	blocks := make([]block, 0, len(prefixes))
+	for _, raw := range prefixes {
 		p, err := netip.ParsePrefix(raw)
 		if err != nil || !p.Addr().Is4() {
 			return nil, fmt.Errorf("invalid official IPv4 prefix")
@@ -84,7 +86,9 @@ func cloudflareIterator(budget int) (CandidateIterator, error) {
 				offset := (b.cursor*2654435761 + 1) % b.size
 				b.cursor++
 				addr := b.base + uint32(offset)
-				if offset == 0 || offset == b.size-1 || addr&255 == 0 || addr&255 == 255 {
+				// Single published edges (/32, /31) are hosts; larger blocks
+				// skip their network, broadcast and .0/.255 addresses.
+				if b.size >= 4 && (offset == 0 || offset == b.size-1 || addr&255 == 0 || addr&255 == 255) {
 					continue
 				}
 				var ip [4]byte

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
@@ -58,7 +59,7 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 		return aether.Profile{}, err
 	}
 	profiles = aether.FilterMethod(aether.ProfilesForMode(profiles, mode), method)
-	if viaFast {
+	if viaFast && mode == "aether" {
 		profiles = tcpCarriedProfiles(profiles)
 		if len(profiles) == 0 {
 			return aether.Profile{}, errors.New("through Fast only TCP methods work (MASQUE, Gool or MASQUE-in-MASQUE over HTTP/2); choose one of those")
@@ -97,6 +98,14 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	if len(supported) == 0 {
 		return nil, errors.New("packaged Aether does not support this profile")
 	}
+	if edges := psiphonEdges(p, o.privateDir); len(edges) > 0 {
+		// Edges this network verified in CDN scans are tried first by
+		// Psiphon's fronting; its own built-in lists still follow.
+		withEdges := aether.Profile{Label: p.Label, Args: append(append([]string(nil), p.Args...), "--psiphon-cdn-ips", strings.Join(edges, ","))}
+		if ok, inspectErr := aether.InspectProfiles(ctx, paths.Aether, []aether.Profile{withEdges}); inspectErr == nil && len(ok) > 0 {
+			p = withEdges
+		}
+	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -122,6 +131,24 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 		close(n.done)
 	}()
 	return n, nil
+}
+
+// psiphonEdges are recently verified CDN edges of providers Psiphon fronts
+// through, best providers first, bounded so the command line stays short.
+func psiphonEdges(p aether.Profile, privateDir string) []string {
+	if !p.Psiphon() || p.Has("--psiphon-cdn-ips") || privateDir == "" {
+		return nil
+	}
+	var out []string
+	for _, provider := range []string{"akamai", "cloudflare", "fastly", "cloudfront"} {
+		for _, ip := range loadVerifiedCDNEdges(privateDir, provider) {
+			if len(out) == 40 {
+				return out
+			}
+			out = append(out, ip)
+		}
+	}
+	return out
 }
 
 func (n *nativeCore) stop() {

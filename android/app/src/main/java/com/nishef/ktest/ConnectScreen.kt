@@ -92,11 +92,11 @@ internal fun ConnectScreen(
         if (state == LinkState.Active) {
             EndpointsPanel(status, routeReport, checkingRoute, onCheckRoute, onCopy)
         }
-        if (activeMode.id == "balanced") {
+        if (activeMode.id == "balanced" || activeMode.id == "fast") {
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
-        if (activeMode.id == "fast") Note("Fast connects without route calibration and adapts during use. TikTok and AI require a verified foreign exit; use Aether / Psiphon when no exit is available.")
+        if (activeMode.id == "fast") Note("Fast starts each site with the best route the tests confirmed and keeps adapting during use. TikTok and AI require a verified foreign exit.")
         PublicIpPanel(state == LinkState.Active)
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)

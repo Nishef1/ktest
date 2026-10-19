@@ -58,6 +58,10 @@ type Family struct {
 	// the family's edge serves every site of the family, so a stale hint still
 	// works as long as it is an edge address at all.
 	Hints []string
+	// Provider names the CDN inventory (internal/cdnranges) whose addresses
+	// serve every domain of the family; empty when only customer-specific
+	// addresses do.
+	Provider string
 	// NoStandIn are domains that only their own servers can serve: a front that
 	// dials another machine (the www.google.com stand-in) would connect, verify
 	// and then answer 404, which looks like success and hides the real failure.
@@ -110,7 +114,8 @@ func normalize(h string) string { return strings.ToLower(strings.TrimSuffix(h, "
 func DefaultFamilies() []Family {
 	return []Family{
 		{
-			Name: "google",
+			Name:     "google",
+			Provider: "google",
 			Domains: []string{
 				"google.com", "youtube.com", "youtu.be", "youtube-nocookie.com", "ytimg.com",
 				"ggpht.com", "googlevideo.com", "gstatic.com", "googleapis.com",
@@ -130,7 +135,8 @@ func DefaultFamilies() []Family {
 			NoStandIn: []string{"googlevideo.com"},
 		},
 		{
-			Name: "meta",
+			Name:     "meta",
+			Provider: "meta",
 			Domains: []string{
 				"facebook.com", "fb.com", "fbcdn.net", "fbsbx.com", "instagram.com", "cdninstagram.com",
 				"whatsapp.com", "whatsapp.net", "meta.com", "messenger.com", "threads.net", "threads.com", "oculus.com",
@@ -163,7 +169,8 @@ func DefaultFamilies() []Family {
 			// fronting is impossible here. Encrypted Client Hello hides the real name
 			// instead. Any Cloudflare address serves any Cloudflare site, so the hints
 			// make this work without any DNS.
-			Name: "cloudflare",
+			Name:     "cloudflare",
+			Provider: "cloudflare",
 			Domains: []string{
 				"x.com", "twitter.com", "t.co", "twimg.com", "discord.com", "discord.gg",
 				"discordapp.com", "medium.com", "npmjs.com",
@@ -172,7 +179,8 @@ func DefaultFamilies() []Family {
 			Hints:  []string{"162.159.140.229", "172.66.0.227", "188.114.99.0", "172.66.157.237", "104.18.37.127"},
 		},
 		{
-			Name: "fastly",
+			Name:     "fastly",
+			Provider: "fastly",
 			Domains: []string{
 				"reddit.com", "redd.it", "redditmedia.com", "redditstatic.com", "redditspace.com",
 				"redditinc.com", "redditblog.com", "reddithelp.com", "cnn.com", "cnn.io", "buzzfeed.com",

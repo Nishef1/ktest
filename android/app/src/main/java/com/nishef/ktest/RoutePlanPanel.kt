@@ -115,6 +115,7 @@ internal fun RoutePlanPanel(
                         Text("Selected: ${selection.optString("method").ifBlank { "No responsive method" }}",
                             color = K.text, fontSize = 13.sp)
                         RouteEvidence(selection, winner)
+                        if (selection.optBoolean("kept")) Note("Kept from earlier tests on this network: it still works and nothing was clearly better.")
                     } else Note("No method was selected for this target.", Tone.Warn)
                     val expanded = id in s.expandedTargets
                     SecondaryButton(if (expanded) "Hide method matrix" else "Show method matrix (${methods.size})", {

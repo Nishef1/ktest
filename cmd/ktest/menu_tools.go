@@ -249,7 +249,7 @@ func (t *terminal) cdnScanMenu(in *input) bool {
 		if previous == "" {
 			previous = "cloudflare"
 		}
-		t.ui.Printf("  Provider: cloudflare / akamai / google / fastly (Enter = %s; 0 = back) > ", previous)
+		t.ui.Printf("  Provider: cloudflare / akamai / google / fastly / meta / cloudfront / gcore (Enter = %s; 0 = back) > ", previous)
 		provider, ok := in.read()
 		if !ok {
 			return false
@@ -262,9 +262,9 @@ func (t *terminal) cdnScanMenu(in *input) bool {
 		}
 		provider = strings.ToLower(provider)
 		switch provider {
-		case "cloudflare", "akamai", "google", "fastly":
+		case "cloudflare", "akamai", "google", "fastly", "meta", "cloudfront", "gcore":
 		default:
-			message = "Select cloudflare, akamai, google, fastly, or 0"
+			message = "Select cloudflare, akamai, google, fastly, meta, cloudfront, gcore, or 0"
 			continue
 		}
 		args := []string{"-provider", provider}

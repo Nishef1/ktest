@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/cdnranges"
 	"github.com/Nishef1/ktest/internal/connectiondns"
 	"github.com/Nishef1/ktest/internal/connectionpolicy"
 	"github.com/Nishef1/ktest/internal/connectionsession"
@@ -260,6 +261,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}
 		}
 	}()
+	if localStateDir != "" && realPrivateDirectory(localStateDir) {
+		cdnranges.Load(localStateDir)
+	}
 	switch mode {
 	case "balanced", "fast", "aether":
 	case "psiphon", "tor":
@@ -279,8 +283,8 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		proxyMu.Unlock()
 		var err error
 		if native.viaFast {
-			if mode != "aether" {
-				return "", errors.New("only Aether can run through Fast")
+			if mode != "aether" && mode != "tor" && mode != "psiphon" {
+				return "", errors.New("only Aether, Psiphon and Tor can run through Fast")
 			}
 			carrier, err = startFastCarrier(startContext, native.libraryDir, native.privateDir)
 			if err != nil {
@@ -330,8 +334,8 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 				localCores.stop()
 			}
 		}()
-		if localStateDir != "" && mode != "fast" {
-			// Optional route only. A mismatched or unavailable Xray core never
+		if localStateDir != "" {
+			// Fast uses every local method too. Optional route only. A mismatched or unavailable Xray core never
 			// removes the already verified ByeDPI fallback paths.
 			if err := attachAndroidXray(startContext, localCores, localDir, localStateDir); err != nil {
 				xrayError = err.Error()
@@ -455,7 +459,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		// A public HTTPS status is not proof of reachability for other services.
 		preferred := map[string][]string{}
 		if localStateDir != "" {
-			for _, provider := range []string{"cloudflare", "google", "fastly"} {
+			for _, provider := range []string{"cloudflare", "google", "fastly", "meta"} {
 				preferred[provider] = loadVerifiedCDNEdges(localStateDir, provider)
 			}
 		}
@@ -495,6 +499,17 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 		return "{}", nil
 	}
+	if !testOnly && (mode == "balanced" || mode == "fast") && localStateDir != "" {
+		// The latest tests on this network give each tested site its best
+		// method as the first choice; live learning still decides.
+		if targets, targetErr := loadRouteTargets(localStateDir); targetErr == nil {
+			names := map[string]bool{}
+			for _, u := range config.Upstreams {
+				names[u.Name] = true
+			}
+			config.Seeds, config.SeedDefault = routeSeeds(localStateDir, targets, names)
+		}
+	}
 	proxy, err := smartproxy.New(config)
 	if err != nil {
 		return "", err
@@ -532,6 +547,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	// The session owns the listeners; Android only consumes their addresses.
 	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, automatic: automatic}
 	activeProxy = session
+	if !testOnly && localStateDir != "" {
+		refreshRangesInBackground(ctx, localStateDir, core.SOCKS.Addr().String())
+	}
 	keepDNS = true
 	keepManaged = true
 	keepLocal = true

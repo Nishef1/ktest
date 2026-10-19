@@ -22,12 +22,15 @@ func TestAkamaiPresetIsSmallAndSourceAttributed(t *testing.T) {
 	}
 }
 
-func TestStreamingCandidatesExhaustOnlyTheirRealInventory(t *testing.T) {
-	for _, budget := range []int{0, 1000} {
+func TestStreamingCandidatesSeedThenCoverTheWholeProviderInventory(t *testing.T) {
+	prefixOverride = map[string][]string{"akamai": {"23.12.147.0/30", "2.16.0.0/30", "198.51.0.7/32"}}
+	t.Cleanup(func() { prefixOverride = nil })
+	for _, budget := range []int{0, 5} {
 		preset, next, err := ScanCandidateSource(context.Background(), "akamai", budget)
 		if err != nil {
 			t.Fatal(err)
 		}
+		var order []string
 		seen := map[string]bool{}
 		for {
 			ip, ok, err := next(context.Background())
@@ -41,18 +44,31 @@ func TestStreamingCandidatesExhaustOnlyTheirRealInventory(t *testing.T) {
 				t.Fatalf("candidate repeated: %s", ip)
 			}
 			seen[ip] = true
+			order = append(order, ip)
 		}
-		if len(seen) != 8 || len(preset.IPs) != 8 {
-			t.Fatalf("invented or lost Akamai inventory: %v", seen)
+		// Eight seeds, then two hosts per /30 and the single published edge.
+		want := 8 + 2 + 2 + 1
+		if budget > 0 {
+			want = budget
+		}
+		if len(order) != want || order[0] != "92.123.102.43" || preset.InventorySize != 13 {
+			t.Fatalf("budget %d: %d candidates %v inventory %d", budget, len(order), order, preset.InventorySize)
+		}
+	}
+}
+
+func TestEveryProviderHasAnInventory(t *testing.T) {
+	for _, p := range []string{"cloudflare", "akamai", "fastly", "google", "meta", "cloudfront", "gcore"} {
+		if inventorySize(prefixesFor(p)) < 500 {
+			t.Errorf("%s: inventory %d", p, inventorySize(prefixesFor(p)))
 		}
 	}
 }
 
 func TestCloudflareStreamIsLazyUniqueCancelableAndFinite(t *testing.T) {
 	// A tiny official-range fixture makes genuine inventory exhaustion testable.
-	old := cloudflareIPv4
-	cloudflareIPv4 = []string{"103.21.244.0/30", "103.22.200.0/30"}
-	t.Cleanup(func() { cloudflareIPv4 = old })
+	prefixOverride = map[string][]string{"cloudflare": {"103.21.244.0/30", "103.22.200.0/30"}}
+	t.Cleanup(func() { prefixOverride = nil })
 	p, next, err := ScanCandidateSource(context.Background(), "cloudflare", 0)
 	if err != nil || len(p.IPs) != 0 {
 		t.Fatalf("source eagerly materialized inventory: %+v %v", p, err)

@@ -61,10 +61,16 @@ func (p *Proxy) preferredLocked(host, port string) string {
 	if m := p.memoryLocked(host, port); m != nil {
 		return m.winner
 	}
+	if seed, ok := p.cfg.Seeds[destinationKey(host, port)]; ok {
+		return seed
+	}
 	if hint, ok := p.hints[destinationKey(siteKey(host), port)]; ok && time.Since(hint.at) < p.cfg.MemoryTTL {
 		return hint.name
 	}
-	return ""
+	if seed, ok := p.cfg.Seeds[destinationKey(siteKey(host), port)]; ok {
+		return seed
+	}
+	return p.cfg.SeedDefault
 }
 
 func (p *Proxy) order(host, port string) []*upstreamState {

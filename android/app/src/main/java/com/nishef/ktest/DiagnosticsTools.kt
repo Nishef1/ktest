@@ -252,6 +252,29 @@ private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -
     val budgetLabel = if (budget == 0L) "Until stopped" else "$budget IPs"
     Segmented(listOf("cloudflare" to "Cloudflare", "akamai" to "Akamai", "fastly" to "Fastly", "google" to "Google"),
         s.cdnProvider, { s.cdnProvider = it }, enabled = !controlsBusy)
+    Segmented(listOf("meta" to "Meta", "cloudfront" to "CloudFront", "gcore" to "Gcore"),
+        s.cdnProvider, { s.cdnProvider = it }, enabled = !controlsBusy)
+    // Complete provider inventories (official lists or RIPEstat ASN data),
+    // refreshed automatically while connected; this updates them now.
+    var rangesInfo by remember { mutableStateOf<JSONObject?>(null) }
+    var rangesBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        rangesInfo = withContext(Dispatchers.IO) { runCatching { JSONObject(Mobilebridge.cdnRanges(context.filesDir.canonicalPath)) }.getOrNull() }
+    }
+    val inventory = rangesInfo?.optJSONArray("providers")?.let { array ->
+        (0 until array.length()).mapNotNull { array.optJSONObject(it) }.firstOrNull { it.optString("name") == s.cdnProvider }
+    }
+    if (inventory != null) Note("${inventory.optLong("addresses")} provider addresses in ${inventory.optInt("prefixes")} prefixes · updated ${inventory.optString("updated")}")
+    SecondaryButton(if (rangesBusy) "Updating IP ranges…" else "Update IP ranges", {
+        rangesBusy = true
+        scope.launch {
+            rangesInfo = withContext(Dispatchers.IO) {
+                runCatching { JSONObject(Mobilebridge.updateCDNRanges(context.filesDir.canonicalPath)) }
+                    .getOrElse { runCatching { JSONObject(Mobilebridge.cdnRanges(context.filesDir.canonicalPath)) }.getOrNull() }
+            }
+            rangesBusy = false
+        }
+    }, enabled = !rangesBusy && !controlsBusy, busy = rangesBusy)
     Column {
         Row {
             Text("Candidate budget", color = K.muted, fontSize = 13.sp, modifier = Modifier.weight(1f))

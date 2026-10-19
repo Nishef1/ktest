@@ -161,7 +161,19 @@ func TestCDNContinuousScanHasNoSessionDeadlineAndExportsCancellation(t *testing.
 func TestCDNRealSmallInventoryExhaustsWithoutFalseGreen(t *testing.T) {
 	var calls atomic.Int32
 	dir := t.TempDir()
-	if err := startCDNScan("akamai", 0, 0, dir, nil,
+	// A finite eight-address inventory makes exhaustion observable.
+	small := func(context.Context, string, int) (edges.Preset, edges.CandidateIterator, error) {
+		ips := []string{"23.12.147.13", "23.12.147.29", "23.73.207.8", "23.212.250.78", "23.212.250.91", "23.215.0.203", "23.215.0.206", "92.123.102.43"}
+		return edges.Preset{Provider: "akamai", URL: "https://a248.e.akamai.net/", Source: "test inventory"}, func(ctx context.Context) (string, bool, error) {
+			if len(ips) == 0 {
+				return "", false, ctx.Err()
+			}
+			ip := ips[0]
+			ips = ips[1:]
+			return ip, true, nil
+		}, nil
+	}
+	if err := startCDNScan("akamai", 0, 0, dir, small,
 		func(_ context.Context, _ probe.Config) (probe.Result, error) {
 			switch calls.Add(1) {
 			case 1:

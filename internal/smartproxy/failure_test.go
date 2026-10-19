@@ -430,3 +430,23 @@ func TestPriorsPersistInTheNetworkHistoryFile(t *testing.T) {
 		t.Fatal("another network loaded these priors")
 	}
 }
+
+func TestSeedsOrderTheFirstRaceOnlyUntilLiveResultsArrive(t *testing.T) {
+	p, _ := New(Config{Upstreams: []Upstream{{Name: "plain: no cutting"}, {Name: "ByeDPI split"}, {Name: "Zapret2 fake"}},
+		Seeds: map[string]string{"Tested.Example:443": "Zapret2 fake", "site.example:443": "ByeDPI split"}, SeedDefault: "ByeDPI split"})
+	if first := p.order("tested.example", "443")[0].Name; first != "Zapret2 fake" {
+		t.Fatalf("exact seed ignored: %s", first)
+	}
+	if first := p.order("cdn.site.example", "443")[0].Name; first != "ByeDPI split" {
+		t.Fatalf("site seed ignored: %s", first)
+	}
+	if first := p.order("other.example", "443")[0].Name; first != "ByeDPI split" {
+		t.Fatalf("default seed ignored: %s", first)
+	}
+	// The seeded method failed live: it no longer leads.
+	p.record(p.ups[2], "tested.example", "443", false, time.Second)
+	p.record(p.ups[2], "tested.example", "443", false, time.Second)
+	if first := p.order("tested.example", "443")[0].Name; first == "Zapret2 fake" {
+		t.Fatal("a failing seed stayed first")
+	}
+}

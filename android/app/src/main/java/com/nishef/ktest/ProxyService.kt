@@ -164,9 +164,12 @@ class ProxyService : Service() {
                             if (wanted) {
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {
-                                    val viaFast = mode == "aether" && getSharedPreferences("ktest_android", MODE_PRIVATE)
-                                        .getBoolean("aether_via_fast", false)
-                                    if (viaFast) Mobilebridge.startNativeProxyViaFast(method,
+                                    // Psiphon and Tor need no WARP: by default they dial out
+                                    // through Fast's local anti-DPI carrier.
+                                    val prefs = getSharedPreferences("ktest_android", MODE_PRIVATE)
+                                    val viaFast = if (mode == "aether") prefs.getBoolean("aether_via_fast", false)
+                                        else prefs.getBoolean("native_via_fast", true)
+                                    if (viaFast) Mobilebridge.startNativeModeViaFast(mode, method,
                                         applicationInfo.nativeLibraryDir,
                                         File(filesDir, "aether").absolutePath, filesDir.canonicalPath)
                                     else Mobilebridge.startNativeProxy(mode, method,

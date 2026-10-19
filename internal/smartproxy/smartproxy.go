@@ -148,6 +148,12 @@ type Config struct {
 	StallTimeout time.Duration
 	// MemoryTTL bounds exact host:port history and initial sibling hints.
 	MemoryTTL time.Duration
+	// Seeds are tested first choices per exact host:port (or registrable
+	// site:port), and SeedDefault for destinations without one. They only
+	// order the first race: live results replace them at once and nothing
+	// is pinned, unlike Frozen.
+	Seeds       map[string]string
+	SeedDefault string
 	// HistoryFile stores hashed destination hints in app-private storage.
 	// HistoryKey isolates networks and modes; history never authorizes exits.
 	HistoryFile string
@@ -290,6 +296,15 @@ func New(cfg Config) (*Proxy, error) {
 		return nil, errors.New("at least one upstream is required")
 	}
 	cfg.defaults()
+	if len(cfg.Seeds) > 0 {
+		seeds := make(map[string]string, len(cfg.Seeds))
+		for destination, method := range cfg.Seeds {
+			if host, port, err := net.SplitHostPort(destination); err == nil && method != "" {
+				seeds[destinationKey(host, port)] = method
+			}
+		}
+		cfg.Seeds = seeds
+	}
 	if cfg.Frozen != nil {
 		pins := *cfg.Frozen
 		pins.Targets = make(map[string]string, len(cfg.Frozen.Targets))

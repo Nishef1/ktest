@@ -41,6 +41,10 @@ type Result struct {
 	Status     int    `json:"http_status"`
 	Assessment string `json:"assessment"`
 	Error      string `json:"error,omitempty"`
+	// Totals accumulate earlier tests on the same network and targets
+	// (older runs weigh less), so one noisy run cannot flip a selection.
+	TotalAttempts  int `json:"total_attempts,omitempty"`
+	TotalSuccesses int `json:"total_successes,omitempty"`
 }
 type Selection struct {
 	TargetID   string `json:"target_id"`
@@ -51,6 +55,9 @@ type Selection struct {
 	JitterMS   int64  `json:"jitter_ms"`
 	Successes  int    `json:"successes"`
 	Attempts   int    `json:"attempts"`
+	// Kept means an earlier test's choice still worked and no other method
+	// was clearly better, so it stayed selected.
+	Kept bool `json:"kept,omitempty"`
 }
 type Profile struct {
 	Version         int         `json:"version"`
@@ -60,6 +67,10 @@ type Profile struct {
 	Default         string      `json:"default"`
 	Selections      []Selection `json:"selections"`
 	Rows            []Result    `json:"rows"`
+	// Network identifies the network the test ran on (an opaque hash);
+	// Runs counts the tests merged into this profile.
+	Network string `json:"network,omitempty"`
+	Runs    int    `json:"runs,omitempty"`
 }
 type Progress struct {
 	Completed, Total      int
@@ -79,6 +90,13 @@ func Calibrate(ctx context.Context, targets []Target, methods []Method, probe Pr
 // Cancellation prevents publishing an incomplete profile; no fallback method is
 // silently invented when every HTTP probe is refused.
 func CalibrateWithWorkers(ctx context.Context, targets []Target, methods []Method, probe Probe, progress func(Progress), workers int) (*Profile, error) {
+	return CalibrateWithPrevious(ctx, targets, methods, probe, progress, workers, nil)
+}
+
+// CalibrateWithPrevious also gives each target's previously selected method
+// the full repeated measurement, so it is compared with challengers on equal
+// terms instead of losing to one lucky sample.
+func CalibrateWithPrevious(ctx context.Context, targets []Target, methods []Method, probe Probe, progress func(Progress), workers int, previous *Profile) (*Profile, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -174,7 +192,18 @@ func CalibrateWithWorkers(ctx context.Context, targets []Target, methods []Metho
 			}
 		}
 		sort.SliceStable(rows, func(i, j int) bool { return better(p.Rows[rows[i]], p.Rows[rows[j]]) })
+		incumbent := -1
+		if old := previous.selection(target.ID); old != "" {
+			for _, i := range rows {
+				if p.Rows[i].Method == old {
+					incumbent = i
+				}
+			}
+		}
 		rows = rows[:min(3, len(rows))]
+		if incumbent >= 0 && !containsInt(rows, incumbent) {
+			rows = append(rows, incumbent)
+		}
 		finalists[target.ID] = rows
 		total += 2 * len(rows)
 	}
@@ -198,7 +227,7 @@ func CalibrateWithWorkers(ctx context.Context, targets []Target, methods []Metho
 		if len(rows) > 0 {
 			best := p.Rows[rows[0]]
 			if best.Assessment == "https_verified" && best.Successes == best.Attempts && best.Attempts >= 3 {
-				selection = Selection{target.ID, target.URL, best.Method, best.Assessment, best.MedianMS, best.JitterMS, best.Successes, best.Attempts}
+				selection = Selection{target.ID, target.URL, best.Method, best.Assessment, best.MedianMS, best.JitterMS, best.Successes, best.Attempts, false}
 			} else {
 				selection.Assessment = "no_stable_route"
 			}
@@ -234,6 +263,27 @@ func CalibrateWithWorkers(ctx context.Context, targets []Target, methods []Metho
 		return nil, err
 	}
 	return p, nil
+}
+
+func containsInt(list []int, v int) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Profile) selection(targetID string) string {
+	if p == nil {
+		return ""
+	}
+	for _, s := range p.Selections {
+		if s.TargetID == targetID {
+			return s.Method
+		}
+	}
+	return ""
 }
 
 func summarize(row Result, samples []Sample) Result {
@@ -394,7 +444,9 @@ func LoadOrTestWithRevision(ctx context.Context, dir, key, targetRevision string
 				if cached.TargetsKey == key && cached.Usable() {
 					return cached, true, nil
 				}
-				if targetRevision == "" || cached.TargetsRevision == "" || cached.TargetsRevision != targetRevision {
+				// The same targets with an unusable profile simply retest; an
+				// empty default must never be reused as if it were a route.
+				if cached.TargetsKey != key && (targetRevision == "" || cached.TargetsRevision == "" || cached.TargetsRevision != targetRevision) {
 					return nil, false, errors.New("targets changed; disconnect and run the Test button explicitly")
 				}
 				// Same targets, different available native methods or network:
@@ -412,6 +464,12 @@ func LoadOrTestWithRevision(ctx context.Context, dir, key, targetRevision string
 	}
 	if p == nil {
 		return nil, false, errors.New("calibration returned no complete profile")
+	}
+	// A new test of the same targets on the same network refines the last
+	// one instead of replacing it (see Merge).
+	if prev, loadErr := Load(dir); loadErr == nil && prev.TargetsKey == key && !now.Before(prev.CompletedAt) &&
+		now.Sub(prev.CompletedAt) < MergeAge && (p.Network == "" || prev.Network == p.Network) {
+		p = Merge(prev, p)
 	}
 	if !p.Usable() {
 		return nil, false, errors.New("no target or generic route returned repeated verified HTTPS; unsuccessful observations were not cached")

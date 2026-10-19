@@ -25,16 +25,16 @@ func AndroidModes() []Mode {
 	return []Mode{
 		{"balanced", "Balanced", "Local routes first; automatic Aether / Psiphon / Tor fallback", true,
 			"Zapret2 is Windows-only. Protected services require a verified foreign exit."},
-		{"fast", "Fast", "Local routes first; only native Aether exits", true,
-			"No Xray, Psiphon, Tor or unidentified external SOCKS. Protected services still require a verified foreign exit."},
+		{"fast", "Fast", "Every local method, fronting and learned priors; native exits on demand", true,
+			"No Psiphon, Tor or unidentified external SOCKS. Protected services still require a verified foreign exit."},
 		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
 			"Aether handles enrollment, scans and reconnect. A verified foreign exit is required."},
-		{"tor", "Aether to Tor", "Aether's built-in Tor backend", true,
+		{"tor", "Aether to Tor", "Tor alone (no WARP), dialing through Fast's local anti-DPI; no WARP", true,
 			"Requires a verified Tor circuit and foreign exit. First connection can take several minutes."},
 		{"windscribe", "Windscribe", "Local-only anti-DPI bridge", false,
 			"The desktop WStunnel, Xray and ByeDPI orchestration is not ported."},
-		{"psiphon", "Aether to Psiphon", "Psiphon with optional CDN fronting", true,
-			"Uses Aether's bundled Psiphon backend, including CDN mode; no external SOCKS substitution."},
+		{"psiphon", "Aether to Psiphon", "Psiphon alone (no WARP) through Fast's local anti-DPI, with CDN fronting on verified edges", true,
+			"No WARP needed; CDN mode uses edges this network verified first. No external SOCKS substitution."},
 		{"windscribe-aether", "Windscribe through Aether", "WARP carrier for Windscribe", false,
 			"Requires the genuine Aether carrier and Windscribe bridge; no Android port yet."},
 	}
@@ -60,6 +60,11 @@ func Configure(id string, cfg *smartproxy.Config, protected func(string) bool) {
 		cfg.RecoverPinnedExit = true
 		cfg.ExitOnly = func(host string) bool {
 			return tiktokRequiresForeignExit(host) || (protected != nil && protected(host))
+		}
+		// A short head start: the learned or tested first choice usually
+		// answers at once, and otherwise the next methods are already racing.
+		if cfg.Stagger == 0 || cfg.Stagger > 200*time.Millisecond {
+			cfg.Stagger = 200 * time.Millisecond
 		}
 		if id == "fast" {
 			cfg.Stagger = 125 * time.Millisecond

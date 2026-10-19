@@ -3,12 +3,14 @@ package edges
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Nishef1/ktest/internal/cdnranges"
 )
 
 type Preset struct {
@@ -26,28 +28,66 @@ func ScanCandidates(ctx context.Context, provider string, limit int) (Preset, er
 	if limit < 0 {
 		return Preset{}, errors.New("candidate budget must be nonnegative")
 	}
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider == "cloudflare" {
-		if limit == 0 {
-			return Preset{}, errors.New("continuous Cloudflare scans require ScanCandidateSource")
-		}
-		ips, err := CloudflareCandidates(limit)
-		return Preset{Provider: provider, URL: "https://www.cloudflare.com/cdn-cgi/trace", IPs: ips,
-			Source: "https://www.cloudflare.com/ips/", Origin: "Provider HTTPS candidates; arbitrary fronting is unverified"}, err
+	if limit == 0 && strings.EqualFold(strings.TrimSpace(provider), "cloudflare") {
+		return Preset{}, errors.New("continuous Cloudflare scans require ScanCandidateSource")
 	}
-	preset, err := PresetCandidates(ctx, provider)
+	preset, next, err := ScanCandidateSource(ctx, provider, limit)
 	if err != nil {
 		return Preset{}, err
 	}
-	if limit > 0 && len(preset.IPs) > limit {
-		preset.IPs = preset.IPs[:limit]
+	preset.IPs = nil
+	for {
+		ip, ok, err := next(ctx)
+		if err != nil {
+			return Preset{}, err
+		}
+		if !ok {
+			return preset, nil
+		}
+		preset.IPs = append(preset.IPs, ip)
 	}
-	return preset, nil
 }
 
-// ScanCandidateSource keeps Cloudflare's official range enumeration lazy.
-// Other providers terminate at their actual attributed/DNS inventory; no new
-// third-party prefixes or repeated DNS answers are invented to fill a budget.
+// prefixOverride replaces a provider's inventory in tests.
+var prefixOverride map[string][]string
+
+// prefixesFor is the provider's complete IPv4 inventory: the refreshed
+// cdnranges cache or its embedded snapshot.
+func prefixesFor(provider string) []string {
+	if p, ok := prefixOverride[provider]; ok {
+		return p
+	}
+	if r := cdnranges.Current().Providers[provider]; r != nil && len(r.V4) > 0 {
+		return r.V4
+	}
+	if provider == "cloudflare" {
+		return cloudflareIPv4
+	}
+	return nil
+}
+
+func inventorySize(prefixes []string) int {
+	inventory := 0
+	for _, raw := range prefixes {
+		p, err := netip.ParsePrefix(raw)
+		if err != nil {
+			continue
+		}
+		size := 1 << uint(32-p.Bits())
+		if size >= 256 {
+			inventory += size / 256 * 254
+		} else if size > 2 {
+			inventory += size - 2
+		} else {
+			inventory += size
+		}
+	}
+	return inventory
+}
+
+// ScanCandidateSource streams a provider's candidates lazily: first the
+// source-attributed seeds (known edges, fresh DNS answers), then every
+// address of the provider's own published or ASN-announced inventory.
 func ScanCandidateSource(ctx context.Context, provider string, budget int) (Preset, CandidateIterator, error) {
 	if budget < 0 {
 		return Preset{}, nil, errors.New("candidate budget must be nonnegative")
@@ -56,96 +96,129 @@ func ScanCandidateSource(ctx context.Context, provider string, budget int) (Pres
 		return Preset{}, nil, err
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider == "cloudflare" {
-		next, err := cloudflareIterator(budget)
-		inventory := 0
-		for _, raw := range cloudflareIPv4 {
-			p, parseErr := netip.ParsePrefix(raw)
-			if parseErr != nil {
-				return Preset{}, nil, parseErr
-			}
-			size := 1 << uint(32-p.Bits())
-			if size >= 256 {
-				inventory += size / 256 * 254
-			} else if size > 2 {
-				inventory += size - 2
-			}
-		}
-		return Preset{Provider: provider, URL: "https://www.cloudflare.com/cdn-cgi/trace",
-			Source: "https://www.cloudflare.com/ips/", Origin: "Provider HTTPS only; target fronting is unverified", InventorySize: inventory}, next, err
-	}
 	preset, err := PresetCandidates(ctx, provider)
 	if err != nil {
 		return Preset{}, nil, err
 	}
-	preset.InventorySize = len(preset.IPs)
-	i := 0
+	prefixes := prefixesFor(provider)
+	ranges, err := prefixIterator(prefixes, 0)
+	if err != nil {
+		return Preset{}, nil, err
+	}
+	seeds := preset.IPs
+	preset.IPs = nil
+	preset.InventorySize = len(seeds) + inventorySize(prefixes)
+	if len(prefixes) > 0 {
+		preset.Source = strings.TrimPrefix(preset.Source+"; ", "; ") + rangeSource(provider)
+	}
+	seen := map[string]bool{}
+	emitted := 0
 	return preset, func(ctx context.Context) (string, bool, error) {
 		if err := ctx.Err(); err != nil {
 			return "", false, err
 		}
-		if i == len(preset.IPs) || (budget > 0 && i >= budget) {
+		if budget > 0 && emitted >= budget {
 			return "", false, nil
 		}
-		ip := preset.IPs[i]
-		i++
-		return ip, true, nil
+		for len(seeds) > 0 {
+			ip := seeds[0]
+			seeds = seeds[1:]
+			if !seen[ip] {
+				seen[ip] = true
+				emitted++
+				return ip, true, nil
+			}
+		}
+		for {
+			ip, ok, err := ranges(ctx)
+			if err != nil || !ok {
+				return "", ok, err
+			}
+			if seen[ip] {
+				continue
+			}
+			emitted++
+			return ip, true, nil
+		}
 	}, nil
 }
 
-// PresetCandidates only selects a small source-backed seed set. Reachability,
-// TLS trust, CDN routing, and filtering outcomes are established separately.
+func rangeSource(provider string) string {
+	if r := cdnranges.Current().Providers[provider]; r != nil && r.Source != "" {
+		return r.Source + " (updated " + r.Updated.Format("2006-01-02") + ")"
+	}
+	return "built-in provider ranges"
+}
+
+var presetURLs = map[string]string{
+	"cloudflare": "https://www.cloudflare.com/cdn-cgi/trace",
+	"akamai":     "https://a248.e.akamai.net/",
+	"fastly":     "https://pypi.org/",
+	"google":     "https://fonts.googleapis.com/",
+	"meta":       "https://www.facebook.com/",
+	"cloudfront": "https://aws.amazon.com/robots.txt",
+	"gcore":      "https://gcore.com/robots.txt",
+}
+
+// PresetCandidates selects the small source-backed seed set that is tried
+// before the provider's inventory. Reachability, TLS trust, CDN routing and
+// filtering outcomes are established separately.
 func PresetCandidates(ctx context.Context, provider string) (Preset, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	switch provider {
-	case "akamai":
-		return Preset{
-			Provider: "akamai",
-			URL:      "https://a248.e.akamai.net/",
-			IPs: []string{
-				"92.123.102.43", "23.215.0.206", "23.215.0.203",
-				"23.212.250.91", "23.212.250.78", "23.12.147.13",
-				"23.12.147.29", "23.73.207.8",
-			},
-			Origin:     "Unverified candidate IPs; do not treat successful TLS as working fronting",
-			UpdatedUTC: "2026-10-05",
-			Source:     "https://github.com/KNG7-P/Se7en-Pro/blob/master/Se7enPro/Services/CdnFrontingBuilder.cs",
-		}, nil
-	case "fastly", "google":
-		hostname := "pypi.org"
-		if provider == "google" {
-			hostname = "fonts.googleapis.com"
-		}
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, hostname)
-		if err != nil {
-			return Preset{}, fmt.Errorf("DNS bootstrap for %s: %w", hostname, err)
-		}
-		seen := map[string]bool{}
-		candidates := make([]string, 0, 8)
-		for _, v := range ips {
-			ip, ok := netip.AddrFromSlice(v.IP)
-			if !ok || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-				continue
-			}
-			key := ip.Unmap().String()
-			if !seen[key] {
-				candidates = append(candidates, key)
-				seen[key] = true
-			}
-		}
-		sort.Strings(candidates)
-		if len(candidates) == 0 {
-			return Preset{}, errors.New("resolver returned no usable addresses; do not trust a poisoned DNS result")
-		}
-		return Preset{
-			Provider:   provider,
-			URL:        "https://" + hostname + "/",
-			IPs:        candidates,
-			Origin:     "Fresh DNS answers, not a verified Fronting route",
-			UpdatedUTC: time.Now().UTC().Format(time.RFC3339),
-			Source:     "local DNS resolver for " + hostname,
-		}, nil
-	default:
-		return Preset{}, errors.New("choose akamai, fastly, or google")
+	target, ok := presetURLs[provider]
+	if !ok {
+		return Preset{}, errors.New("choose " + strings.Join(cdnranges.Providers, ", "))
 	}
+	preset := Preset{Provider: provider, URL: target, UpdatedUTC: time.Now().UTC().Format(time.RFC3339),
+		Origin: "Provider-owned candidate IPs; successful TLS is not proof of working fronting"}
+	switch provider {
+	case "cloudflare":
+		preset.Source = "https://www.cloudflare.com/ips/"
+		return preset, nil
+	case "akamai":
+		preset.IPs = []string{
+			"92.123.102.43", "23.215.0.206", "23.215.0.203",
+			"23.212.250.91", "23.212.250.78", "23.12.147.13",
+			"23.12.147.29", "23.73.207.8",
+		}
+		preset.UpdatedUTC = "2026-10-05"
+		preset.Source = "https://github.com/KNG7-P/Se7en-Pro/blob/master/Se7enPro/Services/CdnFrontingBuilder.cs"
+		return preset, nil
+	}
+	u, _ := url.Parse(target)
+	lookup, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIPAddr(lookup, u.Hostname())
+	if err != nil {
+		// A filtered resolver only costs the seeds; the inventory remains.
+		return preset, nil
+	}
+	seen := map[string]bool{}
+	for _, v := range ips {
+		ip, ok := netip.AddrFromSlice(v.IP)
+		if !ok {
+			continue
+		}
+		ip = ip.Unmap()
+		key := ip.String()
+		// Only answers inside the provider's own inventory are seeds: a
+		// poisoned resolver cannot inject a block-page address.
+		if !ip.Is4() || !ip.IsGlobalUnicast() || ip.IsPrivate() || seen[key] || !inPrefixes(prefixesFor(provider), ip) {
+			continue
+		}
+		seen[key] = true
+		preset.IPs = append(preset.IPs, key)
+	}
+	sort.Strings(preset.IPs)
+	preset.Source = "local DNS resolver for " + u.Hostname()
+	return preset, nil
+}
+
+func inPrefixes(prefixes []string, ip netip.Addr) bool {
+	for _, raw := range prefixes {
+		if p, err := netip.ParsePrefix(raw); err == nil && p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

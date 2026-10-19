@@ -615,7 +615,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		c.launch = l
 		cores = append(cores, c)
 	}
-	if !o.noXray && !o.mode.exitOnly() && o.mode != ModeFast {
+	if !o.noXray && !o.mode.exitOnly() {
 		// Imported Xray profiles may contain foreign outbound proxies. Do
 		// not trust a filename containing "fragment" as identity-preserving.
 		for _, x := range []struct {
@@ -1168,6 +1168,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		<-events
 	}
 	dropped.Store(0)
+	refreshRangesInBackground(ctx, o.listen, func(f string, a ...any) {
+		if o.verbose {
+			t.Note(f, a...)
+		}
+	})
 	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory, windscribe: o.mode.isWindscribe(),
 		filtering: proxy.FilteringSummary}
 	if windscribeBridge != nil {

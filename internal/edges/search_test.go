@@ -25,7 +25,7 @@ func TestCloudflareCandidatesUniqueAndProviderOwned(t *testing.T) {
 		}
 		seen[s] = true
 		owned := false
-		for _, raw := range cloudflareIPv4 {
+		for _, raw := range prefixesFor("cloudflare") {
 			p, _ := netip.ParsePrefix(raw)
 			if p.Contains(ip) {
 				owned = true

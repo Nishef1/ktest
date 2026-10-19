@@ -38,6 +38,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/cdnranges"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 	utls "github.com/refraction-networking/utls"
 )
@@ -444,6 +445,21 @@ func (f *Fronter) addrs(ctx context.Context, name string) ([]string, error) {
 	return f.clean(ips)
 }
 
+// rangeEdges samples the family's provider inventory (cdnranges), keeping
+// only public addresses.
+func (f *Fronter) rangeEdges(fam *Family, n int) []string {
+	if fam.Provider == "" {
+		return nil
+	}
+	var out []string
+	for _, ip := range cdnranges.Current().Sample(fam.Provider, n) {
+		if IsPublicEdgeIP(ip) {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
 func (f *Fronter) clean(ips []string) ([]string, error) {
 	var out []string
 	for _, s := range ips {
@@ -513,9 +529,18 @@ func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, p
 		}
 	}
 	ips, err := f.addrs(ctx, dialName)
-	if err != nil && fr.Dial == "" && len(fam.Hints) > 0 {
-		f.logf("front: no trusted address for %s (%v); using the family's edge hints", dialName, err)
-		ips, err = shuffled(fam.Hints), nil
+	if err != nil && fr.Dial == "" {
+		// Hints first, then addresses drawn from the provider's complete
+		// published inventory: any edge of the family serves every site in
+		// it, so a filtered resolver no longer ends the attempt.
+		pool := shuffled(fam.Hints)
+		if !fam.noStandIn(name) {
+			pool = append(pool, f.rangeEdges(fam, 4)...)
+		}
+		if len(pool) > 0 {
+			f.logf("front: no trusted address for %s (%v); using %d %s edges", dialName, err, len(pool), fam.Name)
+			ips, err = pool, nil
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("address of %s: %w", dialName, err)

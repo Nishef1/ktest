@@ -78,5 +78,16 @@ func (c *fastCarrier) stop() {
 // StartNativeProxyViaFast runs packaged Aether with its traffic carried by a
 // private Fast proxy. Only TCP (H2) Aether methods can be carried this way.
 func StartNativeProxyViaFast(method, libraryDir, stateDir, privateDir string) (string, error) {
-	return startProxy("aether", "", &nativeOptions{method: method, libraryDir: libraryDir, stateDir: stateDir, viaFast: true, privateDir: privateDir}, "")
+	return StartNativeModeViaFast("aether", method, libraryDir, stateDir, privateDir)
+}
+
+// StartNativeModeViaFast runs Aether, Psiphon or Tor with every outbound
+// connection carried by a private Fast proxy (Go ClientHello cuts, ByeDPI and
+// learned priors). Psiphon and Tor need no WARP: they dial through the carrier
+// directly, and Psiphon's CDN fronting also gets this network's verified edges.
+func StartNativeModeViaFast(mode, method, libraryDir, stateDir, privateDir string) (string, error) {
+	if mode != "aether" && mode != "tor" && mode != "psiphon" {
+		return "", errors.New("only Aether, Psiphon and Tor can run through Fast")
+	}
+	return startProxy(mode, "", &nativeOptions{method: method, libraryDir: libraryDir, stateDir: stateDir, viaFast: true, privateDir: privateDir}, "")
 }

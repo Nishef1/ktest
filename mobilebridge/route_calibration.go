@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/connectionsession"
+	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/routeplan"
 	"github.com/Nishef1/ktest/internal/smartproxy"
@@ -86,8 +88,8 @@ func StartRouteTest(mode, upstream, nativeDir, privateDir string, fronting bool)
 		return errors.New("disconnect or finish the current startup before testing routes")
 	}
 	defer proxyStartMu.Unlock()
-	if mode != "balanced" {
-		return errors.New("route calibration is available only in Balanced; Fast remains adaptive")
+	if mode != "balanced" && mode != "fast" {
+		return errors.New("route tests are available in Balanced and Fast")
 	}
 	if routeWorkActive() {
 		return errors.New("disconnect before testing routes")
@@ -137,7 +139,7 @@ func CancelRouteTest() {
 
 // RouteTestStatus only reads private observations; polling never causes traffic.
 func RouteTestStatus(privateDir, mode string) (string, error) {
-	if mode != "balanced" {
+	if mode != "balanced" && mode != "fast" {
 		return "{}", nil
 	}
 	dir, err := realRouteDirectory(privateDir)
@@ -162,9 +164,51 @@ func RouteTestStatus(privateDir, mode string) (string, error) {
 			state.Error = err.Error()
 		}
 	}
-	state.Note = "Manual diagnostic observations only. Connect does not run calibration or pin these routes. Live connections adapt per destination; HTTP refusals and native-app CA trust remain separate from service access."
+	state.Note = "Each test refines the previous ones on this network: a working choice stays until another method is clearly better. Connect starts every tested site with its selected method and keeps adapting live; nothing is pinned. HTTP refusals and native-app CA trust remain separate from service access."
 	raw, err := json.Marshal(state)
 	return string(raw), err
+}
+
+// routeNetworkHash identifies the current network inside saved profiles
+// without storing the Android network handle itself.
+func routeNetworkHash() string {
+	sum := sha256.Sum256([]byte("ktest-route-network:" + currentRouteNetworkToken()))
+	return hex.EncodeToString(sum[:8])
+}
+
+// routeSeeds turns a recent test on this network into first choices for
+// Connect: exact tested targets and the generic default. Fronting strategies
+// map to the live fronting route, which races its own fronts.
+func routeSeeds(privateDir string, targets []routeTarget, names map[string]bool) (map[string]string, string) {
+	profile, err := routeplan.Load(privateDir)
+	if err != nil || profile == nil || currentRouteNetworkToken() == "" || profile.Network != routeNetworkHash() ||
+		profile.TargetsRevision != routeTargetsRevision(targets) || time.Since(profile.CompletedAt) > routeplan.MergeAge || time.Until(profile.CompletedAt) > time.Minute {
+		return nil, ""
+	}
+	method := func(name string) string {
+		switch {
+		case names[name]:
+			return name
+		case strings.HasPrefix(name, "Front: ") && names[front.Name]:
+			return front.Name
+		}
+		return ""
+	}
+	seeds := map[string]string{}
+	for _, s := range profile.Selections {
+		u, err := url.Parse(s.URL)
+		if err != nil || u.Hostname() == "" || s.Assessment != "https_verified" {
+			continue
+		}
+		port := u.Port()
+		if port == "" {
+			port = "443"
+		}
+		if m := method(s.Method); m != "" {
+			seeds[net.JoinHostPort(u.Hostname(), port)] = m
+		}
+	}
+	return seeds, method(profile.Default)
 }
 
 func routeProfileKey(targets []routeTarget, config smartproxy.Config, privateDir string) string {
@@ -243,8 +287,12 @@ func runRouteDiagnostics(ctx context.Context, config *smartproxy.Config, private
 		planTargets = append(planTargets, routeplan.Target{ID: target.ID, Name: target.Name, URL: target.URL})
 	}
 	key := routeProfileKey(targets, *config, privateDir)
+	previous, _ := routeplan.Load(privateDir)
+	if previous != nil && previous.TargetsKey != key {
+		previous = nil
+	}
 	profile, reused, err := routeplan.LoadOrTestWithRevision(ctx, privateDir, key, routeTargetsRevision(targets), true, time.Now(), func() (*routeplan.Profile, error) {
-		return routeplan.CalibrateWithWorkers(ctx, planTargets, methods, func(ctx context.Context, target routeplan.Target, method routeplan.Method) routeplan.Sample {
+		p, err := routeplan.CalibrateWithPrevious(ctx, planTargets, methods, func(ctx context.Context, target routeplan.Target, method routeplan.Method) routeplan.Sample {
 			return measureMethod(ctx, *config, byMethod[method.Name], target, privateDir)
 		}, func(progress routeplan.Progress) {
 			routeTestMu.Lock()
@@ -252,7 +300,11 @@ func runRouteDiagnostics(ctx context.Context, config *smartproxy.Config, private
 			routeTestState.CurrentTarget, routeTestState.CurrentMethod = progress.Target, progress.Method
 			routeTestState.Phase = progress.Phase
 			routeTestMu.Unlock()
-		}, 4)
+		}, 4, previous)
+		if p != nil {
+			p.Network = routeNetworkHash()
+		}
+		return p, err
 	})
 	if err != nil {
 		return nil, err

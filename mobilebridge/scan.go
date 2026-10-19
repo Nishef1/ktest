@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/cdnranges"
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/probe"
 )
@@ -96,7 +97,7 @@ type cdnScanSource func(context.Context, string, int) (edges.Preset, edges.Candi
 func startCDNScan(provider string, budget, goal int, privateDir string, discover cdnScanSource, runner edges.Runner) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if !cdnProvider(provider) {
-		return errors.New("choose cloudflare, akamai, fastly or google")
+		return errors.New("choose " + strings.Join(cdnranges.Providers, ", "))
 	}
 	if budget < 0 || goal < 0 || (budget > 0 && goal > budget) {
 		return errors.New("budget and goal must be nonnegative; goal must not exceed a finite budget")
@@ -282,7 +283,7 @@ func cdnResult(ip string, r probe.Result) cdnScanResult {
 }
 
 func cdnProvider(p string) bool {
-	return p == "cloudflare" || p == "akamai" || p == "fastly" || p == "google"
+	return cdnranges.Known(p)
 }
 
 func realPrivateDirectory(dir string) bool {

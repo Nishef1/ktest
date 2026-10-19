@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/access"
+	"github.com/Nishef1/ktest/internal/cdnranges"
 	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/experiment"
@@ -61,7 +62,8 @@ Setup
   ktest strategies         list or write the editable ByeDPI strategy file
 
 Tools and experiments (see docs/)
-  ktest scan               provider HTTPS reachability (-provider cloudflare|akamai|google|fastly)
+  ktest ranges             complete CDN address inventory (-update refreshes it)
+  ktest scan               provider HTTPS reachability (-provider cloudflare|akamai|google|fastly|meta|cloudfront|gcore)
     -windscribe-cdn HOST   test WebSocket routing to your own CDN hostname/origin
   ktest path               DNS / TCP / TLS stage diagnosis of one URL
   ktest revive             run one Xray profile on its own
@@ -103,10 +105,13 @@ func run(args []string) int {
 		fmt.Println(string(cfg))
 		return 0
 	}
+	cdnranges.Load(warpDir())
 	if len(args) == 0 {
 		return interactiveMenu()
 	}
 	switch args[0] {
+	case "ranges":
+		return runRanges(args[1:])
 	case "menu":
 		return interactiveMenu()
 	case "connect", "smart":
@@ -415,7 +420,7 @@ func runQuickScan(args []string) int {
 
 func runQuickScanContext(parent context.Context, args []string) int {
 	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
-	provider := flags.String("provider", "cloudflare", "cloudflare, akamai, google or fastly")
+	provider := flags.String("provider", "cloudflare", "cloudflare, akamai, google, fastly, meta, cloudfront or gcore")
 	limit := flags.Int("limit", 300, "maximum unique CDN IPs, 1..300; whole scan bounded to 90s")
 	cdnHost := flags.String("windscribe-cdn", "", "your proxied Cloudflare hostname whose origin is a Windscribe WStunnel server")
 	cdnSNI := flags.String("sni", "", "TLS SNI for your CDN route (default: its hostname; certificate verified)")
@@ -426,12 +431,12 @@ func runQuickScanContext(parent context.Context, args []string) int {
 		return 2
 	}
 	*provider = strings.ToLower(strings.TrimSpace(*provider))
-	if *provider != "cloudflare" && *provider != "akamai" && *provider != "google" && *provider != "fastly" {
-		fmt.Fprintln(os.Stderr, "provider must be cloudflare, akamai, google, or fastly")
+	if !cdnranges.Known(*provider) {
+		fmt.Fprintln(os.Stderr, "provider must be one of: "+strings.Join(cdnranges.Providers, ", "))
 		return 2
 	}
 	if flags.NArg() != 0 || *limit < 1 || *limit > 300 {
-		fmt.Fprintln(os.Stderr, "usage: ktest scan [-provider cloudflare|akamai|google|fastly] [-limit 1..300] [-windscribe-cdn your.hostname]")
+		fmt.Fprintln(os.Stderr, "usage: ktest scan [-provider cloudflare|akamai|google|fastly|meta|cloudfront|gcore] [-limit 1..300] [-windscribe-cdn your.hostname]")
 		return 2
 	}
 	opts := wsOptions{cdnHost: *cdnHost, cdnSNI: *cdnSNI}
