@@ -96,7 +96,7 @@ internal fun ConnectScreen(
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
-        if (activeMode.id == "fast") Note("Fast connects without route calibration and adaptively compares the existing methods during use. Protected services still require a verified exit.")
+        if (activeMode.id == "fast") Note("Fast connects without route calibration and adapts during use. TikTok and AI require a verified foreign exit; use Aether / Psiphon when no exit is available.")
         PublicIpPanel(state == LinkState.Active)
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)

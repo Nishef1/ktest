@@ -1077,7 +1077,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	field("Exit", t.Dim(warpNote))
 	field("Policy", string(o.mode))
 	if !o.mode.isWindscribe() {
-		field("AI", "Verified foreign exit only · blocked when unavailable")
+		field("Foreign", "AI and TikTok: verified foreign exit only; blocked when unavailable")
 		field("Checks", "Manual diagnostics only; no automatic website tests or periodic probes")
 	} else {
 		if o.mode == ModeWindscribeAether {

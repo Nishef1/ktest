@@ -46,3 +46,20 @@ func TestConfigureMatchesCLIForAllModes(t *testing.T) {
 		}
 	}
 }
+
+func TestMixedModesKeepTikTokAPIsAndMediaOnAVerifiedExit(t *testing.T) {
+	for _, mode := range []string{"balanced", "fast"} {
+		var cfg smartproxy.Config
+		Configure(mode, &cfg, func(host string) bool { return host == "chatgpt.com" })
+		for _, host := range []string{"www.tiktok.com", "v16-webapp-prime.tiktok.com", "api16.tiktokv.com", "mon16.tiktokv.eu", "location.tiktokw.eu", "sf.tiktokcdn.com", "p16.tiktokcdn-eu.com", "lf16.tiktokcdn-us.com", "sf16.ttwstatic.com", "WWW.TIKTOK.COM.", "chatgpt.com"} {
+			if !cfg.ExitOnly(host) {
+				t.Fatalf("%s allowed region-sensitive API/media on the ISP route: %s", mode, host)
+			}
+		}
+		for _, host := range []string{"x.com", "example.com", "not-tiktok.com", "tiktok.com.evil.test", "shared-cdn.example"} {
+			if cfg.ExitOnly(host) {
+				t.Fatalf("%s unnecessarily restricted %s", mode, host)
+			}
+		}
+	}
+}

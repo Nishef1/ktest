@@ -3,6 +3,7 @@
 package connectionpolicy
 
 import (
+	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/smartproxy"
@@ -22,9 +23,9 @@ type Mode struct {
 // equivalence with the full Windows orchestration or device VPN coverage.
 func AndroidModes() []Mode {
 	return []Mode{
-		{"balanced", "Balanced", "Adaptive routes; protected AI traffic", true,
+		{"balanced", "Balanced", "Adaptive routes; foreign exit for TikTok / AI", true,
 			"Some desktop strategies are not yet available on Android."},
-		{"fast", "Fast", "Faster routes; protected AI traffic", true,
+		{"fast", "Fast", "Faster routes; foreign exit for TikTok / AI", true,
 			"Some desktop strategies are not yet available on Android."},
 		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
 			"Aether handles enrollment, scans and reconnect. A verified foreign exit is required."},
@@ -54,11 +55,13 @@ func Title(id string) string {
 // separate from this policy function.
 func Configure(id string, cfg *smartproxy.Config, protected func(string) bool) {
 	switch id {
-	case "balanced":
-		cfg.ExitOnly = protected
-	case "fast":
-		cfg.ExitOnly = protected
-		cfg.Stagger = 125 * time.Millisecond
+	case "balanced", "fast":
+		cfg.ExitOnly = func(host string) bool {
+			return tiktokRequiresForeignExit(host) || (protected != nil && protected(host))
+		}
+		if id == "fast" {
+			cfg.Stagger = 125 * time.Millisecond
+		}
 	case "windscribe":
 		cfg.ExitOnly = protected
 		cfg.PreferVerifiedExit = false
@@ -69,4 +72,19 @@ func Configure(id string, cfg *smartproxy.Config, protected func(string) bool) {
 	case "aether", "psiphon", "tor":
 		cfg.ExitOnly = func(string) bool { return true }
 	}
+}
+
+// These dedicated TikTok API, static and media domains were observed together
+// in the working foreign-exit browser flow. Local DPI bypass preserves the ISP
+// exit and can win a TLS race while the service refuses or stalls its content.
+// Keep the entire service on the session's verified foreign path. Shared CDN
+// providers and unrelated ByteDance services are intentionally not matched.
+func tiktokRequiresForeignExit(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, domain := range []string{"tiktok.com", "tiktokv.com", "tiktokv.eu", "tiktokw.eu", "tiktokcdn.com", "tiktokcdn-us.com", "tiktokcdn-eu.com", "ttwstatic.com"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
 }
