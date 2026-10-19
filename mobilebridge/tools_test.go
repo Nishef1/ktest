@@ -13,16 +13,6 @@ func TestToolsRejectInvalidInputBeforeNetworkWork(t *testing.T) {
 			t.Fatalf("invalid scan accepted: %+v", tc)
 		}
 	}
-	for _, address := range []string{"example.com:443", "192.0.2.1:0", "192.0.2.1:70000"} {
-		if _, err := TestWindscribeCarrier(address, "example.com", "example.com", "wstunnel"); err == nil {
-			t.Fatalf("invalid entry accepted: %s", address)
-		}
-	}
-	for _, name := range []string{"example.com\r\nInjected: value", "https://example.com", "bad..example", "-bad.example", "127.0.0.1"} {
-		if _, err := TestWindscribeCarrier("192.0.2.1:443", name, name, "stealth"); err == nil {
-			t.Fatalf("invalid TLS/HTTP name accepted: %q", name)
-		}
-	}
 	if _, err := DiagnoseNetwork("https://example.com", "udp"); err == nil {
 		t.Fatal("invalid diagnosis network accepted")
 	}

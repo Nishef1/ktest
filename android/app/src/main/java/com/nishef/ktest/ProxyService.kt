@@ -192,10 +192,6 @@ class ProxyService : Service() {
                                         Mobilebridge.startAndroidProxyWithXray(mode, upstream,
                                             applicationInfo.nativeLibraryDir, privateDir)
                                     }
-                                } else if (mode == "windscribe") {
-                                    // Proxy only; never watch the default network here, because
-                                    // OpenVPN for Android becoming the default VPN is expected.
-                                    Mobilebridge.startAndroidWindscribeProxy(applicationInfo.nativeLibraryDir)
                                 } else {
                                     Mobilebridge.startProxyWithUpstream(mode, upstream)
                                 }

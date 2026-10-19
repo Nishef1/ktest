@@ -18,10 +18,8 @@ type Mode struct {
 	Limitation string `json:"limitation,omitempty"`
 }
 
-// AndroidModes uses the terminal's current mode names and preserves its
-// order. Available refers to a *functioning mobile proxy entry point*, not
-// equivalence with the full Windows orchestration or device VPN coverage.
-func AndroidModes() []Mode {
+// allModes is every CLI mode with its shared title, in terminal order.
+func allModes() []Mode {
 	return []Mode{
 		{"balanced", "Balanced", "Local routes first; automatic Aether / Psiphon / Tor fallback", true,
 			"Zapret2 is Windows-only. Protected services require a verified foreign exit."},
@@ -29,10 +27,10 @@ func AndroidModes() []Mode {
 			"No Psiphon, Tor or unidentified external SOCKS. Protected services still require a verified foreign exit."},
 		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
 			"Aether handles enrollment, scans and reconnect. A verified foreign exit is required."},
-		{"tor", "Aether to Tor", "Tor alone (no WARP), dialing through Fast's local anti-DPI; no WARP", true,
+		{"tor", "Aether to Tor", "Tor alone (no WARP), dialing through Fast's local anti-DPI", true,
 			"Requires a verified Tor circuit and foreign exit. First connection can take several minutes."},
-		{"windscribe", "Windscribe", "Local-only anti-DPI HTTP proxy for OpenVPN for Android", true,
-			"Proxy only, no KTest VPN. The Windscribe app has no proxy setting: import a Windscribe OpenVPN TCP config into OpenVPN for Android with an http-proxy line and exclude KTest from that VPN. ByeDPI and ClientHello cuts only; no exits, fronting or WStunnel."},
+		{"windscribe", "Windscribe", "Local-only anti-DPI bridge", false,
+			"The desktop WStunnel, Xray and ByeDPI orchestration is not ported."},
 		{"psiphon", "Aether to Psiphon", "Psiphon alone (no WARP) through Fast's local anti-DPI, with CDN fronting on verified edges", true,
 			"No WARP needed; CDN mode uses edges this network verified first. No external SOCKS substitution."},
 		{"windscribe-aether", "Windscribe through Aether", "WARP carrier for Windscribe", false,
@@ -40,9 +38,23 @@ func AndroidModes() []Mode {
 	}
 }
 
+// AndroidModes is what the phone offers: the CLI modes that actually work
+// there, with the terminal's names and order. Windscribe needs the desktop
+// bridge and its own app's cooperation, so it is not listed at all rather
+// than shown as a disabled card.
+func AndroidModes() []Mode {
+	var out []Mode
+	for _, m := range allModes() {
+		if m.ID != "windscribe" && m.ID != "windscribe-aether" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // Title is used by both clients; unknown modes never become made-up modes.
 func Title(id string) string {
-	for _, m := range AndroidModes() {
+	for _, m := range allModes() {
 		if m.ID == id {
 			return m.Title
 		}

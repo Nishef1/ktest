@@ -85,12 +85,6 @@ internal class ToolsState {
     var echReport by mutableStateOf<JSONObject?>(null)
     var echError by mutableStateOf<String?>(null)
 
-    var wsAddress by mutableStateOf("")
-    var wsName by mutableStateOf("")
-    var wsTransport by mutableStateOf("wstunnel")
-    var wsBusy by mutableStateOf(false)
-    var wsReport by mutableStateOf<JSONObject?>(null)
-    var wsError by mutableStateOf<String?>(null)
 }
 
 private fun CoroutineScope.runTool(
@@ -121,9 +115,6 @@ internal fun ToolsScreen(s: ToolsState, scope: CoroutineScope, onCopy: (String) 
         }
         ToolCard(s, "ech", KIcons.Lock, "ECH bootstrap", "Fetch a fresh Cloudflare ECH configuration") {
             EchTool(s, scope)
-        }
-        ToolCard(s, "windscribe", KIcons.Wind, "Windscribe carrier", "WStunnel / Stealth readiness for one entry") {
-            WindscribeCarrierTool(s, scope)
         }
         Spacer(Modifier.height(4.dp))
         Note("Results describe your network right now. DoH, DoT, resolver IPs and TLS/SNI can each be blocked independently; one failure does not prove the Internet or a destination is down.")
@@ -626,33 +617,4 @@ private fun EchTool(s: ToolsState, scope: CoroutineScope) {
         KeyValue("Prefix", r.optString("config_prefix").take(16), K.muted, mono = true)
         Note(r.optString("note"))
     }
-}
-
-@Composable
-private fun WindscribeCarrierTool(s: ToolsState, scope: CoroutineScope) {
-    val busy = s.wsBusy
-    Text("Test an authorized entry or your own CDN route. Use a hostname with a valid certificate.",
-        color = K.muted, fontSize = 13.sp, lineHeight = 18.sp)
-    KField(s.wsAddress, { s.wsAddress = it }, "Entry IP:port", enabled = !busy, mono = true, keyboardType = KeyboardType.Uri)
-    KField(s.wsName, { s.wsName = it }, "TLS and HTTP hostname", enabled = !busy, keyboardType = KeyboardType.Uri)
-    Segmented(listOf("wstunnel" to "WStunnel", "stealth" to "Stealth"), s.wsTransport, { s.wsTransport = it }, enabled = !busy)
-    PrimaryButton(if (busy) "Testing…" else "Test carrier", {
-        s.wsReport = null
-        scope.runTool({ s.wsBusy = it }, { s.wsError = it }, "Carrier test failed", {
-            Mobilebridge.testWindscribeCarrier(s.wsAddress.trim(), s.wsName.trim(), s.wsName.trim(), s.wsTransport)
-        }) { s.wsReport = it }
-    }, enabled = s.wsAddress.isNotBlank() && s.wsName.isNotBlank(), busy = busy)
-    s.wsError?.let { Note(it, Tone.Danger) }
-    s.wsReport?.let { r ->
-        @OptIn(ExperimentalLayoutApi::class)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            for ((label, key) in listOf("TCP" to "tcp", "TLS" to "tls_handshake", "Certificate" to "certificate_verified",
-                "WebSocket" to "websocket")) {
-                ResultBadge(r.optBoolean(key), (if (r.optBoolean(key)) "✓ " else "✗ ") + label)
-            }
-        }
-        KeyValue("Elapsed", "${r.optLong("elapsed_ms")} ms", mono = true)
-        if (r.optString("failure").isNotBlank()) Note("${r.optString("stage")}: ${r.optString("failure")}", Tone.Warn)
-    }
-    Note("TLS or WebSocket readiness does not prove OpenVPN authentication or VPN data. No VPN credentials are sent.")
 }

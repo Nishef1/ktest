@@ -8,7 +8,7 @@ import (
 )
 
 func TestModeCatalogIsUniqueAndFaithfulToCLI(t *testing.T) {
-	expected := []string{"balanced", "fast", "aether", "tor", "windscribe", "psiphon", "windscribe-aether"}
+	expected := []string{"balanced", "fast", "aether", "tor", "psiphon"}
 	modes := AndroidModes()
 	if len(modes) != len(expected) {
 		t.Fatalf("expected %d modes, got %d", len(expected), len(modes))
@@ -21,7 +21,7 @@ func TestModeCatalogIsUniqueAndFaithfulToCLI(t *testing.T) {
 			t.Fatalf("partial Android port missing caveat: %q", m.ID)
 		}
 	}
-	if Title("tor") != "Aether to Tor" || Title("psiphon") != "Aether to Psiphon" {
+	if Title("tor") != "Aether to Tor" || Title("psiphon") != "Aether to Psiphon" || Title("windscribe") != "Windscribe" {
 		t.Fatal("Android silently renamed a desktop CLI policy")
 	}
 }
