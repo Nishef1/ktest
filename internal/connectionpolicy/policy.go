@@ -22,7 +22,7 @@ type Mode struct {
 // equivalence with the full Windows orchestration or device VPN coverage.
 func AndroidModes() []Mode {
 	return []Mode{
-		{"balanced", "Balanced", "Pretested stable routes; protected AI traffic", true,
+		{"balanced", "Balanced", "Adaptive routes; protected AI traffic", true,
 			"Some desktop strategies are not yet available on Android."},
 		{"fast", "Fast", "Faster routes; protected AI traffic", true,
 			"Some desktop strategies are not yet available on Android."},

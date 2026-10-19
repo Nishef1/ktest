@@ -21,7 +21,7 @@ import (
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
-func TestPreparedFreshProfileUsesStoredMethodsWithoutNetwork(t *testing.T) {
+func TestManualRouteDiagnosticsDoNotReuseFreshProfile(t *testing.T) {
 	dir := t.TempDir()
 	targets, err := loadRouteTargets(dir)
 	if err != nil {
@@ -33,13 +33,13 @@ func TestPreparedFreshProfileUsesStoredMethodsWithoutNetwork(t *testing.T) {
 	if err := routeplan.Save(dir, profile); err != nil {
 		t.Fatal(err)
 	}
-	// The context is already canceled and the only endpoint cannot connect.
-	// A fresh selection must not launch even one new probe.
+	// An explicit manual test must not substitute old observations, even when
+	// its new work is canceled before the first measurement.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	got, err := prepareFrozenRoutes(ctx, &config, dir, false)
-	if err != nil || got.Default != "fixed" || config.Frozen == nil || config.Frozen.Default != "fixed" {
-		t.Fatalf("cached profile attempted a network test or lost its pin: %+v, %v", got, err)
+	got, err := runRouteDiagnostics(ctx, &config, dir)
+	if !errors.Is(err, context.Canceled) || got != nil {
+		t.Fatalf("manual test reused a stale result: %+v, %v", got, err)
 	}
 }
 
@@ -74,18 +74,16 @@ func TestRouteStatusCannotLeakProfileAcrossPrivateDirectories(t *testing.T) {
 	}
 }
 
-func TestManualRouteTestAndLiveCheckAreRejectedDuringFrozenSession(t *testing.T) {
+func TestManualRouteTestAndScansAreRejectedDuringActiveSession(t *testing.T) {
 	proxyMu.Lock()
 	old := activeProxy
-	activeProxy = &proxySession{routeProfile: &routeplan.Profile{Default: "fixed"}}
+	activeProxy = &proxySession{}
 	proxyMu.Unlock()
 	t.Cleanup(func() { proxyMu.Lock(); activeProxy = old; proxyMu.Unlock() })
 	if err := StartRouteTest("balanced", "", "", t.TempDir(), false); err == nil {
 		t.Fatal("manual test changed a live session")
 	}
-	if _, err := CheckRoute(); err == nil {
-		t.Fatal("live HTTPS check ignored the frozen-session guard")
-	}
+
 	if err := StartCDNScanToFile("cloudflare", 10, t.TempDir()); err == nil {
 		t.Fatal("CDN scan ignored the connected-session guard")
 	}
@@ -265,7 +263,6 @@ func TestRouteProfileKeyChangesWithExistingPublicCA(t *testing.T) {
 	}
 }
 
-
 func TestBalancedProfileKeyChangesWhenUnderlyingAndroidNetworkChanges(t *testing.T) {
 	routeNetworkMu.Lock()
 	previous := routeNetworkToken
@@ -293,54 +290,5 @@ func TestBalancedProfileKeyChangesWhenUnderlyingAndroidNetworkChanges(t *testing
 	}
 	if err := SetRouteNetworkToken(""); err == nil {
 		t.Fatal("empty network identity was accepted")
-	}
-}
-
-
-func TestLegacyCachedPlanMigrationRequiresExactSameTargets(t *testing.T) {
-	targets := []routeTarget{
-		{ID: "default-x", URL: "https://x.com/"},
-		{ID: "default-media", URL: "https://pbs.twimg.com/"},
-	}
-	legacy := &routeplan.Profile{Version: 1, Selections: []routeplan.Selection{
-		{TargetID: "default-x", URL: "https://x.com/"},
-		{TargetID: "default-media", URL: "https://pbs.twimg.com/"},
-	}}
-	if !legacyProfileMatchesTargets(legacy, targets) {
-		t.Fatal("unchanged targets were not eligible for migration")
-	}
-	changed := append([]routeTarget(nil), targets...)
-	changed[1].URL = "https://video.twimg.com/"
-	if legacyProfileMatchesTargets(legacy, changed) {
-		t.Fatal("edited target was mistaken for the cached configuration")
-	}
-	legacy.Selections = legacy.Selections[:1]
-	if legacyProfileMatchesTargets(legacy, targets) {
-		t.Fatal("incomplete cached target coverage was accepted")
-	}
-}
-
-func TestFailedRepresentativeHostUsesVerifiedGenericRatherThanEmptyPin(t *testing.T) {
-	dir := t.TempDir()
-	targets, err := loadRouteTargets(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config := smartproxy.Config{Upstreams: []smartproxy.Upstream{{Name: "working", Addr: "127.0.0.1:1"}}}
-	profile := &routeplan.Profile{
-		Version: 1, CompletedAt: time.Now().UTC(), Default: "working", TargetsKey: routeProfileKey(targets, config, dir),
-		Selections: []routeplan.Selection{{TargetID: "default-x-photos", URL: "https://pbs.twimg.com/", Assessment: "unreachable"}},
-	}
-	if err := routeplan.Save(dir, profile); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := prepareFrozenRoutes(context.Background(), &config, dir, false); err != nil {
-		t.Fatal(err)
-	}
-	if config.Frozen == nil || config.Frozen.Default != "working" {
-		t.Fatalf("generic route missing: %+v", config.Frozen)
-	}
-	if _, ok := config.Frozen.Targets["pbs.twimg.com:443"]; ok {
-		t.Fatal("unverified image-root probe incorrectly blackholed the entire media hostname")
 	}
 }

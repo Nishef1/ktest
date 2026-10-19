@@ -309,7 +309,7 @@ internal fun SettingsScreen(
                             s.frontingEnabled = !s.frontingEnabled
                             preferences.edit().putBoolean("fronting_opt_in", s.frontingEnabled).apply()
                             s.caMessage = if (s.frontingEnabled)
-                                "Opted in for the next Balanced/Fast calibration. Run Test while offline; connected routes stay fixed."
+                                "Opted in for the next Balanced/Fast connection. A manual test is optional; live routes stay adaptive."
                             else "Domain fronting disabled for future connections. Run Test while offline to update the saved profile."
                             onTargetsChanged()
                         }, Modifier.fillMaxWidth(), enabled = !manualTesting && !routeTargets.busy, icon = KIcons.Route

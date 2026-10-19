@@ -93,7 +93,7 @@ internal fun RouteTargetsPanel(
     Panel {
         SectionLabel("Balanced / Fast targets")
         Text("Custom HTTPS destinations", color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        Note("Targets define calibration requests and exact-host fronting preferences. Edit while offline, then run Test before reconnecting. The saved route stays fixed during a connection.")
+        Note("Targets define optional diagnostic requests and exact-host fronting preferences. Edit while disconnected; Connect does not require a test and adapts during use.")
         if (!editable) Note("Disconnect and finish any startup or manual test before adding, editing or removing targets.", Tone.Warn)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SecondaryButton("Add target", { s.edit() }, Modifier.weight(1f), enabled = canEdit)

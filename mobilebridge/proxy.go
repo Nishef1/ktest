@@ -13,7 +13,6 @@ import (
 	"github.com/Nishef1/ktest/internal/connectionpolicy"
 	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/front"
-	"github.com/Nishef1/ktest/internal/routeplan"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -34,7 +33,6 @@ type proxySession struct {
 	localCores   *localCoreSet
 	xrayError    string
 	fronter      *front.Fronter
-	routeProfile *routeplan.Profile
 }
 
 type proxyDiagnostics struct {
@@ -82,8 +80,6 @@ type proxyReport struct {
 	FrontDisabled   string `json:"front_disabled,omitempty"`
 	XrayReady       bool   `json:"xray_ready"`
 	XrayError       string `json:"xray_error,omitempty"`
-	Frozen          bool   `json:"frozen"`
-	SelectedDefault string `json:"selected_default,omitempty"`
 }
 
 type proxyStartup struct {
@@ -138,9 +134,6 @@ func currentReportLocked() proxyReport {
 			select {
 			case <-c.done:
 				report.XrayError = "Xray local core exited; other strategies remain available"
-				if activeProxy.routeProfile != nil {
-					report.XrayError = "Xray local core exited; other sites use the remaining strategies, pinned targets need a reconnect."
-				}
 			default:
 				report.XrayReady = true
 			}
@@ -150,10 +143,6 @@ func currentReportLocked() proxyReport {
 		report.Fronting = true
 		report.FrontAccepted, report.FrontRefused = activeProxy.fronter.Stats()
 		report.FrontDisabled = activeProxy.fronter.Disabled()
-	}
-	if activeProxy.routeProfile != nil {
-		report.Frozen = true
-		report.SelectedDefault = activeProxy.routeProfile.Default
 	}
 	return report
 }
@@ -235,7 +224,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 	}
 	startContext, startCancel := context.WithTimeout(parent, budget)
-	if localStateDir != "" && mode == "balanced" {
+	if testOnly {
 		startCancel()
 		startContext, startCancel = context.WithTimeout(parent, 3*time.Minute)
 	}
@@ -314,7 +303,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	var xrayError string
 	keepLocal := false
 	if localDir != "" {
-		localCores, err = launchAndroidLocalCores(startContext, localDir, localStateDir != "" && mode == "balanced")
+		localCores, err = launchAndroidLocalCores(startContext, localDir, testOnly)
 		if err != nil {
 			return "", err
 		}
@@ -437,10 +426,10 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			if targetErr != nil {
 				return "", targetErr
 			}
-			// Balanced tests deterministic individual strategies; Fast retains the
-			// legacy in-family hedging, subject to the same exact-host opt-in.
+			// Explicit diagnostics test individual strategies. Both connection modes
+			// retain in-family hedging and exact-host fronting consent.
 			candidates := fronter.Upstreams()
-			if mode == "fast" {
+			if !testOnly {
 				candidates = []smartproxy.Upstream{fronter.Upstream()}
 			}
 			for _, candidate := range candidates {
@@ -461,23 +450,11 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			return err
 		}
 	}
-	var routeProfile *routeplan.Profile
-	if localStateDir != "" && mode == "balanced" {
-		proxyMu.Lock()
-		if pendingProxy == startup {
-			startup.phase = "calibrating"
-		}
-		proxyMu.Unlock()
-		routeProfile, err = prepareFrozenRoutes(startContext, &config, localStateDir, testOnly)
-		if err != nil {
+	if testOnly {
+		if _, err := runRouteDiagnostics(startContext, &config, localStateDir); err != nil {
 			return "", err
 		}
-		if testOnly {
-			return "{}", nil
-		}
-		// Calibrated targets stay pinned; every other site races all methods
-		// like the desktop client, so every local core keeps running.
-		config.Frozen.Adaptive = true
+		return "{}", nil
 	}
 	proxy, err := smartproxy.New(config)
 	if err != nil {
@@ -511,7 +488,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		return "", fmt.Errorf("HTTP listener: %w", err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, routeProfile: routeProfile}
+	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError}
 	activeProxy = session
 	keepDNS = true
 	keepManaged = true
@@ -523,23 +500,8 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 				select {
 				case <-ctx.Done():
 				case <-child.done:
+					// Future connections race the remaining methods.
 					proxy.Remove(child.method)
-					// Unpinned sites simply race the remaining methods. A core pinned
-					// to a calibrated target has no replacement, so its traffic would
-					// silently fail: end the session visibly, as for a native exit.
-					if routeProfile == nil || !pinnedMethod(config.Frozen, child.method) {
-						return
-					}
-					proxyMu.Lock()
-					stopped := activeProxy == session
-					if stopped {
-						proxyFailure = fmt.Sprintf("Selected route %s stopped; reconnect to calibrate again", child.method)
-						stopLocked()
-					}
-					proxyMu.Unlock()
-					if stopped {
-						StopVpnTun()
-					}
 				}
 			}()
 		}
@@ -648,19 +610,4 @@ func ProxyReady() bool {
 	}
 	_ = conn.Close()
 	return true
-}
-
-func pinnedMethod(pins *smartproxy.FrozenRoutes, method string) bool {
-	if pins == nil {
-		return false
-	}
-	if pins.Protected == method || (!pins.Adaptive && pins.Default == method) {
-		return true
-	}
-	for _, selected := range pins.Targets {
-		if selected == method {
-			return true
-		}
-	}
-	return false
 }

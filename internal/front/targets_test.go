@@ -195,6 +195,35 @@ func TestProbeAtEdgeRequiresRealECHAcceptanceAndTargetCertificate(t *testing.T) 
 	if len(f.echConfig(CloudflareECH)) == 0 {
 		t.Fatal("verified ECH retry configuration was not learned")
 	}
+	// A poisoned resolver must not consume the entire deadline before an ECH
+	// route can use its already-known edges. A silent TCP accept must not beat
+	// the alternative that completes authenticated TLS for the actual API.
+	var lookups atomic.Int32
+	f.cfg.Resolve = func(ctx context.Context, _ string) ([]string, error) {
+		lookups.Add(1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	f.cfg.PreferredEdges = map[string][]string{"cloudflare": {"8.8.8.8"}}
+	f.cfg.HedgeDelay = 10 * time.Millisecond
+	f.cfg.DialTimeout = 200 * time.Millisecond
+	f.cfg.dial = func(ctx context.Context, address string) (net.Conn, error) {
+		if address == "8.8.8.8:443" {
+			client, server := net.Pipe()
+			go func() { <-ctx.Done(); server.Close() }()
+			return client, nil
+		}
+		return (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+	}
+	fam := &Family{Name: "cloudflare", Domains: []string{"x.com"}, Hints: []string{"8.8.8.8", "8.8.4.4"}}
+	conn, err := f.try(context.Background(), fam, Front{ECH: CloudflareECH}, "api.x.com", []string{"http/1.1"})
+	if err != nil {
+		t.Fatalf("working ECH API route lost to filtered DNS/silent TCP: %v", err)
+	}
+	conn.Close()
+	if lookups.Load() != 0 {
+		t.Fatal("known ECH edges waited for poisoned DNS")
+	}
 }
 
 func TestProbeAtEdgeReportsIncompleteBody(t *testing.T) {

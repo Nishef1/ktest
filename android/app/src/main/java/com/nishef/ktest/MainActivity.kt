@@ -102,7 +102,7 @@ private fun KTestApp() {
     val scanStatusReady = tools.cdnStatusLoaded && tools.cdnStatusError == null
     // Failure to read a diagnostic status must not make Fast unusable.
     // Go independently checks whether an active scan is incompatible with startup.
-    val connectBlocked = (activeMode.id == "balanced" && (routePlan.busy || !routeStatusReady)) ||
+    val connectBlocked = routePlan.busy ||
         routeTargets.busy || scanBusy
     val canTestRoutes = offline && routeStatusReady && !routeTargets.busy && !settings.caBusy &&
         !scanBusy && scanStatusReady && activeMode.id == "balanced"
@@ -275,7 +275,7 @@ private fun KTestApp() {
                             },
                             routeReport = routeReport, checkingRoute = checkingRoute,
                             onCheckRoute = {
-                                if (running && !status.optBoolean("frozen") && !checkingRoute && !routePlan.busy) {
+                                if (running && !checkingRoute && !routePlan.busy) {
                                     checkingRoute = true
                                     routeReport = null
                                     scope.launch {

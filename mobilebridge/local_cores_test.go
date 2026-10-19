@@ -14,7 +14,7 @@ import (
 	"github.com/Nishef1/ktest/internal/coreprocess"
 )
 
-func TestFrozenAndroidStrategiesCannotAutoSwitchInsideByeDPI(t *testing.T) {
+func TestManualDiagnosticsIsolateAndroidStrategies(t *testing.T) {
 	strategies, err := byedpi.ParseStrategies(strings.NewReader(byedpi.DefaultStrategies))
 	if err != nil {
 		t.Fatal(err)

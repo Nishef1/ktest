@@ -36,7 +36,7 @@ internal class RoutePlanState {
 
 @Composable
 internal fun RoutePlanPanel(
-    s: RoutePlanState, connected: Boolean, connecting: Boolean, frozen: Boolean,
+    s: RoutePlanState, connected: Boolean, connecting: Boolean,
     canTest: Boolean, onTest: () -> Unit, onCancel: () -> Unit
 ) {
     val report = s.report
@@ -52,12 +52,12 @@ internal fun RoutePlanPanel(
             IconTile(KIcons.Route, K.cyan)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text("Route calibration", color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text(if (connected && frozen) "Targets pinned · other sites adaptive" else "Balanced / Fast · saved observations",
+                Text("Manual route diagnostics", color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text("Optional observations · connection stays adaptive",
                     color = K.muted, fontSize = 12.sp)
             }
         }
-        Note("Matching observations can be reused for 24 hours. Go also checks the configured targets and available methods. While connected your targets stay on their tested routes; other sites race all methods.")
+        Note("Connect starts without these tests and learns routes from live traffic. Manual results describe only the tested URLs, not feeds or playback.")
         if (running || s.starting) {
             val done = report?.optInt("completed") ?: 0
             val total = report?.optInt("total") ?: 0
@@ -65,7 +65,7 @@ internal fun RoutePlanPanel(
                 canceled || s.canceling -> "Stopping manual test…"
                 s.starting -> "Preparing manual test…"
                 manual -> "Manual test · ${report?.optString("phase").orEmpty().replace('_', ' ')}"
-                else -> "Connection calibration · ${report?.optString("phase").orEmpty().replace('_', ' ')}"
+                else -> "Manual diagnostics · ${report?.optString("phase").orEmpty().replace('_', ' ')}"
             }, color = K.cyan, fontSize = 14.sp)
             if (total > 0) {
                 LinearProgressIndicator(progress = { (done.toFloat() / total).coerceIn(0f, 1f) },
@@ -87,19 +87,17 @@ internal fun RoutePlanPanel(
             if (connected || connecting) Note("Disconnect before running a manual test. The saved observations remain available here.")
         }
         if (!running && canceled) Note("Manual test canceled. Any saved profile below is from its displayed completion time; cancellation does not prove a new result.", Tone.Warn)
-        if (targetsChanged) Note("Route configuration changed. Run Test while offline before reconnecting with these targets and methods.", Tone.Warn)
+        if (targetsChanged) Note("Diagnostic targets changed. Run a manual test to refresh these observations; Connect remains available.", Tone.Warn)
         (s.error ?: s.readError ?: report?.optString("error")?.takeIf { !canceled && it.isNotBlank() })?.let { Note(it, Tone.Warn) }
         if (profile == null) {
-            if (!running && !s.starting) Note(if (report == null) "Loading saved observations…" else "No saved route observations yet. Test while offline, or Connect to perform initial calibration.")
+            if (!running && !s.starting) Note(if (report == null) "Loading saved observations…" else "No saved observations yet. Connect directly, or run an optional test while disconnected.")
         } else {
             RoutePlanDetail("Profile completed", formatProfileTime(profile.optString("completed_at")))
             Text(when {
-                targetsChanged -> "Configuration needs a new test"
-                fresh -> "Within the 24-hour cache window · compatibility checked on Connect"
-                connected && frozen -> "Cache window expired · this connection keeps its pinned targets"
+                targetsChanged -> "Historical results for the previous targets"
+                fresh -> "Recent manual observations · not a connection prerequisite"
                 else -> "Outside the cache window · shown as historical observations"
             }, color = if (fresh && !targetsChanged) K.muted else K.amber, fontSize = 12.sp)
-            if (report?.optBoolean("reused") == true) Note("The last connection reused a saved profile. This label does not extend its 24-hour lifetime.")
             RoutePlanDetail("Other destinations", "Adaptive race across all methods")
             val rows = profile.objectRows("rows")
             val selections = profile.objectRows("selections")

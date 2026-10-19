@@ -94,7 +94,7 @@ internal fun ConnectScreen(
         }
         if (activeMode.id == "balanced") {
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
-                status.optBoolean("frozen"), canTestRoutes, onTestRoutes, onCancelRouteTest)
+                canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
         if (activeMode.id == "fast") Note("Fast connects without route calibration and adaptively compares the existing methods during use. Protected services still require a verified exit.")
         PublicIpPanel(state == LinkState.Active)
@@ -552,14 +552,10 @@ private fun EndpointsPanel(
             val method = status.optString("last_route")
             if (method.isNotBlank()) Note("Last observed route: $method · first response: ${status.optLong("last_route_ms")} ms · connect: ${status.optLong("last_connect_ms")} ms")
         }
-        val frozen = status.optBoolean("frozen")
-        if (frozen) {
-            Note("Your calibrated targets keep their tested routes for this session. Every other site races all strategies and learns per site, like the desktop client.")
-        } else {
-            SecondaryButton(if (checking) "Checking HTTPS routes…" else "Verify real HTTPS traffic", onCheckRoute,
-                Modifier.fillMaxWidth(), busy = checking, icon = KIcons.Check)
-        }
-        if (!frozen && routeReport != null) {
+        SecondaryButton(if (checking) "Checking HTTPS routes…" else "Check HTTPS endpoints", onCheckRoute,
+            Modifier.fillMaxWidth(), busy = checking, icon = KIcons.Check)
+        Note("An endpoint response does not verify profiles, feeds or video playback.")
+        if (routeReport != null) {
             val ok = routeReport.optInt("verified")
             val attempted = routeReport.optInt("attempted")
             Row(verticalAlignment = Alignment.CenterVertically) {

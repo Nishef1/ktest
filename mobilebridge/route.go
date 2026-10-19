@@ -26,10 +26,6 @@ func CheckRoute() (string, error) {
 		proxyMu.Unlock()
 		return "", errors.New("local proxy is not running")
 	}
-	if activeProxy.routeProfile != nil {
-		proxyMu.Unlock()
-		return "", errors.New("routes are frozen while connected; disconnect and use the Test button")
-	}
 	addr := activeProxy.socks.Addr().String()
 	proxyMu.Unlock()
 	_, portText, err := net.SplitHostPort(addr)

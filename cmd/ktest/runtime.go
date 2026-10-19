@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/byedpi"
@@ -59,20 +58,6 @@ func waitForByeDPI(ctx context.Context, done <-chan struct{}, port int, limit ti
 	readyCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	return byedpi.WaitReady(readyCtx, done, fmt.Sprintf("127.0.0.1:%d", port))
-}
-
-// measure runs the real HTTPS checks through the local SOCKS port and, in
-// parallel, directly, so the two results are comparable.
-func measure(ctx context.Context, port int) ([]quickcheck.Result, []quickcheck.Assessment) {
-	checkCtx, cancel := context.WithTimeout(ctx, 24*time.Second)
-	defer cancel()
-	var direct []quickcheck.Result
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() { defer wg.Done(); direct = quickcheck.RunDirect(checkCtx, 8*time.Second) }()
-	proxied := quickcheck.Run(checkCtx, port, 8*time.Second)
-	wg.Wait()
-	return proxied, quickcheck.Compare(proxied, direct)
 }
 
 // proxiedPassCount counts targets that worked through the proxy.

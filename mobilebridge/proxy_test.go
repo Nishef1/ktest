@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+func TestBalancedConnectDoesNotRequireOrProbeCalibrationTargets(t *testing.T) {
+	StopProxy()
+	defer StopProxy()
+	dir := t.TempDir()
+	if err := writeRouteTargets(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := startProxyWithNativeCores("balanced", "", nil, "", "", dir)
+	if err != nil {
+		t.Fatalf("ordinary connection was blocked by diagnostic targets: %v", err)
+	}
+	var report proxyReport
+	if err := json.Unmarshal([]byte(data), &report); err != nil || !report.Running || report.TCPAttempts != 0 {
+		t.Fatalf("connect tested or froze routes: %s, %v", data, err)
+	}
+}
+
 func TestProxyStartsAndStopsWithRealLoopbackListeners(t *testing.T) {
 	defer StopProxy()
 	if _, err := StartProxy("tor"); err == nil {

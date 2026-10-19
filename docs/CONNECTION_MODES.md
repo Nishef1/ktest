@@ -8,6 +8,8 @@ The first Windows launch defaults to TUN; subsequent launches restore the user's
 
 Use Balanced or Fast for adaptive ordinary-site access with known AI domains protected in both, Aether when all managed traffic must use a verified foreign WARP/Psiphon exit, Aether to Psiphon for Psiphon profiles only, and Aether to Tor for a verified Tor-only route. Fast gives ordinary-site alternatives a shorter head start; it does not disable AI protection. Menu 5 separates the local-only Windscribe bridge from explicit **Windscribe through Aether**. Setup prepares capabilities; it does not silently enable another mode. See [network diagnosis and method selection](NETWORK_DIAGNOSIS.md).
 
+Balanced and Fast connect without a representative website sweep or periodic website probes. Android does not calibrate or freeze targets on Connect. Manual diagnostics remain available. Their practical differences are route timing (Fast uses a shorter hedge) and measured exit ranking, not a promise of different site coverage.
+
 CLI policy options:
 
 | Option | Scope | IP policy | Failure policy |

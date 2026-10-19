@@ -177,17 +177,14 @@ func TestNestedBootstrapBudgetAndRecoverySearch(t *testing.T) {
 	}
 }
 
-func TestStrictSiteChecksAndFrontCATrustBoundaries(t *testing.T) {
+func TestStrictAndMixedModesFrontCATrustBoundaries(t *testing.T) {
 	for _, mode := range []ConnectionMode{ModeAether, ModePsiphon, ModeTor, ModeWindscribeAether} {
-		if canProbeSites(mode, false) || !canProbeSites(mode, true) {
-			t.Fatalf("%s probed without a verified exit", mode)
-		}
 		if frontCARelevant(connectOptions{mode: mode}) {
 			t.Fatalf("%s must not suggest installing a local MITM CA", mode)
 		}
 	}
 	for _, mode := range []ConnectionMode{ModeFast, ModeBalanced} {
-		if !canProbeSites(mode, false) || !frontCARelevant(connectOptions{mode: mode}) {
+		if !frontCARelevant(connectOptions{mode: mode}) {
 			t.Fatalf("%s lost optional mixed routing", mode)
 		}
 	}

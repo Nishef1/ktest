@@ -466,7 +466,41 @@ func (f *Fronter) try(ctx context.Context, fam *Family, fr Front, name string, p
 	if dialName == "" {
 		dialName = name
 	}
-	if preferred := f.cfg.PreferredEdges[fam.Name]; len(preferred) > 0 {
+	if fr.ECH != "" && fr.Dial == "" && len(fam.Hints) > 0 {
+		// ECH authenticates the requested host on the known edge. Waiting for
+		// filtered DNS first can exhaust this attempt before those edges run.
+		// Reuse the front hedge so a bare/silent TCP accept cannot win over
+		// another edge's completed, certificate-verified ECH handshake. Explicit
+		// numeric Dial values make these child attempts independent of DNS and
+		// prevent recursion into this branch.
+		known := *fam
+		candidates := append([]string(nil), fam.Hints...)
+		preferred := f.cfg.PreferredEdges[fam.Name]
+		if len(preferred) > 0 {
+			// One measured candidate starts first, but a provider-only scan must
+			// not hide the known target-capable edges behind an entire pool.
+			candidates = append([]string{preferred[0]}, candidates...)
+			candidates = append(candidates, preferred[1:]...)
+		}
+		known.Fronts = make([]Front, 0, len(candidates))
+		seen := map[string]bool{}
+		for _, ip := range candidates {
+			if IsPublicEdgeIP(ip) && !seen[ip] {
+				seen[ip] = true
+				known.Fronts = append(known.Fronts, Front{ECH: fr.ECH, Dial: ip})
+			}
+		}
+		if len(known.Fronts) > 0 {
+			conn, _, err := f.connect(ctx, []*Family{&known}, name, protos)
+			if err == nil {
+				return conn, nil
+			}
+			if ctx.Err() != nil {
+				return nil, err
+			}
+		}
+	}
+	if preferred := f.cfg.PreferredEdges[fam.Name]; len(preferred) > 0 && (fr.ECH == "" || len(fam.Hints) == 0) {
 		// Measured edges must get their attempt before a blocked resolver can
 		// consume the budget. A failed target TLS handshake can still fall back
 		// to the ordinary resolver/hints without changing front strategy.

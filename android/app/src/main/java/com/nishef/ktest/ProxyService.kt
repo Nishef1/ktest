@@ -53,9 +53,9 @@ class ProxyService : Service() {
         /** Network handles change when Wi-Fi/cellular switches, without exposing SSIDs. */
         internal fun prepareBalancedNetwork(context: Context) {
             val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
-            val network = cm.activeNetwork ?: error("No underlying Android network available for Balanced calibration")
+            val network = cm.activeNetwork ?: error("No underlying Android network available")
             val caps = cm.getNetworkCapabilities(network)
-                ?: error("Android network capabilities are unavailable for Balanced calibration")
+                ?: error("Android network capabilities are unavailable")
             // Before starting KTest VPN, an existing third-party VPN can be
             // the active network in proxy-only mode. Treat it as a distinct
             // transport instead of forbidding safe layered usage.
@@ -88,8 +88,7 @@ class ProxyService : Service() {
     @Volatile private var networkWatch: ConnectivityManager.NetworkCallback? = null
     @Volatile private var networkInvalidated = false
 
-    // Balanced has immutable route selections. Rather than silently reuse a
-    // Wi-Fi route after a cellular handover, stop and require a fresh Connect.
+    // Reconnect after a network handover to refresh DNS and transport state.
     private fun watchBalancedNetwork(expectedHandle: Long) {
         clearNetworkWatch()
         networkInvalidated = false
@@ -123,7 +122,7 @@ class ProxyService : Service() {
     private fun invalidateBalancedNetwork() {
         if (!wanted || networkInvalidated) return
         networkInvalidated = true
-        lastError = "Underlying network changed. Balanced routes are stale; reconnect to recalibrate."
+        lastError = "Underlying network changed. Reconnect to refresh network paths."
         runCatching {
             startService(Intent(this, ProxyService::class.java).apply { action = ACTION_STOP })
         }
@@ -178,7 +177,7 @@ class ProxyService : Service() {
                                     if (mode == "balanced") {
                                         prepareBalancedNetwork(this@ProxyService)
                                         val net = getSystemService(ConnectivityManager::class.java).activeNetwork
-                                            ?: error("Underlying network disappeared before calibration")
+                                            ?: error("Underlying network disappeared before connection")
                                         watchBalancedNetwork(net.networkHandle)
                                     }
                                     val enabled = checkedFrontingOptIn(this@ProxyService, privateDir)

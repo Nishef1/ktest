@@ -62,7 +62,7 @@ func StartAndroidProxyWithFronting(mode, upstream, nativeLibraryDir, privateFile
 	return startProxyWithNativeCores(mode, upstream, nil, nativeLibraryDir, privateFilesDir, privateFilesDir)
 }
 
-func launchAndroidLocalCores(ctx context.Context, nativeDir string, frozen bool) (*localCoreSet, error) {
+func launchAndroidLocalCores(ctx context.Context, nativeDir string, isolated bool) (*localCoreSet, error) {
 	bin, err := byedpi.AndroidBinary(nativeDir, runtime.GOARCH)
 	if err != nil {
 		return nil, err
@@ -71,13 +71,13 @@ func launchAndroidLocalCores(ctx context.Context, nativeDir string, frozen bool)
 	if err != nil {
 		return nil, err
 	}
-	if frozen {
+	if isolated {
 		strategies = fixedAndroidStrategies(strategies)
 	}
 	return startLocalCores(ctx, bin, strategies)
 }
 
-// A frozen strategy must not hide a second learner inside its child process.
+// An isolated diagnostic method must not hide a second learner in its child.
 // The catalog's adaptive entries become their explicit desync technique; the
 // untouched plain method is already measured separately by the Go core.
 func fixedAndroidStrategies(strategies []byedpi.Strategy) []byedpi.Strategy {

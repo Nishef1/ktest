@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -163,7 +162,7 @@ func RouteTestStatus(privateDir, mode string) (string, error) {
 			state.Error = err.Error()
 		}
 	}
-	state.Note = "Preconnection observations only. The route stays fixed while connected; no automatic retest or fallback. HTTP refusals and native-app CA trust are separate from opening a site."
+	state.Note = "Manual diagnostic observations only. Connect does not run calibration or pin these routes. Live connections adapt per destination; HTTP refusals and native-app CA trust remain separate from service access."
 	raw, err := json.Marshal(state)
 	return string(raw), err
 }
@@ -189,7 +188,7 @@ func routeProfileKey(targets []routeTarget, config smartproxy.Config, privateDir
 	return hex.EncodeToString(hash[:])
 }
 
-func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, privateDir string, manual bool) (profile *routeplan.Profile, err error) {
+func runRouteDiagnostics(ctx context.Context, config *smartproxy.Config, privateDir string) (profile *routeplan.Profile, err error) {
 	targets, err := loadRouteTargets(privateDir)
 	if err != nil {
 		return nil, err
@@ -199,11 +198,11 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 	}
 	started := time.Now()
 	routeTestMu.Lock()
-	canceled := manual && routeTestState.Canceled
-	if manual && routeTestState.privateDir == privateDir && !routeTestState.started.IsZero() {
+	canceled := routeTestState.Canceled
+	if routeTestState.privateDir == privateDir && !routeTestState.started.IsZero() {
 		started = routeTestState.started
 	}
-	routeTestState = routeTestReport{Running: true, Manual: manual, Canceled: canceled, Phase: "loading", started: started, privateDir: privateDir}
+	routeTestState = routeTestReport{Running: true, Manual: true, Canceled: canceled, Phase: "loading", started: started, privateDir: privateDir}
 	routeTestMu.Unlock()
 	defer func() {
 		routeTestMu.Lock()
@@ -244,17 +243,7 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 		planTargets = append(planTargets, routeplan.Target{ID: target.ID, Name: target.Name, URL: target.URL})
 	}
 	key := routeProfileKey(targets, *config, privateDir)
-	// Older builds did not record the target revision independently. Migrate
-	// only if every saved exact ID/URL still equals the current user target list;
-	// otherwise keep the explicit-manual-test protection for target edits.
-	force := manual
-	if !manual {
-		if old, loadErr := routeplan.Load(privateDir); loadErr == nil && old.Fresh(time.Now()) &&
-			old.TargetsKey != key && legacyProfileMatchesTargets(old, targets) {
-			force = true
-		}
-	}
-	profile, reused, err := routeplan.LoadOrTestWithRevision(ctx, privateDir, key, routeTargetsRevision(targets), force, time.Now(), func() (*routeplan.Profile, error) {
+	profile, reused, err := routeplan.LoadOrTestWithRevision(ctx, privateDir, key, routeTargetsRevision(targets), true, time.Now(), func() (*routeplan.Profile, error) {
 		return routeplan.CalibrateWithWorkers(ctx, planTargets, methods, func(ctx context.Context, target routeplan.Target, method routeplan.Method) routeplan.Sample {
 			return measureMethod(ctx, *config, byMethod[method.Name], target, privateDir)
 		}, func(progress routeplan.Progress) {
@@ -271,72 +260,11 @@ func prepareFrozenRoutes(ctx context.Context, config *smartproxy.Config, private
 	if !profile.Usable() {
 		return nil, errors.New("no target or generic route returned repeated verified HTTPS; inspect results and retry")
 	}
-	pins := &smartproxy.FrozenRoutes{Default: profile.Default, Targets: map[string]string{}}
-	for _, u := range config.Upstreams {
-		if u.Exit && u.AIEligible {
-			pins.Protected = u.Name
-			break
-		}
-	}
-	for _, selection := range profile.Selections {
-		u, parseErr := url.Parse(selection.URL)
-		if parseErr != nil {
-			continue
-		}
-		port := u.Port()
-		if port == "" {
-			port = "443"
-		}
-		key := net.JoinHostPort(strings.ToLower(u.Hostname()), port)
-		// Multiple paths on one host share one stable transport. Prefer a
-		// content-verified route over a transport-only response/refusal.
-		if selection.Method == "" || selection.Assessment != "https_verified" {
-			// Root-page HTTP refusals are not evidence that native APIs or
-			// media are broken. Try the independently verified generic route
-			// instead of pinning this entire hostname to an empty route.
-			continue
-		}
-		pins.Targets[key] = selection.Method
-	}
-	for _, method := range append([]string{pins.Default, pins.Protected}, mapValues(pins.Targets)...) {
-		if method != "" {
-			if _, present := byMethod[method]; !present {
-				return nil, errors.New("a cached method is unavailable; run Test manually before connecting")
-			}
-		}
-	}
-	config.Frozen = pins
 	routeTestMu.Lock()
 	routeTestState.Profile, routeTestState.Reused, routeTestState.Fresh = profile, reused, profile.Fresh(time.Now())
 	routeTestState.Phase = "complete"
 	routeTestMu.Unlock()
 	return profile, nil
-}
-
-func legacyProfileMatchesTargets(p *routeplan.Profile, targets []routeTarget) bool {
-	if p == nil || p.TargetsRevision != "" || len(p.Selections) != len(targets) {
-		return false
-	}
-	remaining := make(map[string]string, len(targets))
-	for _, target := range targets {
-		remaining[target.ID] = target.URL
-	}
-	for _, selection := range p.Selections {
-		url, ok := remaining[selection.TargetID]
-		if !ok || url != selection.URL {
-			return false
-		}
-		delete(remaining, selection.TargetID)
-	}
-	return len(remaining) == 0
-}
-
-func mapValues(values map[string]string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		out = append(out, value)
-	}
-	return out
 }
 
 func measureMethod(parent context.Context, base smartproxy.Config, upstream smartproxy.Upstream, target routeplan.Target, privateDir string) routeplan.Sample {

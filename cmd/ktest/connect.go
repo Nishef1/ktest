@@ -24,7 +24,6 @@ import (
 	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/front"
-	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/revive"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 	"github.com/Nishef1/ktest/internal/systemtun"
@@ -113,11 +112,6 @@ type connectOptions struct {
 	verbose             bool
 	stopHint            string
 	aetherMethod        string
-}
-
-// Strict tunnel-only modes cannot safely probe sites before verifying an exit.
-func canProbeSites(mode ConnectionMode, verifiedExit bool) bool {
-	return !mode.exitOnly() || verifiedExit
 }
 
 // A local MITM CA powers optional website fronting, not WARP/Aether tunnels.
@@ -768,7 +762,6 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	events := make(chan smartproxy.Event, 256)
 	progressEvents := make(chan wsProgressEvent, 64)
 	var dropped atomic.Int64
-	var activity atomic.Uint64
 	var liveProxy atomic.Pointer[smartproxy.Proxy]
 	cfg := smartproxy.Config{
 		Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte,
@@ -781,7 +774,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			return err
 		},
 		OnEvent: func(e smartproxy.Event) {
-			if !trackUserEvent(&activity, e) {
+			if e.Probe {
 				return
 			}
 			select {
@@ -885,14 +878,6 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	_, portText, _ := net.SplitHostPort(l.Addr().String())
 	var lport int
 	fmt.Sscanf(portText, "%d", &lport)
-	probePort := 0
-	if !o.mode.isWindscribe() {
-		probePort, err = connection.StartProbes()
-		if err != nil {
-			t.Line(toneFail, "cannot start internal site checks: %v", err)
-			return 1
-		}
-	}
 	// Windscribe accepts an HTTP upstream proxy, while Connect speaks SOCKS5.
 	// The HTTP bridge shares Connect's learned path selection without changing
 	// system DNS, routing, or trust stores.
@@ -991,73 +976,22 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	defer stopWarp()
 
-	// 4. Windscribe owns the network while it is connected. In that state,
-	// don't run extra local website probes which could disturb its data plane.
-	var proxied []quickcheck.Result
-	var compared []quickcheck.Assessment
+	// Website probes belong to explicit diagnostics. Listener startup must not
+	// depend on a few landing pages or claim that feeds, APIs and media work.
 	verdict := toneInfo
-	if o.mode.isWindscribe() {
-		t.Note("Windscribe mode skips unrelated website tests; only the selected VPN carrier is prepared")
-	} else if monitor == nil || !monitor.Connected() {
-		if o.mode.exitOnly() && !proxy.HasVerifiedExit() {
-			wstep := t.Progress("Waiting for a verified foreign exit before site checks", 1)
-			wctx, wcancel := context.WithTimeout(ctx, 20*time.Second)
-			available := waitForVerifiedExit(wctx, proxy)
-			wcancel()
-			if ctx.Err() != nil {
-				return 0
-			}
-			if available {
-				wstep.Finish(toneOK, "foreign route available")
-			} else {
-				wstep.Finish(toneWarn, "still searching; no direct fallback will be used")
-			}
+	if o.mode.exitOnly() && !proxy.HasVerifiedExit() {
+		wstep := t.Progress("Waiting for a verified foreign exit", 1)
+		wctx, wcancel := context.WithTimeout(ctx, 20*time.Second)
+		available := waitForVerifiedExit(wctx, proxy)
+		wcancel()
+		if ctx.Err() != nil {
+			return 0
 		}
-		if !canProbeSites(o.mode, proxy.HasVerifiedExit()) {
-			// Never turn "no exit yet" into five fabricated site failures.
-			// In strict modes the proxy must remain fail-closed while discovery runs.
-			verdict = toneFail
-			t.Note("Site checks deferred: no verified foreign exit; discovery continues without direct fallback")
+		if available {
+			wstep.Finish(toneOK, "foreign route available")
 		} else {
-			vstep := t.Progress("Checking representative sites and learning routes", 1)
-			vctx, vcancel := context.WithTimeout(ctx, 30*time.Second)
-			proxied, compared = measure(vctx, probePort)
-			vcancel()
-			if ctx.Err() != nil {
-				return 0
-			}
-			passedNow := proxiedPassCount(proxied)
-			verdict = toneOK
-			switch {
-			case passedNow == 0:
-				verdict = toneFail
-			case passedNow < len(proxied):
-				verdict = toneWarn
-			}
-			vstep.Finish(verdict, fmt.Sprintf("%d of %d reachable through ktest", passedNow, len(proxied)))
-		}
-	} else {
-		t.Note("Windscribe active: skipping extra website probes")
-	}
-	passed := proxiedPassCount(proxied)
-	bypassed := 0
-	for _, c := range compared {
-		switch c.Kind {
-		case "not_checked":
-			t.Line(toneInfo, "%-9s %s", c.Target, "not checked within the shared startup budget")
-		case "service_response":
-			t.Line(toneWarn, "%-9s %s", c.Target, c.Detail)
-		case "candidate":
-			bypassed++
-			t.Line(toneOK, "%-9s %s", c.Target, "blocked directly, open through ktest "+t.Bold("(bypass confirmed)"))
-		case "already_open":
-			t.Line(toneInfo, "%-9s %s", c.Target, "open through ktest and also directly")
-		case "proxy_regression":
-			t.Line(toneWarn, "%-9s %s", c.Target, "open directly but failing through ktest (a path or DNS problem)")
-		case "baseline_unknown":
-			t.Line(toneInfo, "%-9s %s", c.Target, "open through ktest (direct check did not finish)")
-		default:
-			t.Line(toneFail, "%-9s %s", c.Target, "not reachable through ktest "+t.Dim(trimDetail(c.Detail)))
+			verdict = toneFail
+			wstep.Finish(toneWarn, "still searching; managed traffic remains blocked until an exit verifies")
 		}
 	}
 
@@ -1076,6 +1010,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 			if tn != nil {
 				coverage = "TUN active · TCP path verified; helper/LAN traffic exempt, most UDP rejected; Windows DNS may leak"
+				verdict = toneOK
 			} else {
 				verdict = toneWarn
 			}
@@ -1085,7 +1020,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 
 	// 5. The result.
-	title := map[tone]string{toneOK: "READY", toneWarn: "PARTLY READY", toneFail: "NOT VERIFIED"}[verdict]
+	title := map[tone]string{toneInfo: "PROXY LISTENING", toneOK: "TUN TCP VERIFIED", toneWarn: "COVERAGE NOT VERIFIED", toneFail: "WAITING FOR VERIFIED EXIT"}[verdict]
 	if o.mode.isWindscribe() {
 		title = "WINDSCRIBE BRIDGE LISTENING; VPN NOT YET VERIFIED"
 		if o.mode == ModeWindscribeAether {
@@ -1143,11 +1078,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	field("Policy", string(o.mode))
 	if !o.mode.isWindscribe() {
 		field("AI", "Verified foreign exit only · blocked when unavailable")
-		if len(proxied) == 0 && o.mode.exitOnly() {
-			field("Checks", "deferred until a verified exit becomes available")
-		} else {
-			field("Checks", fmt.Sprintf("%d small site probes · refresh every 15 min after activity", len(quickcheck.Targets())))
-		}
+		field("Checks", "Manual diagnostics only; no automatic website tests or periodic probes")
 	} else {
 		if o.mode == ModeWindscribeAether {
 			field("AI", "SOCKS AI traffic requires verified foreign WARP; normal apps use Windscribe's VPN")
@@ -1162,29 +1093,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		} else {
 			field("Result", t.Dim("Windscribe CLI monitored; carrier readiness is not VPN authentication"))
 		}
-	case bypassed > 0:
-		field("Result", t.Green(fmt.Sprintf("%d blocked test %s opened through ktest", bypassed, plural(bypassed, "site", "sites"))))
-	case passed == len(proxied) && passed > 0:
-		field("Result", "Tested sites also open directly; a bypass is not established by these checks")
-	case passed == 0 && len(proxied) == 0 && o.mode.exitOnly():
-		field("Result", t.Yellow("No verified upstream yet; sites were not tested"))
-	case passed == 0:
-		field("Result", t.Red("No tested site was reachable; run `ktest doctor` to see why"))
-	}
-	if frontCARelevant(o) && verdict != toneOK && fronter == nil && ctx.Err() == nil {
-		// The paths that need no certificate did not reach everything. If fronting
-		// would, say so now instead of leaving the user with a red result.
-		fctx, fcancel := context.WithTimeout(ctx, 8*time.Second)
-		var reach []string
-		for _, c := range probeFronts(fctx) {
-			if c.working() > 0 {
-				reach = append(reach, c.family)
-			}
-		}
-		fcancel()
-		if len(reach) > 0 {
-			field("Next", t.Yellow("optional website-fronting candidates observed for "+strings.Join(reach, ", ")+"; a local CA would allow HTTPS interception, not establish a VPN tunnel"))
-		}
+	default:
+		field("Result", "Listener readiness only; profile, feed and media access are not inferred from a landing page")
 	}
 	field("Stop", o.stopHint)
 	t.Println("")
@@ -1203,10 +1113,6 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		<-events
 	}
 	dropped.Store(0)
-	if !o.mode.isWindscribe() {
-		stopRefresh := startRouteRefresh(ctx, probePort, &activity, t)
-		defer stopRefresh()
-	}
 	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory, windscribe: o.mode.isWindscribe()}
 	if windscribeBridge != nil {
 		feed.windscribeReport = windscribeBridge.reportProgress
@@ -1409,4 +1315,17 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 		return f, "on, but the CA predates " + strings.Join(firstN(missing, 3), ", ") + " - run `ktest ca -renew` to cover them"
 	}
 	return f, "on - Google, YouTube, X, Meta, Discord and Fastly-hosted sites can use fronting / ECH"
+}
+
+func waitForVerifiedExit(ctx context.Context, p *smartproxy.Proxy) bool {
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for !p.HasVerifiedExit() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+		}
+	}
+	return ctx.Err() == nil
 }
