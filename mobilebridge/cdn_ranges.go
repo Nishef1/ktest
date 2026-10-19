@@ -74,9 +74,14 @@ func UpdateCDNRanges(privateFilesDir string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	reports, err := cdnranges.Refresh(ctx, rangesHTTPClient(""), privateFilesDir)
-	if err != nil {
+	if cdnranges.ReportsHaveFailures(reports) {
 		if socks := activeSOCKS(); socks != "" {
-			reports, err = cdnranges.Refresh(ctx, rangesHTTPClient(socks), privateFilesDir)
+			firstErr := err
+			fallback, fallbackErr := cdnranges.Refresh(ctx, rangesHTTPClient(socks), privateFilesDir)
+			reports = cdnranges.CombineReports(reports, fallback)
+			if firstErr != nil {
+				err = fallbackErr
+			}
 		}
 	}
 	return describeRanges(cdnranges.Current(), reports, err), err
@@ -100,8 +105,11 @@ func refreshRangesInBackground(ctx context.Context, privateFilesDir, socks strin
 	go func() {
 		rctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
-		if _, err := cdnranges.Refresh(rctx, rangesHTTPClient(""), privateFilesDir); err != nil && rctx.Err() == nil {
+		reports, err := cdnranges.Refresh(rctx, rangesHTTPClient(""), privateFilesDir)
+		if cdnranges.ReportsHaveFailures(reports) && rctx.Err() == nil {
 			_, _ = cdnranges.Refresh(rctx, rangesHTTPClient(socks), privateFilesDir)
+		} else if err != nil {
+			return
 		}
 	}()
 }

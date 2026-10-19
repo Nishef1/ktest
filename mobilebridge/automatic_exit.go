@@ -39,6 +39,8 @@ type automaticExit struct {
 	carrier    *connectionsession.Session
 }
 
+func shouldWarmAutomaticExit(mode string) bool { return mode == "balanced" }
+
 type nativeHint struct {
 	Key     string    `json:"key"`
 	ID      string    `json:"id"`

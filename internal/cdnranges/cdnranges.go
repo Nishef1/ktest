@@ -131,8 +131,18 @@ func merge(base, over *Set) *Set {
 			if !Known(name) || r == nil || len(r.V4) == 0 || time.Until(r.Updated) > time.Hour {
 				continue
 			}
-			if old := out.Providers[name]; old == nil || r.Updated.After(old.Updated) {
-				out.Providers[name] = r
+			// Snapshot and cache data share this path. Revalidate both so a
+			// malformed or edited cache cannot introduce private, documentation,
+			// or otherwise special-use addresses into scans and fronting.
+			all := append(append([]string(nil), r.V4...), r.V6...)
+			v4, v6 := usable(all)
+			if len(v4) == 0 {
+				continue
+			}
+			clean := *r
+			clean.V4, clean.V6 = v4, v6
+			if old := out.Providers[name]; old == nil || clean.Updated.After(old.Updated) {
+				out.Providers[name] = &clean
 			}
 		}
 	}
@@ -265,6 +275,9 @@ func (s *Set) Iterator(provider string, budget int, seed uint64) func(context.Co
 
 // Sample returns up to n addresses spread over a provider's inventory.
 func (s *Set) Sample(provider string, n int) []string {
+	if n <= 0 {
+		return nil
+	}
 	next := s.Iterator(provider, n, rand.Uint64()|1)
 	var out []string
 	for {
@@ -311,6 +324,44 @@ type Report struct {
 	Prefixes int
 	Source   string
 	Err      error
+}
+
+// ReportsHaveFailures reports whether any provider needs another source or
+// route tried after a partial refresh.
+func ReportsHaveFailures(reports []Report) bool {
+	for _, report := range reports {
+		if report.Err != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// CombineReports keeps successful results from the first attempt when the
+// fallback attempt could not refresh that provider.
+func CombineReports(first, fallback []Report) []Report {
+	primary := make(map[string]Report, len(first))
+	secondary := make(map[string]Report, len(fallback))
+	for _, report := range first {
+		primary[report.Provider] = report
+	}
+	for _, report := range fallback {
+		secondary[report.Provider] = report
+	}
+	out := make([]Report, 0, len(Providers))
+	for _, provider := range Providers {
+		initial, hasInitial := primary[provider]
+		backup, hasBackup := secondary[provider]
+		switch {
+		case hasInitial && initial.Err == nil && (!hasBackup || backup.Err != nil):
+			out = append(out, initial)
+		case hasBackup:
+			out = append(out, backup)
+		case hasInitial:
+			out = append(out, initial)
+		}
+	}
+	return out
 }
 
 func (r Report) String() string {
@@ -386,6 +437,30 @@ func plausible(r, old *Range) error {
 	return nil
 }
 
+var specialUsePrefixes = func() []netip.Prefix {
+	// netip's IsGlobalUnicast intentionally includes some registry-reserved
+	// networks. They are never usable CDN edges and must not enter the cache.
+	raw := []string{
+		"100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24",
+		"198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"64:ff9b::/96", "100::/64", "2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20",
+	}
+	out := make([]netip.Prefix, 0, len(raw))
+	for _, prefix := range raw {
+		out = append(out, netip.MustParsePrefix(prefix))
+	}
+	return out
+}()
+
+func specialUse(p netip.Prefix) bool {
+	for _, reserved := range specialUsePrefixes {
+		if p.Addr().Is4() == reserved.Addr().Is4() && p.Overlaps(reserved) {
+			return true
+		}
+	}
+	return false
+}
+
 // usable keeps public unicast prefixes no broader than /8 and aggregates
 // duplicates and nested prefixes.
 func usable(raw []string) (v4, v6 []string) {
@@ -401,7 +476,7 @@ func usable(raw []string) (v4, v6 []string) {
 		}
 		p = p.Masked()
 		a := p.Addr()
-		if !a.IsGlobalUnicast() || a.IsPrivate() || (a.Is4() && p.Bits() < 8) || (a.Is6() && p.Bits() < 19) {
+		if !a.IsGlobalUnicast() || a.IsPrivate() || specialUse(p) || (a.Is4() && p.Bits() < 8) || (a.Is6() && p.Bits() < 19) {
 			continue
 		}
 		ps = append(ps, p)

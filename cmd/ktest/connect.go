@@ -621,7 +621,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		c.launch = l
 		cores = append(cores, c)
 	}
-	if !o.noXray && !o.mode.exitOnly() {
+	if !o.noXray && o.mode.allowsXray() {
 		// Imported Xray profiles may contain foreign outbound proxies. Do
 		// not trust a filename containing "fragment" as identity-preserving.
 		for _, x := range []struct {

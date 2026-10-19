@@ -334,9 +334,10 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 				localCores.stop()
 			}
 		}()
-		if localStateDir != "" {
-			// Fast uses every local method too. Optional route only. A mismatched or unavailable Xray core never
-			// removes the already verified ByeDPI fallback paths.
+		if localStateDir != "" && androidXrayEnabled(mode) {
+			// Xray is an optional Balanced route. Fast stays on Go and the local
+			// anti-DPI methods, with managed Aether exits available on demand.
+			// A failed Xray start never removes the verified ByeDPI fallbacks.
 			if err := attachAndroidXray(startContext, localCores, localDir, localStateDir); err != nil {
 				xrayError = err.Error()
 			}
@@ -550,9 +551,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	if !testOnly && localStateDir != "" {
 		refreshRangesInBackground(ctx, localStateDir, core.SOCKS.Addr().String())
 	}
-	if automatic != nil {
+	if automatic != nil && shouldWarmAutomaticExit(mode) {
 		// Warm the foreign exit up now, in parallel with local routes, so the
-		// first address-blocked or AI site does not wait for its bootstrap.
+		// first protected site does not wait for its bootstrap in Balanced.
 		go func() { _ = automatic.ensure(ctx) }()
 	}
 	keepDNS = true

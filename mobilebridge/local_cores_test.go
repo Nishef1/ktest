@@ -14,6 +14,15 @@ import (
 	"github.com/Nishef1/ktest/internal/coreprocess"
 )
 
+func TestFastUsesNoXrayAndDoesNotWarmItsManagedExit(t *testing.T) {
+	if androidXrayEnabled("fast") || shouldWarmAutomaticExit("fast") {
+		t.Fatal("Fast must defer native cores until its local routes cannot serve the requested traffic")
+	}
+	if !androidXrayEnabled("balanced") || !shouldWarmAutomaticExit("balanced") {
+		t.Fatal("Balanced lost its optional Xray route or early managed-exit warmup")
+	}
+}
+
 func TestManualDiagnosticsIsolateAndroidStrategies(t *testing.T) {
 	strategies, err := byedpi.ParseStrategies(strings.NewReader(byedpi.DefaultStrategies))
 	if err != nil {

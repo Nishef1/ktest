@@ -95,6 +95,15 @@ func TestFastRejectsExplicitForeignHelpersBeforeStartingCores(t *testing.T) {
 	}
 }
 
+func TestFastKeepsXrayOutOfItsRouteSet(t *testing.T) {
+	if ModeFast.allowsXray() {
+		t.Fatal("Fast must stay on Go and local anti-DPI routes, with only Aether available as its managed exit")
+	}
+	if !ModeBalanced.allowsXray() || !ModeWindscribe.allowsXray() {
+		t.Fatal("Balanced and local-only Windscribe lost their supported Xray routes")
+	}
+}
+
 func TestStrictProxyCanStartWithoutVerifiedExit(t *testing.T) {
 	rules, _ := smartproxy.NewAIDomainRules("")
 	p, err := smartproxy.New(smartproxy.Config{ExitOnly: func(string) bool { return true }})

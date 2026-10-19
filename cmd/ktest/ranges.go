@@ -39,9 +39,14 @@ func runRanges(args []string) int {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		reports, err := cdnranges.Refresh(ctx, rangesClient(*via), dir)
-		if err != nil && *via == "" && portFree(connectPort) != nil {
-			fmt.Println("Direct refresh failed; retrying through the running ktest proxy")
-			reports, err = cdnranges.Refresh(ctx, rangesClient(fmt.Sprintf("127.0.0.1:%d", connectPort)), dir)
+		if cdnranges.ReportsHaveFailures(reports) && *via == "" && portFree(connectPort) != nil {
+			fmt.Println("Some providers failed direct refresh; retrying through the running ktest proxy")
+			firstErr := err
+			fallback, fallbackErr := cdnranges.Refresh(ctx, rangesClient(fmt.Sprintf("127.0.0.1:%d", connectPort)), dir)
+			reports = cdnranges.CombineReports(reports, fallback)
+			if firstErr != nil {
+				err = fallbackErr
+			}
 		}
 		for _, r := range reports {
 			fmt.Println("  " + r.String())

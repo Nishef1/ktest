@@ -21,6 +21,8 @@ type localCoreSet struct {
 	upstreams []smartproxy.Upstream
 }
 
+func androidXrayEnabled(mode string) bool { return mode == "balanced" }
+
 // StartAndroidProxy adds the same native ByeDPI strategies used on desktop.
 // The Go policy still owns DNS, route racing and protected foreign-only sites.
 func StartAndroidProxy(mode, upstream, nativeLibraryDir string) (string, error) {
