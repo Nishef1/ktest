@@ -567,7 +567,13 @@ private fun EndpointsPanel(
             Note("UDP associations: ${status.optInt("udp_associations")} · UDP failures: ${status.optInt("udp_failures")} (port 443: ${status.optInt("udp_443_failures")}). UDP/443 errors may contribute to a QUIC-to-TCP delay, but are not proof.")
             val method = status.optString("last_route")
             if (method.isNotBlank()) Note("Last observed route: $method · first response: ${status.optLong("last_route_ms")} ms · connect: ${status.optLong("last_connect_ms")} ms")
+            val lastFailure = status.optString("last_failure")
+            if (lastFailure.isNotBlank()) Note("Last classified failure: $lastFailure", Tone.Warn)
         }
+        // Learned per network: which kind of filtering appears here and which
+        // method family beats it. Evidence from past connections, not a guarantee.
+        val filtering = status.optString("filtering")
+        if (filtering.isNotBlank()) Note("Filtering on this network: $filtering")
         SecondaryButton(if (checking) "Checking HTTPS routes…" else "Check HTTPS endpoints", onCheckRoute,
             Modifier.fillMaxWidth(), busy = checking, icon = KIcons.Check)
         Note("An endpoint response does not verify profiles, feeds or video playback.")

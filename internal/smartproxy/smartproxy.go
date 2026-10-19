@@ -83,6 +83,10 @@ type Upstream struct {
 	// application noticing, such as reaching the site, so that a failure here
 	// leaves the other paths free to answer the unchanged ClientHello.
 	Takeover func(ctx context.Context, host, port string, flight []byte) (Session, error)
+	// Family names the anti-DPI mechanism (FamilyFake, FamilyOOB, ...). Empty
+	// infers it from the other fields and the name. Network-level priors are
+	// learned per family, so all fake-TTL strategies share one lesson.
+	Family string
 }
 
 // Session is a prepared takeover: the upstream side is ready, the application
@@ -138,6 +142,10 @@ type Config struct {
 	// the wait for the server's first TLS record after the flight was sent.
 	ConnectTimeout   time.Duration
 	FirstByteTimeout time.Duration
+	// StallTimeout is how long a relayed TLS flow may stay silent after the
+	// ServerHello, or after the client's first flight that followed it, before
+	// the route counts as blackholed. The connection itself is left alone.
+	StallTimeout time.Duration
 	// MemoryTTL bounds exact host:port history and initial sibling hints.
 	MemoryTTL time.Duration
 	// HistoryFile stores hashed destination hints in app-private storage.
@@ -190,6 +198,12 @@ type Event struct {
 	// Rejected marks a connection that a takeover path prepared but the
 	// application then refused (it does not trust the certificate presented).
 	Rejected bool
+	// Failure is the classified filtering kind behind Err or EarlyClose
+	// (for example "SNI reset" or "post-handshake blackhole").
+	Failure string
+	// Stall marks a relayed flow that went silent after the handshake while
+	// still open; it is scored like an early close.
+	Stall bool
 }
 
 func (c *Config) defaults() {
@@ -204,6 +218,9 @@ func (c *Config) defaults() {
 	}
 	if c.FirstByteTimeout <= 0 {
 		c.FirstByteTimeout = 5 * time.Second
+	}
+	if c.StallTimeout <= 0 {
+		c.StallTimeout = 4 * time.Second
 	}
 	if c.MemoryTTL <= 0 {
 		c.MemoryTTL = 24 * time.Hour
@@ -228,6 +245,7 @@ type upstreamState struct {
 	verifyMu      sync.Mutex
 	verifyErr     error
 	retryAfter    time.Time
+	family        string
 }
 
 type memo struct {
@@ -247,6 +265,7 @@ type Proxy struct {
 	aiPinned        string          // first working AI exit stays selected until this session ends
 	bootstrapPinned string          // legacy verified foreign-exit dialer; never used for local bypass
 	localAttempts   map[string]memo // last local method attempted per exact host:port
+	priors          map[FailureKind]*familyPrior
 }
 
 func allowedLocalOnly(u Upstream) bool {
@@ -279,7 +298,7 @@ func New(cfg Config) (*Proxy, error) {
 		}
 		cfg.Frozen = &pins
 	}
-	p := &Proxy{cfg: cfg, mem: map[string]*destinationMemory{}, hints: map[string]memo{}}
+	p := &Proxy{cfg: cfg, mem: map[string]*destinationMemory{}, hints: map[string]memo{}, priors: map[FailureKind]*familyPrior{}}
 	seen := map[string]bool{}
 	for _, u := range cfg.Upstreams {
 		if cfg.RejectExits && u.Exit {
@@ -292,7 +311,7 @@ func New(cfg Config) (*Proxy, error) {
 			return nil, fmt.Errorf("upstream names must be unique and non-empty (%q)", u.Name)
 		}
 		seen[u.Name] = true
-		state := &upstreamState{Upstream: u}
+		state := &upstreamState{Upstream: u, family: methodFamily(u)}
 		if u.AIEligible {
 			state.verifiedUntil.Store(time.Now().Add(cfg.ExitVerifyTTL).UnixNano())
 		}
@@ -491,7 +510,7 @@ func (p *Proxy) dialLocalBypass(ctx context.Context, host, port string, report b
 		began := time.Now()
 		conn, err := p.dial(ctx, u, host, port)
 		if err != nil {
-			p.record(u, host, port, false, time.Since(began))
+			p.recordFailure(u, host, port, err, time.Since(began))
 			lastErr = err
 			continue
 		}
@@ -558,7 +577,7 @@ func (p *Proxy) dialManagedExit(ctx context.Context, host, port string, foreign 
 		began := time.Now()
 		conn, err := p.dial(ctx, u, host, port)
 		if err != nil {
-			p.record(u, host, port, false, time.Since(began))
+			p.recordFailure(u, host, port, err, time.Since(began))
 			lastErr = err
 			continue
 		}
@@ -709,7 +728,11 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 			return
 		}
 	}
-	result := pipe(client, win.conn)
+	var watch *stallWatch
+	if win.tls {
+		watch = &stallWatch{after: p.cfg.StallTimeout, onStall: func() { p.observeStall(ctx, host, port, win.path) }}
+	}
+	result := pipeWatch(client, win.conn, watch)
 	if win.tls && ctx.Err() == nil {
 		p.observeRelay(ctx, host, port, win.path, result)
 	}
@@ -859,6 +882,39 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	lateGate := time.NewTimer(lateAfter)
 	defer lateGate.Stop()
 	var lastErr error
+	lastKind := KindNone
+	priorTried := false
+	// tryPrior moves the family this network taught for kind to the front of
+	// the untried routes and starts it now, before the rest of the race.
+	tryPrior := func(kind FailureKind) {
+		family := p.priorFamily(host, port, kind)
+		if priorTried || family == "" {
+			return
+		}
+		priorTried = true
+		var pref, rest []*upstreamState
+		active := next
+		for i, u := range order[next:] {
+			if u.family == family {
+				pref = append(pref, u)
+			} else {
+				rest = append(rest, u)
+				if next+i < limit {
+					active++
+				}
+			}
+		}
+		if family == FamilyExit {
+			requestExit()
+		}
+		if len(pref) == 0 {
+			return
+		}
+		p.logf("%s:%s showed %s; trying %s first (network prior)", host, port, kind, familyLabel(family))
+		order = append(append(order[:next:next], pref...), rest...)
+		limit = active + len(pref)
+		launch(max(min(len(pref), parallel-pending), 1))
+	}
 	for pending > 0 || next < len(order) || exitResult != nil || (!exitRequested && p.cfg.EnsureExit != nil) {
 		if pending == 0 && next >= limit && limit < len(order) {
 			limit = len(order) // everything else failed: the last resort may go
@@ -918,8 +974,12 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 			}
 			if r.err != nil {
 				lastErr = fmt.Errorf("%s: %w", r.u.Name, r.err)
-				p.record(r.u, host, port, false, r.took)
-				p.logf("%s:%s %s failed: %v", host, port, r.u.Name, r.err)
+				kind := p.recordFailure(r.u, host, port, r.err, r.took)
+				if kind.informative() {
+					lastKind = kind
+				}
+				p.logf("%s:%s %s failed (%s): %v", host, port, r.u.Name, kind, r.err)
+				tryPrior(kind)
 				refill()
 				continue
 			}
@@ -940,7 +1000,11 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	if lastErr == nil {
 		lastErr = errors.New("no upstream")
 	}
-	p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Err: lastErr.Error()})
+	e := Event{Host: host, Port: port, Site: siteKey(host), Err: lastErr.Error()}
+	if lastKind != KindNone {
+		e.Failure = lastKind.String()
+	}
+	p.emit(parent, e)
 	return winner{}, lastErr
 }
 
@@ -1020,7 +1084,7 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 	dialBegan := time.Now()
 	conn, err := p.dial(ctx, u, host, port)
 	if err != nil {
-		return winner{}, err
+		return winner{}, withKind(classifyConnect(err), err)
 	}
 	connectTook := time.Since(dialBegan)
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
@@ -1035,11 +1099,15 @@ func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string
 		send = func(c net.Conn, f []byte) error { _, err := c.Write(f); return err }
 	}
 	if err := send(conn, flight); err != nil {
-		return fail(err)
+		return fail(withKind(classifyAfterHello(err, 0, 0), err))
 	}
-	response, err := readServerHello(conn)
+	counted := &countingReader{r: conn}
+	response, err := readServerHello(counted)
 	if err != nil {
-		return fail(err)
+		if ctx.Err() != nil {
+			return fail(err)
+		}
+		return fail(withKind(classifyAfterHello(err, counted.n, counted.first), err))
 	}
 	if !stop() { // ctx already ended, the race was decided elsewhere
 		_ = conn.Close()
@@ -1130,7 +1198,7 @@ func (p *Proxy) plainAttempt(ctx context.Context, host, port string, flight []by
 			if ctx.Err() != nil {
 				return winner{}, ctx.Err()
 			}
-			p.record(u, host, port, false, time.Since(began))
+			p.recordFailure(u, host, port, err, time.Since(began))
 			lastErr = fmt.Errorf("%s: %w", u.Name, err)
 			continue
 		}
@@ -1171,7 +1239,7 @@ func (p *Proxy) racePlain(parent context.Context, cands []*upstreamState, host, 
 				began := time.Now()
 				conn, err := p.dial(ctx, u, host, port)
 				if err != nil {
-					results <- res{u: u, err: err, took: time.Since(began)}
+					results <- res{u: u, err: withKind(classifyConnect(err), err), took: time.Since(began)}
 					return
 				}
 				stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
@@ -1190,7 +1258,7 @@ func (p *Proxy) racePlain(parent context.Context, cands []*upstreamState, host, 
 					if err == nil {
 						err = errors.New("no answer")
 					}
-					results <- res{u: u, err: fmt.Errorf("no answer: %w", err), took: time.Since(began)}
+					results <- res{u: u, err: withKind(classifyAfterHello(err, 0, 0), fmt.Errorf("no answer: %w", err)), took: time.Since(began)}
 					return
 				}
 				if !stop() {
@@ -1227,7 +1295,7 @@ func (p *Proxy) racePlain(parent context.Context, cands []*upstreamState, host, 
 			pending--
 			if r.err != nil {
 				if parent.Err() == nil {
-					p.record(r.u, host, port, false, r.took)
+					p.recordFailure(r.u, host, port, r.err, r.took)
 				}
 				lastErr = fmt.Errorf("%s: %w", r.u.Name, r.err)
 				launch(1) // the one in front failed: the next goes now
@@ -1276,7 +1344,7 @@ func (p *Proxy) Add(u Upstream) error {
 			return fmt.Errorf("upstream %q already exists", u.Name)
 		}
 	}
-	state := &upstreamState{Upstream: u}
+	state := &upstreamState{Upstream: u, family: methodFamily(u)}
 	if u.AIEligible {
 		state.verifiedUntil.Store(time.Now().Add(p.cfg.ExitVerifyTTL).UnixNano())
 	}
@@ -1341,7 +1409,7 @@ func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (
 	}
 	conn, err := d.DialContext(dctx, "tcp", u.Addr)
 	if err != nil {
-		return nil, err
+		return nil, withKind(KindOther, err)
 	}
 	stop := context.AfterFunc(dctx, func() { _ = conn.Close() })
 	defer stop()
@@ -1468,7 +1536,7 @@ func socksConnect(c net.Conn, host, port string) error {
 		return errors.New("invalid upstream SOCKS5 CONNECT reply header")
 	}
 	if head[1] != 0 {
-		return fmt.Errorf("upstream CONNECT failed (reply %d)", head[1])
+		return socksReplyError{head[1]}
 	}
 	var skip int
 	switch head[3] {

@@ -49,6 +49,7 @@ type proxyDiagnostics struct {
 	lastPath        string // method label only; no destination, credentials, or payloads
 	lastRouteMS     int64
 	lastConnectMS   int64
+	lastFailure     string // classified filtering kind only, e.g. "SNI reset"
 }
 
 type proxyReport struct {
@@ -81,6 +82,10 @@ type proxyReport struct {
 	FrontDisabled   string `json:"front_disabled,omitempty"`
 	XrayReady       bool   `json:"xray_ready"`
 	XrayError       string `json:"xray_error,omitempty"`
+	// Filtering is the network-level summary of failure kinds and the method
+	// families that beat them; LastFailure the latest classified kind.
+	Filtering   string `json:"filtering,omitempty"`
+	LastFailure string `json:"last_failure,omitempty"`
 }
 
 type proxyStartup struct {
@@ -122,7 +127,11 @@ func currentReportLocked() proxyReport {
 	report.TCPAttempts, report.TCPFailures, report.TLSResponses = activeProxy.diagnostics.tcpAttempts, activeProxy.diagnostics.tcpFailures, activeProxy.diagnostics.tlsResponses
 	report.UDPAssociations, report.UDPFailures, report.UDP443Failures = activeProxy.diagnostics.udpAssociations, activeProxy.diagnostics.udpFailures, activeProxy.diagnostics.udp443Failures
 	report.LastRoute, report.LastRouteMS, report.LastConnectMS = activeProxy.diagnostics.lastPath, activeProxy.diagnostics.lastRouteMS, activeProxy.diagnostics.lastConnectMS
+	report.LastFailure = activeProxy.diagnostics.lastFailure
 	activeProxy.diagnostics.mu.Unlock()
+	if activeProxy.core != nil && activeProxy.core.Proxy != nil {
+		report.Filtering = activeProxy.core.Proxy.FilteringSummary()
+	}
 	if activeProxy.native != nil {
 		report.Native, report.Method = true, activeProxy.native.method
 	}
@@ -400,6 +409,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			diagnostics.tcpAttempts++
 			if e.Err != "" {
 				diagnostics.tcpFailures++
+			}
+			if e.Failure != "" {
+				diagnostics.lastFailure = e.Failure
 			}
 			if e.TLSResponse {
 				diagnostics.tlsResponses++

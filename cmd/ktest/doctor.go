@@ -16,6 +16,7 @@ import (
 	"github.com/Nishef1/ktest/internal/dnscheck"
 	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/revive"
+	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
 func fileOK(path string) bool {
@@ -251,6 +252,15 @@ func runDoctorMode(ctx context.Context, u *term, base string, noNet bool, mode C
 		fprog.Finish(toneOK, "")
 		printFronts(u, checks)
 		printECHDoH(ctx, u)
+		if mode == ModeBalanced || mode == ModeFast {
+			if network := networkSignature(ctx); network != "" {
+				if summary := smartproxy.HistorySummary(routeHistory(network, mode)); summary != "" {
+					line(toneInfo, "Learned filtering", summary)
+				} else {
+					u.Note("No filtering pattern learned on this network yet; %s Connect learns it as sites fail and recover.", mode)
+				}
+			}
+		}
 		u.Println("")
 		verdict := wrapText(rep.verdictText, 76)
 		for _, c := range checks {

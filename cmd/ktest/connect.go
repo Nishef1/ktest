@@ -306,6 +306,10 @@ type siteEvents struct {
 	fronts           *hostAggregate
 	verbose          bool
 	windscribeReport func()
+	// filtering describes the failure kinds and winning method families
+	// learned on this network; lastFiltering is the last one printed.
+	filtering     func() string
+	lastFiltering string
 }
 
 type routeSelection struct {
@@ -359,11 +363,21 @@ func (s *siteEvents) print(e smartproxy.Event) {
 		}
 		return
 	}
+	if s.verbose && s.filtering != nil && (e.Failure != "" || e.OK) {
+		if summary := s.filtering(); summary != "" && summary != s.lastFiltering {
+			s.lastFiltering = summary
+			t.Note("Filtering here: %s", summary)
+		}
+	}
 	if e.EarlyClose {
 		s.earlyClosed.Add(1)
 		if time.Since(s.failedAt[key+"|early"]) >= 20*time.Second {
 			s.failedAt[key+"|early"] = time.Now()
-			t.Line(toneWarn, "%s · %s · %s", t.Bold(target), t.Yellow("EARLY CLOSE"), e.Path)
+			state := "EARLY CLOSE"
+			if e.Stall {
+				state = "STALLED AFTER HANDSHAKE"
+			}
+			t.Line(toneWarn, "%s · %s · %s", t.Bold(target), t.Yellow(state), e.Path)
 			s.detail(e.Err)
 		}
 		return
@@ -461,7 +475,11 @@ func (s *siteEvents) print(e smartproxy.Event) {
 	if i := strings.LastIndex(reason, ": "); !s.verbose && i >= 0 && len(reason) > 60 {
 		reason = reason[i+2:]
 	}
-	t.Line(toneFail, "%s · %s", t.Bold(target), t.Red("NO REPLY"))
+	if e.Failure != "" {
+		t.Line(toneFail, "%s · %s · %s", t.Bold(target), t.Red("NO REPLY"), e.Failure)
+	} else {
+		t.Line(toneFail, "%s · %s", t.Bold(target), t.Red("NO REPLY"))
+	}
 	s.detail(reason)
 }
 
@@ -797,8 +815,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	if o.mode == ModeBalanced || o.mode == ModeFast {
 		if network := networkSignature(ctx); network != "" {
-			cfg.HistoryKey = network + "/" + string(o.mode)
-			cfg.HistoryFile = filepath.Join(warpDir(), "routes-"+network+"-"+string(o.mode)+".json")
+			cfg.HistoryFile, cfg.HistoryKey = routeHistory(network, o.mode)
 		}
 		cfg.EnsureExit = func(wait context.Context) error {
 			if err := wait.Err(); err != nil {
@@ -1151,7 +1168,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		<-events
 	}
 	dropped.Store(0)
-	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory, windscribe: o.mode.isWindscribe()}
+	feed := &siteEvents{t: t, last: map[string]string{}, failedAt: map[string]time.Time{}, verbose: o.verbose, dropped: &dropped, fronts: frontHistory, windscribe: o.mode.isWindscribe(),
+		filtering: proxy.FilteringSummary}
 	if windscribeBridge != nil {
 		feed.windscribeReport = windscribeBridge.reportProgress
 	}
@@ -1175,6 +1193,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 		}
 	}
+}
+
+// routeHistory is where Balanced/Fast keep route learning and the network's
+// filtering priors; the key isolates networks and modes.
+func routeHistory(network string, mode ConnectionMode) (file, key string) {
+	return filepath.Join(warpDir(), "routes-"+network+"-"+string(mode)+".json"), network + "/" + string(mode)
 }
 
 func trimDetail(s string) string {
@@ -1206,7 +1230,12 @@ func summarize(t *term, feed *siteEvents, fronter *front.Fronter) {
 		t.Line(toneWarn, "%d application %s; another route preferred on retry", n, plural(int(n), "refusal", "refusals"))
 	}
 	if n := feed.earlyClosed.Load(); n > 0 {
-		t.Note("%d connections closed before post-hello response data", n)
+		t.Note("%d connections closed or stalled before post-hello response data", n)
+	}
+	if feed.filtering != nil {
+		if summary := feed.filtering(); summary != "" {
+			t.Note("Filtering learned on this network: %s", summary)
+		}
 	}
 	if ok+fail > 0 {
 		t.Note("Initial responses: %d · no working route: %d", ok, fail)

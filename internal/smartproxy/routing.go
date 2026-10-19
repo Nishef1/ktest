@@ -12,6 +12,7 @@ type routeScore struct {
 	ewmaMS                               float64
 	coolUntil                            time.Time
 	rejected                             bool
+	kind                                 FailureKind // why this route last failed here
 }
 
 type destinationMemory struct {
@@ -19,6 +20,13 @@ type destinationMemory struct {
 	challengeWins      int
 	updated            time.Time
 	routes             map[string]*routeScore
+	// kind is the filtering this destination showed (the plain route's
+	// failure when known); failed lists families that failed here and
+	// credited the family last credited to the network priors.
+	kind         FailureKind
+	failed       map[string]bool
+	lossCredited map[string]bool
+	credited     string
 }
 
 func destinationKey(host, port string) string {
@@ -34,9 +42,10 @@ func (p *Proxy) memoryLocked(host, port string) *destinationMemory {
 		if saved, ok := p.saved[key]; ok {
 			delete(p.saved, key)
 			if time.Since(saved.Updated) < p.cfg.MemoryTTL && time.Until(saved.Updated) < time.Minute {
-				m = &destinationMemory{winner: saved.Winner, updated: saved.Updated, routes: map[string]*routeScore{}}
+				m = &destinationMemory{winner: saved.Winner, updated: saved.Updated, routes: map[string]*routeScore{},
+					kind: kindFromKey(saved.Kind), credited: saved.Credited}
 				for name, s := range saved.Routes {
-					m.routes[name] = &routeScore{wins: s.Wins, fails: s.Fails, ewmaMS: s.LatencyMS}
+					m.routes[name] = &routeScore{wins: s.Wins, fails: s.Fails, ewmaMS: s.LatencyMS, kind: kindFromKey(s.Kind)}
 				}
 				p.mem[destinationKey(host, port)] = m
 			}
@@ -101,6 +110,12 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 		}
 	}
 	preferred := p.preferredLocked(host, port)
+	// A destination that already showed a kind of filtering but has no
+	// winner of its own starts with the family this network taught.
+	var priorFamily string
+	if m != nil && m.winner == "" && p.priorsApplyLocked(host) {
+		priorFamily = p.priors[m.kind].best()
+	}
 	now := time.Now()
 	score := func(u *upstreamState) *routeScore {
 		if m != nil {
@@ -125,6 +140,9 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 		}
 		if (a.Name == preferred) != (b.Name == preferred) {
 			return a.Name == preferred
+		}
+		if priorFamily != "" && (a.family == priorFamily) != (b.family == priorFamily) {
+			return a.family == priorFamily
 		}
 		if rate(a) != rate(b) {
 			return rate(a) > rate(b)
@@ -175,6 +193,27 @@ func (m *destinationMemory) score(name string) *routeScore {
 }
 
 func (p *Proxy) record(u *upstreamState, host, port string, ok bool, took time.Duration) bool {
+	kind := KindNone
+	if !ok {
+		kind = KindOther
+	}
+	return p.recordOutcome(u, host, port, kind, took)
+}
+
+// recordFailure scores a failed attempt with the kind its error carries.
+func (p *Proxy) recordFailure(u *upstreamState, host, port string, err error, took time.Duration) FailureKind {
+	kind := failureKind(err)
+	if kind == KindNone {
+		kind = KindOther
+	}
+	p.recordOutcome(u, host, port, kind, took)
+	return kind
+}
+
+// recordOutcome scores one attempt: KindNone is a success, anything else a
+// failure of that kind.
+func (p *Proxy) recordOutcome(u *upstreamState, host, port string, kind FailureKind, took time.Duration) bool {
+	ok := kind == KindNone
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
@@ -190,6 +229,10 @@ func (p *Proxy) record(u *upstreamState, host, port string, ok bool, took time.D
 		u.fails++
 		s.fails++
 		s.failures++
+		if kind.informative() {
+			s.kind = kind
+		}
+		p.noteFailureLocked(m, u, host, kind)
 		if s.failures >= 2 {
 			s.coolUntil = time.Now().Add(30 * time.Second)
 			if m.winner == u.Name {
@@ -228,6 +271,7 @@ func (p *Proxy) record(u *upstreamState, host, port string, ok bool, took time.D
 			m.winner, m.challenger, m.challengeWins = u.Name, "", 0
 		}
 	}
+	p.creditLocked(m, u, host)
 	if m.winner == u.Name && !time.Now().Before(s.coolUntil) {
 		p.hints[destinationKey(siteKey(host), port)] = memo{name: u.Name, at: time.Now()}
 	}
@@ -250,6 +294,7 @@ func (p *Proxy) rejectTakeover(host, port, path string) {
 	s := m.score(path)
 	s.fails++
 	s.rejected = true
+	s.kind = KindBlockPage // the client refused the certificate presented
 	if m.winner == path {
 		m.winner = ""
 	}
