@@ -181,7 +181,7 @@ func ProfilesForMode(profiles []Profile, mode string) []Profile {
 		if mode == "windscribe" {
 			continue
 		}
-		if mode == "fast" && (p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") || p.Has("--upstream")) {
+		if mode == "fast" && (p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") || (p.Has("--upstream") && !p.LocalCarrier())) {
 			continue
 		}
 		if mode == "psiphon" && (!p.Psiphon() || p.Has("--tor-only") || p.Has("--masque") || p.Has("--wg") || p.Has("--gool") || p.Has("--mim") || p.Has("--gool-classic")) {

@@ -614,7 +614,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			}
 		}
 	}
-	if o.strategies > 0 && !o.mode.exitOnly() {
+	if o.strategies > 0 && (!o.mode.exitOnly() || o.mode == ModeAether) {
 		bin := byeDPIBinary(o.base)
 		list, _, err := loadStrategies(o.base)
 		switch {
@@ -720,7 +720,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// 3. Assemble the race. Initial order is the initial head start: the uncut
 	// baseline first, so unblocked sites never pay for a cut ClientHello.
 	var ups []smartproxy.Upstream
-	if !o.noDirect && !o.mode.exitOnly() && o.mode != ModeWindscribe {
+	if !o.noDirect && (!o.mode.exitOnly() || o.mode == ModeAether) && o.mode != ModeWindscribe {
 		ups = append(ups, smartproxy.PlainUpstreams()...)
 	}
 	for _, c := range up {
@@ -734,7 +734,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			Rank: rank, LocalBypass: c.localBypass,
 		})
 	}
-	if !o.noSelf && !o.mode.exitOnly() {
+	if !o.noSelf && (!o.mode.exitOnly() || o.mode == ModeAether) {
 		ups = append(ups, smartproxy.DesyncUpstreams()...)
 	}
 	if o.mode == ModeBalanced || o.mode == ModeFast {

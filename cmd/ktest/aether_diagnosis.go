@@ -292,6 +292,9 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 		})
 	}
 	workers.Wait()
+	if m.diagnosis && m.carrier != nil {
+		m.carrier.Stop()
+	}
 	sort.SliceStable(found, func(i, j int) bool {
 		return measurementScore(found[i].result, m.o.mode) < measurementScore(found[j].result, m.o.mode)
 	})

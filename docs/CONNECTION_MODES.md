@@ -14,6 +14,21 @@ TikTok page, API, static and media domains use the same verified foreign session
 
 CLI policy options:
 
+For TCP-based Aether transports, Fast/Balanced also try an independent private
+Go/ByeDPI carrier alongside direct dialing. The carrier reuses existing local
+cores and trusted DNS, disables foreign discovery, excludes Xray and TLS
+takeovers, and preserves the original selected gateway IP while learning by
+SNI. The Aether policy can use the same local techniques for its own transport;
+managed application traffic still requires a verified foreign exit. UDP-based
+WireGuard/HTTP3 transports are never sent into this TCP-only carrier. Fast's
+no-Psiphon/Tor boundary also covers fresh WARP identity registration.
+
+Local TLS or ECH acceptance is insufficient: Aether must establish CONNECT-IP,
+carry data and pass independent HTTPS/foreign-exit verification. The sampled
+2026-10-19 network reached ECH-capable gateways but also returned CONNECT-IP
+400 responses, certificate rejection or timeout; that test did not establish
+a usable native WARP exit. These failures are not promoted as working routes.
+
 | Option | Scope | IP policy | Failure policy |
 | --- | --- | --- | --- |
 | `-mode balanced` | normal mixed access, **AI sites protected** | Ordinary sites may use own IP; AI via verified foreign exit | AI domains stop if foreign exit absent |

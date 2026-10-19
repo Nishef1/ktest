@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
+	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -34,6 +35,8 @@ type automaticExit struct {
 	current    *nativeCore
 	location   string
 	attempt    func(context.Context, aether.Profile) (*nativeCore, observedExit, error)
+	carrierMu  sync.Mutex
+	carrier    *connectionsession.Session
 }
 
 type nativeHint struct {
@@ -59,6 +62,13 @@ func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 	a.attempt = func(ctx context.Context, p aether.Profile) (*nativeCore, observedExit, error) {
 		o := a.options
 		o.profile = &p
+		if p.LocalCarrier() {
+			var err error
+			o.carrier, err = a.localCarrier()
+			if err != nil {
+				return nil, observedExit{}, err
+			}
+		}
 		n, err := launchNative(ctx, mode, o)
 		if err != nil {
 			return nil, observedExit{}, err
@@ -79,6 +89,19 @@ func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 		return n, checked, nil
 	}
 	return a
+}
+
+func (a *automaticExit) localCarrier() (string, error) {
+	a.carrierMu.Lock()
+	defer a.carrierMu.Unlock()
+	if a.carrier == nil {
+		var err error
+		a.carrier, err = connectionsession.StartLocalCarrier(a.ctx, a.proxy)
+		if err != nil {
+			return "", err
+		}
+	}
+	return a.carrier.SOCKS.Addr().String(), nil
 }
 
 func (a *automaticExit) ensure(ctx context.Context) error {
@@ -129,6 +152,7 @@ func (a *automaticExit) profiles() []aether.Profile {
 	stop()
 	profiles, _ := aether.ParseProfiles(aether.DefaultProfiles, ech, ip)
 	profiles = aether.ProfilesForMode(profiles, a.mode)
+	profiles = aether.WithLocalCarriers(profiles)
 	// WARP variants do not crowd out an independent CDN-backed transport.
 	if a.mode == "balanced" {
 		for i, p := range profiles {
@@ -206,6 +230,11 @@ func (a *automaticExit) discover(profiles []aether.Profile) *nativeResult {
 }
 
 func (a *automaticExit) run() {
+	defer func() {
+		if a.carrier != nil {
+			a.carrier.Stop()
+		}
+	}()
 	profiles := a.profiles()
 	for a.ctx.Err() == nil {
 		r := a.discover(profiles)

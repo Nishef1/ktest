@@ -105,7 +105,12 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	address := listener.Addr().String()
 	_ = listener.Close() // Aether binds its own socket; no inherited-fd API.
 	args := paths.ProfileArgs(p, port, o.stateDir)
-	if o.carrier != "" {
+	if p.LocalCarrier() {
+		args, err = aether.BindLocalCarrier(args, o.carrier)
+		if err != nil {
+			return nil, err
+		}
+	} else if o.carrier != "" {
 		args = append(args, "--upstream", "socks5://"+o.carrier)
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -185,7 +190,7 @@ func waitNativeWithProbe(ctx context.Context, mode string, n *nativeCore, probe 
 func tcpCarriedProfiles(profiles []aether.Profile) []aether.Profile {
 	var out []aether.Profile
 	for _, p := range profiles {
-		if p.Has("--h2") && !p.Psiphon() && !p.Has("--tor-only") && !p.Has("--wg") {
+		if aether.CanCarryLocally(p) {
 			out = append(out, p)
 		}
 	}

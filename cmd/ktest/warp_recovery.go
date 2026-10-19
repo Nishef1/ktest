@@ -23,6 +23,9 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 	seen := map[string]bool{}
 	for _, p := range unknown {
 		method := p.Method()
+		if p.LocalCarrier() {
+			method += "/local"
+		}
 		if seen[method] {
 			variants = append(variants, p)
 			continue

@@ -183,7 +183,10 @@ Psiphon/Tor backends, allowing native Aether transports only. A successful
 profile and hashed destination ranking hints are stored privately per network
 and mode for 24 hours. A working core remains alive until disconnect or failure;
 the Go session reaps losing attempts and recovers after a dead core. Windows
-Zapret2 is not packaged or emulated on Android. These are implementation
+Zapret2 is not packaged or emulated on Android. Native H2 Aether attempts can
+also use a private Go/ByeDPI carrier, sharing the running local cores and
+avoiding recursive discovery or a foreign proxy for bootstrap. UDP transports
+stay independent. These are implementation
 capabilities; native app feeds, media playback and handovers require device
 testing on the actual network.
 

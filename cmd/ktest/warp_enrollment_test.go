@@ -61,6 +61,14 @@ func enrollmentArg(args []string, flag string) string {
 	return ""
 }
 
+func TestFastEnrollmentNeverStartsPsiphonOrTorEvenForFreshIdentity(t *testing.T) {
+	routes := []enrollmentRoute{{"local", []string{"--upstream", "socks5://127.0.0.1:19080"}}, {"ECH", []string{"--ech", "config"}}, {"helper", []string{"--psiphon-reverse"}}, {"tor", []string{"--tor-only"}}, {"fragment", []string{"--api-fragment"}}}
+	got := fastEnrollmentRoutes(routes)
+	if len(got) != 3 || got[0].label != "local" || got[1].label != "ECH" || got[2].label != "fragment" {
+		t.Fatalf("Fast enrollment escaped the local/Aether boundary: %+v", got)
+	}
+}
+
 func TestEnrollmentValidatesBothProtocolsOfflineAndNeverReplacesSavedKeys(t *testing.T) {
 	t.Setenv("KTEST_WARP_DIR", t.TempDir())
 	base := t.TempDir()

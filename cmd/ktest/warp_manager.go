@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
+	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -38,6 +39,9 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 	profiles, err := parseAetherProfiles(text, ech, ip)
 	if err != nil {
 		return profiles, err
+	}
+	if mode == ModeFast || mode == ModeBalanced || mode == ModeAether {
+		profiles = aether.WithLocalCarriers(profiles)
 	}
 	if mode == ModeBalanced {
 		hasTor := false
@@ -129,6 +133,25 @@ type warpManager struct {
 	selected      *aetherMeasurement
 	attempted     map[string]bool
 	failedSweeps  int
+	carrierMu     sync.Mutex
+	carrier       *connectionsession.Session
+}
+
+func (m *warpManager) localCarrier(ctx context.Context) (string, error) {
+	m.carrierMu.Lock()
+	defer m.carrierMu.Unlock()
+	if m.carrier == nil {
+		owner := m.processCtx
+		if owner == nil {
+			owner = ctx
+		}
+		var err error
+		m.carrier, err = connectionsession.StartLocalCarrier(owner, m.proxy)
+		if err != nil {
+			return "", err
+		}
+	}
+	return m.carrier.SOCKS.Addr().String(), nil
 }
 
 func (m *warpManager) status() string {
@@ -215,6 +238,9 @@ func (m *warpManager) run(ctx context.Context) {
 			if w.unregistered != nil {
 				<-w.unregistered
 			}
+		}
+		if m.carrier != nil {
+			m.carrier.Stop()
 		}
 	}
 	retire := func(w *warpFound) {
@@ -451,6 +477,24 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 	cctx, cancel := context.WithCancel(processCtx)
 	rc := &runningCore{cancel: cancel, done: make(chan struct{})}
 	args := aetherRunArgs(i, p, port)
+	if p.LocalCarrier() {
+		address, err := m.localCarrier(ctx)
+		if err != nil {
+			cancel()
+			if logFile != nil {
+				logFile.Close()
+			}
+			return false, nil, "local anti-DPI carrier unavailable"
+		}
+		args, err = aether.BindLocalCarrier(args, address)
+		if err != nil {
+			cancel()
+			if logFile != nil {
+				logFile.Close()
+			}
+			return false, nil, "invalid local anti-DPI carrier"
+		}
+	}
 	go func() {
 		defer close(rc.done)
 		if logFile != nil {
@@ -596,10 +640,19 @@ func (m *warpManager) prepareIdentityFile(ctx context.Context, protocol, path st
 	m.enrollTried[key] = true
 	if routes == nil && m.enrollRoutes == nil {
 		proxyAddr := ""
-		if canUseEnrollmentProxy(m.o.mode, m.proxy) {
+		if m.o.mode == ModeFast || m.o.mode == ModeBalanced || m.o.mode == ModeAether {
+			var err error
+			proxyAddr, err = m.localCarrier(ctx)
+			if err != nil {
+				return err
+			}
+		} else if canUseEnrollmentProxy(m.o.mode, m.proxy) {
 			proxyAddr = m.o.listen
 		}
 		m.enrollRoutes = enrollmentRoutes(ctx, m.o.base, proxyAddr, m.ech, m.echIP)
+		if m.o.mode == ModeFast {
+			m.enrollRoutes = fastEnrollmentRoutes(m.enrollRoutes)
+		}
 	}
 	if routes == nil {
 		routes = m.enrollRoutes

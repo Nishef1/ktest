@@ -19,6 +19,19 @@ type enrollmentRoute struct {
 	args  []string
 }
 
+// Fast's no-Psiphon/Tor rule also applies before WARP identity enrollment.
+func fastEnrollmentRoutes(routes []enrollmentRoute) []enrollmentRoute {
+	var local []enrollmentRoute
+	for _, route := range routes {
+		p := aether.Profile{Args: route.args}
+		if p.Psiphon() || p.Has("--psiphon") || p.Has("--psiphon-reverse") || p.Has("--tor-only") || p.Has("--tor") || p.Has("--tor-reverse") {
+			continue
+		}
+		local = append(local, route)
+	}
+	return local
+}
+
 // Registration is HTTPS for both protocols. A Psiphon carrier here carries
 // only enrollment, not subsequent WireGuard traffic. An IP override alone
 // still exposes the API's TLS name; ECH is supplied explicitly when available.
