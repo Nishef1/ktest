@@ -343,7 +343,7 @@ func TestTarGzAetherExtractionRejectsUnexpectedAndPublishesKnownEntries(t *testi
 
 func TestDesktopAetherAndTorModesCannotCrossNativeBackends(t *testing.T) {
 	for _, tc := range []struct {
-		mode ConnectionMode
+		mode       ConnectionMode
 		wantMethod string
 	}{
 		{ModeAether, "masque-h2"},
