@@ -10,6 +10,12 @@
   not trigger a complete multi-source redownload every 30 seconds. Missing
   exact TCP node mappings still use bounded early retries, while complete
   provider failure retains the short recovery schedule.
+- **Provider-native SNI baseline:** The direct WStunnel/Stealth profile
+  list begins with `none`, meaning **no SNI extension** (not the literal
+  word "none"). Existing alternative SNI names remain as separate choices.
+  This enables a no-custom-SNI comparison before assuming censorship needs
+  a forged front name. The exact outer TLS behavior is still independently
+  tested from authenticated inner OpenVPN.
 - **WStunnel TLS comparison:** Direct provider-advertised WStunnel nodes
   now offer a Go standard TLS baseline (`hello=go-tls`) alongside the
   existing Chrome and randomized uTLS alternatives. All three use the
