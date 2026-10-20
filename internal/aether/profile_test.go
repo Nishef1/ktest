@@ -138,3 +138,16 @@ func TestRenamedAetherAPIOptionsPreserveStableProfileIDs(t *testing.T) {
 		t.Fatalf("equivalent profiles lost identity across CLI upgrade: %s != %s", old.ID(), modern.ID())
 	}
 }
+
+func TestModernAetherPreservesLocalCarrierWithoutRemovedNoFragmentFlag(t *testing.T) {
+	profiles := WithLocalCarriers([]Profile{{Label: "H2", Args: []string{"--masque", "--h2"}}})
+	if len(profiles) != 2 || !profiles[1].Has("--no-fragment") {
+		t.Fatalf("test fixture no longer covers legacy carrier flags: %+v", profiles)
+	}
+	newHelp := "  --masque  protocol\n  --h2  transport\n  --upstream <url>  proxy\n  --fragment  TLS\n"
+	accepted := SupportedProfiles(profiles, newHelp)
+	if len(accepted) != 2 || accepted[1].Has("--no-fragment") ||
+		!accepted[1].LocalCarrier() {
+		t.Fatalf("new core lost its local carrier or received unsupported flags: %+v", accepted)
+	}
+}
