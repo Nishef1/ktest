@@ -274,3 +274,50 @@ func TestStartRejectsNonLoopback(t *testing.T) {
 		t.Fatal("listened on a public address")
 	}
 }
+
+// A WARP scan probes many closed ports; their ICMP replies must not end the
+// association (Windows reports them as WSAECONNRESET on the next read).
+func TestAssociateSurvivesUnreachablePorts(t *testing.T) {
+	udp, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	defer udp.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := udp.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			udp.WriteToUDP(buf[:n], from)
+		}
+	}()
+	closed, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	dead := closed.LocalAddr()
+	closed.Close()
+
+	s, err := Start(context.Background(), "127.0.0.1:0", Mask{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	ctl := socksGreet(t, s.Addr(), cmdAssociate, encodeAddr(&net.UDPAddr{IP: net.IPv4zero}))
+	defer ctl.Close()
+	u, _ := net.DialUDP("udp", nil, readReply(t, ctl))
+	defer u.Close()
+	send := func(to net.Addr, p string) {
+		u.Write(append(append([]byte{0, 0, 0}, encodeAddr(to)...), p...))
+	}
+	for i := 0; i < 3; i++ {
+		send(dead, "nobody")
+		time.Sleep(20 * time.Millisecond)
+	}
+	send(udp.LocalAddr(), "alive")
+	u.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 2048)
+	n, err := u.Read(buf)
+	if err != nil {
+		t.Fatalf("association died after unreachable ports: %v", err)
+	}
+	if _, payload, _ := parseUDP(buf[:n]); string(payload) != "alive" {
+		t.Fatalf("payload %q", payload)
+	}
+}

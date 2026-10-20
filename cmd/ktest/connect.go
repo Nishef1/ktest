@@ -1116,10 +1116,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if o.mode.isWindscribe() {
 		coverage = "Windscribe bridge · Windscribe controls system coverage"
 	}
+	var tn *tunnel
+	tunPending := false
 	if o.tun {
 		coverage = "TUN inactive · local proxy listener only"
 		if verdict != toneFail {
-			tn := startTunnel(ctx, o.base, lport, o.verbose, t)
+			tn = startTunnel(ctx, o.base, lport, o.verbose, t)
 			defer tn.stop(t)
 			if ctx.Err() != nil {
 				return 0
@@ -1131,12 +1133,20 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				verdict = toneWarn
 			}
 		} else {
-			t.Line(toneWarn, "The proxy did not verify, so TUN was not started.")
+			// Whole-PC routing waits for the exit instead of being dropped.
+			tunPending = true
+			t.Note("TUN will start automatically once a foreign exit verifies.")
 		}
 	}
 
 	// 5. The result.
 	title := map[tone]string{toneInfo: "PROXY LISTENING", toneOK: "TUN TCP VERIFIED", toneWarn: "COVERAGE NOT VERIFIED", toneFail: "WAITING FOR VERIFIED EXIT"}[verdict]
+	// Outside Windscribe the live status panel below answers "connected?";
+	// this box only lists how to reach the proxy, so it never goes stale.
+	liveStatus := !o.mode.isWindscribe()
+	if liveStatus {
+		title, verdict = "CONNECTION DETAILS", toneInfo
+	}
 	if o.mode.isWindscribe() {
 		title = "WINDSCRIBE BRIDGE LISTENING; VPN NOT YET VERIFIED"
 		if o.mode == ModeWindscribeAether {
@@ -1172,7 +1182,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			lines = append(lines, prefix+line)
 		}
 	}
-	field("Coverage", coverage)
+	if !liveStatus {
+		field("Coverage", coverage)
+	}
 	field("SOCKS", "socks5://"+l.Addr().String()+t.Dim(" · remote DNS in the app"))
 	field("Paths", pathsDesc)
 	if httpAddr != "" {
@@ -1190,11 +1202,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if currentExitStatus != nil {
 		warpNote = currentExitStatus()
 	}
-	field("Exit", t.Dim(warpNote))
+	if !liveStatus {
+		field("Exit", t.Dim(warpNote))
+	}
 	field("Policy", string(o.mode))
 	if !o.mode.isWindscribe() {
 		field("Foreign", "AI and TikTok: verified foreign exit only; blocked when unavailable")
-		field("Checks", "Manual diagnostics only; no automatic website tests or periodic probes")
 	} else {
 		if o.mode == ModeWindscribeAether {
 			field("AI", "SOCKS AI traffic requires verified foreign WARP; normal apps use Windscribe's VPN")
@@ -1209,10 +1222,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		} else {
 			field("Result", t.Dim("Windscribe CLI monitored; carrier readiness is not VPN authentication"))
 		}
-	default:
-		field("Result", "Listener readiness only; profile, feed and media access are not inferred from a landing page")
 	}
-	field("Stop", o.stopHint)
+	if !liveStatus {
+		field("Stop", o.stopHint)
+	}
 	t.Println("")
 	t.Box(title, verdict, lines)
 	t.Println("")
@@ -1239,9 +1252,40 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if windscribeBridge != nil {
 		feed.windscribeReport = windscribeBridge.reportProgress
 	}
+	var status *connectionStatus
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	if liveStatus {
+		now := time.Now()
+		status = &connectionStatus{t: t, mode: o.mode, proxy: proxy, exit: currentExitStatus, socks: l.Addr().String(), http: httpAddr,
+			stop: o.stopHint, tunWant: o.tun, tunOn: func() bool { return tn != nil }, feed: feed, started: now, since: now}
+		if warpNote != "" && currentExitStatus == nil {
+			status.exit = func() string { return warpNote }
+		}
+		status.render(now)
+		defer status.close()
+	}
 	for {
 		select {
+		case <-tick.C:
+			if status == nil {
+				continue
+			}
+			if tunPending && proxy.HasVerifiedExit() {
+				tunPending = false
+				t.ClearPinnedBox()
+				if tn = startTunnel(ctx, o.base, lport, o.verbose, t); tn != nil {
+					defer tn.stop(t)
+				}
+				if ctx.Err() != nil {
+					return 0
+				}
+			}
+			status.render(time.Now())
 		case <-connection.Done():
+			if status != nil {
+				status.close()
+			}
 			for len(events) > 0 {
 				feed.print(<-events)
 			}
