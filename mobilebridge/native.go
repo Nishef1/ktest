@@ -73,6 +73,64 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 	return profiles[0], nil
 }
 
+// nativeAutoCandidates are distinct WARP transports, not Psiphon/Tor
+// substitutes. Android Auto must try another protocol after a failed native
+// exit rather than calling the first profile "automatic".
+func nativeAutoCandidates(viaCarrier bool) ([]aether.Profile, error) {
+	profiles, err := aether.ParseProfiles(aether.DefaultProfiles, "", "")
+	if err != nil {
+		return nil, err
+	}
+	profiles = aether.ProfilesForMode(profiles, "aether")
+	if viaCarrier {
+		profiles = tcpCarriedProfiles(profiles)
+	}
+	var candidates []aether.Profile
+	for _, p := range profiles {
+		if p.Psiphon() || p.Has("--tor-only") {
+			continue
+		}
+		candidates = append(candidates, p)
+	}
+	if len(candidates) == 0 {
+		return nil, errors.New("no compatible WARP transport for this carrier")
+	}
+	return candidates, nil
+}
+
+// launchVerifiedNativeAuto reuses the upstream Aether's own gateway scan
+// within each transport. Only independent protocol/profile attempts happen
+// here. The first actual foreign HTTPS exit wins; failed native processes
+// are stopped before the next candidate starts.
+func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore, observedExit, error) {
+	profiles, err := nativeAutoCandidates(o.carrier != "")
+	if err != nil {
+		return nil, observedExit{}, err
+	}
+	var lastErr error
+	for _, profile := range profiles {
+		if err := ctx.Err(); err != nil {
+			return nil, observedExit{}, err
+		}
+		candidate := o
+		candidate.profile = &profile
+		core, err := launchNative(ctx, "aether", candidate)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", profile.Label, err)
+			continue
+		}
+		attempt, cancel := context.WithTimeout(ctx, aether.AttemptTimeout(profile)+15*time.Second)
+		checked, err := waitNative(attempt, "aether", core)
+		cancel()
+		if err == nil {
+			return core, checked, nil
+		}
+		core.stop()
+		lastErr = fmt.Errorf("%s: %w", profile.Label, err)
+	}
+	return nil, observedExit{}, fmt.Errorf("no Aether Auto transport passed foreign HTTPS verification: %w", lastErr)
+}
+
 func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCore, error) {
 	p, err := nativeProfile(mode, o.method, o.carrier != "")
 	if o.profile != nil {
