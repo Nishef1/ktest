@@ -588,3 +588,31 @@ func TestCatalogFastPrimaryDoesNotDownloadFallback(t *testing.T) {
 		t.Fatalf("healthy fast primary needlessly loaded legacy catalog: %v, requests=%d", err, fallbackCalls)
 	}
 }
+
+func TestPartialWindscribeCatalogRefreshAvoidsFullRetryFlood(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/okay") {
+			_, _ = w.Write([]byte(globalNodeFixture))
+			return
+		}
+		http.Error(w, "restricted regional API", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	oldSources := wsCatalogURLs
+	wsCatalogURLs = []wsCatalogSource{
+		{name: "global", url: srv.URL + "/okay/", fallback: srv.URL + "/okay-fallback"},
+		{name: "regional", url: srv.URL + "/blocked/", fallback: srv.URL + "/blocked-fallback"},
+	}
+	defer func() { wsCatalogURLs = oldSources }()
+	c := newWSNodeCatalog()
+	refreshed := c.refresh(context.Background(), srv.Client(), filepath.Join(t.TempDir(), "nodes.json"), func(string, ...any) {})
+	if !refreshed || len(c.endpoints("203.0.113.100")) == 0 {
+		t.Fatal("one working official list must unblock the exact Windscribe node")
+	}
+	if next := wsCatalogRefreshDelay(refreshed, false, 0); next != 30*time.Minute {
+		t.Fatalf("partial provider outage causes repeated full inventory downloads: %s", next)
+	}
+	if next := wsCatalogRefreshDelay(refreshed, true, 0); next != 45*time.Second {
+		t.Fatalf("missing target was not scheduled for prompt recovery: %s", next)
+	}
+}
