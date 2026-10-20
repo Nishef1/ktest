@@ -500,6 +500,7 @@ func (s *siteEvents) detail(reason string) {
 // connectSession runs until ctx ends. preflight may carry a Google DNS check
 // the caller already measured.
 func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.Result, t *term) int {
+	sessionStarted := time.Now() // the status panel counts the search from here
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("Coverage: %s", connectionCoverage(o))
 	t.Note("%s", o.mode.message())
@@ -1135,7 +1136,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		} else {
 			// Whole-PC routing waits for the exit instead of being dropped.
 			tunPending = true
-			t.Note("TUN will start automatically once a foreign exit verifies.")
+			t.Note("Whole-PC TUN will start automatically once connected.")
 		}
 	}
 
@@ -1162,6 +1163,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	pathsDesc := fmt.Sprintf("%d configured routes · adaptive selection per hostname and port", len(proxy.Stats()))
 	if o.mode.exitOnly() {
 		pathsDesc = "Verified foreign exits only; direct fallback blocked"
+		if o.mode == ModeAether {
+			pathsDesc = "WARP exit only; direct fallback blocked"
+		}
 	}
 	if o.mode.isWindscribe() {
 		pathsDesc = fmt.Sprintf("%d local anti-DPI paths; no plain or foreign exits", len(ups))
@@ -1258,7 +1262,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if liveStatus {
 		now := time.Now()
 		status = &connectionStatus{t: t, mode: o.mode, proxy: proxy, exit: currentExitStatus, socks: l.Addr().String(), http: httpAddr,
-			stop: o.stopHint, tunWant: o.tun, tunOn: func() bool { return tn != nil }, feed: feed, started: now, since: now}
+			stop: o.stopHint, tunWant: o.tun, tunOn: func() bool { return tn != nil }, feed: feed, started: sessionStarted, since: sessionStarted}
 		if warpNote != "" && currentExitStatus == nil {
 			status.exit = func() string { return warpNote }
 		}

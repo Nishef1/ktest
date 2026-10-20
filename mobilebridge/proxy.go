@@ -56,14 +56,17 @@ type proxyDiagnostics struct {
 }
 
 type proxyReport struct {
-	Running         bool   `json:"running"`
-	Mode            string `json:"mode,omitempty"`
-	Socks           string `json:"socks,omitempty"`
-	HTTP            string `json:"http,omitempty"`
-	Coverage        string `json:"coverage"`
-	Detail          string `json:"detail"`
-	Upstream        string `json:"upstream,omitempty"`
-	ExitLocation    string `json:"exit_location,omitempty"`
+	Running      bool   `json:"running"`
+	Mode         string `json:"mode,omitempty"`
+	Socks        string `json:"socks,omitempty"`
+	HTTP         string `json:"http,omitempty"`
+	Coverage     string `json:"coverage"`
+	Detail       string `json:"detail"`
+	Upstream     string `json:"upstream,omitempty"`
+	ExitLocation string `json:"exit_location,omitempty"`
+	// AIExit: a verified non-Iran exit exists, so AI/TikTok can connect.
+	// An Iran-located WARP still carries ordinary sites in Aether.
+	AIExit          bool   `json:"ai_exit"`
 	Phase           string `json:"phase"`
 	Error           string `json:"error,omitempty"`
 	DNSFailures     int    `json:"dns_failures"`
@@ -134,6 +137,7 @@ func currentReportLocked() proxyReport {
 	activeProxy.diagnostics.mu.Unlock()
 	if activeProxy.core != nil && activeProxy.core.Proxy != nil {
 		report.Filtering = activeProxy.core.Proxy.FilteringSummary()
+		report.AIExit = activeProxy.core.Proxy.HasVerifiedExit()
 	}
 	if activeProxy.native != nil {
 		report.Native, report.Method = true, activeProxy.native.method

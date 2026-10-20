@@ -66,7 +66,7 @@ func (m ConnectionMode) message() string {
 	case ModeWindscribeAether:
 		return "WARP through Aether carries Windscribe OpenVPN TCP. Keep Aether running and exclude ktest/aether from Windscribe split tunneling. No direct, Psiphon or Tor fallback. Windscribe owns the final VPN exit."
 	case ModeAether:
-		return "Aether: search WARP MASQUE/WireGuard profiles only; enroll missing keys over anti-DPI or Psiphon CDN if available; verified foreign exit required."
+		return "Aether: search WARP MASQUE/WireGuard profiles only; registers missing keys over ECH first; sites use any working WARP exit, AI and TikTok need one outside Iran."
 	case ModePsiphon:
 		return "Aether to Psiphon: Psiphon profiles only; verified foreign exit required; no WARP, Tor or direct fallback for managed apps."
 	case ModeTor:

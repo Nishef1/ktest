@@ -1,6 +1,11 @@
 package aether
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // Lines captured from Aether v2.3.1 on 2026-10-20: a key Cloudflare refused,
 // and a fresh key on the same gateway.
@@ -27,5 +32,24 @@ func TestClassifyIdentityLines(t *testing.T) {
 	// Without a completed TLS handshake nothing is said about the key.
 	if v := run("[h2] connecting tcp to 162.159.198.76:443", "tls: h2 tls handshake: TLS handshake failed [SSLV3_ALERT_CERTIFICATE_UNKNOWN]"); v != IdentityUnknown {
 		t.Fatalf("filtered network judged the key: %v", v)
+	}
+}
+
+func TestProbePeersPreferRememberedAndSkipNonJudgingRange(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "masque-lastconn.toml"), []byte("peer = \"162.159.198.50:443\"\nrecent = [\n    \"162.159.197.9:443\",\n    \"162.159.198.8:443\",\n]\n"), 0o600)
+	peers := probePeers(filepath.Join(dir, "masque.toml"))
+	if peers[0] != "162.159.198.50:443" {
+		t.Fatalf("remembered gateway not first: %v", peers)
+	}
+	seen := map[string]int{}
+	for _, p := range peers {
+		seen[p]++
+		if strings.HasPrefix(p, "162.159.197.") {
+			t.Fatalf("162.159.197.x answers 400 to valid keys and cannot judge one: %v", peers)
+		}
+	}
+	if seen["162.159.198.8:443"] != 1 || len(peers) > 6 {
+		t.Fatalf("peers not de-duplicated or bounded: %v", peers)
 	}
 }

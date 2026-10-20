@@ -121,7 +121,7 @@ private fun Hero(
         Spacer(Modifier.height(14.dp))
         Text(
             when (state) {
-                LinkState.Active -> if (coverage == "proxy") "Local proxy running" else if (vpnActive) "VPN adapter running" else "Proxy running · VPN inactive"
+                LinkState.Active -> if (coverage != "proxy" && !vpnActive) "Connected · VPN inactive" else "Connected"
                 LinkState.Connecting -> "Connecting…"
                 LinkState.Unavailable -> "Not available yet"
                 LinkState.Idle -> if (manualTesting) "Testing routes…" else "Tap to connect"
@@ -132,17 +132,26 @@ private fun Hero(
         when (state) {
             LinkState.Active -> {
                 Uptime()
-                Text(if (coverage != "proxy" && !vpnActive)
-                    "The proxy is listening, but device-wide VPN is not active. Check Settings for the packet-adapter error."
-                    else "A listening proxy or VPN adapter does not prove a working external exit.",
-                    color = if (coverage != "proxy" && !vpnActive) K.amber else K.muted,
+                // One plain answer: what is covered, and whether AI/TikTok can
+                // connect. An Iran-located WARP carries ordinary sites only.
+                val vpnMissing = coverage != "proxy" && !vpnActive
+                val aiReady = status.optBoolean("ai_exit")
+                Text(when {
+                    vpnMissing -> "Apps pointed at the local proxy work, but device-wide VPN is not active. Check Settings for the packet-adapter error."
+                    aiReady -> if (coverage == "proxy") "Apps using the local proxy are connected. AI and TikTok are available."
+                               else "All apps are connected. AI and TikTok are available."
+                    mode.id == "balanced" || mode.id == "fast" ->
+                        "Sites work. AI and TikTok need an exit outside Iran; it is searched for when you open them."
+                    else -> "Sites work. AI and TikTok are blocked: they need an exit outside Iran" +
+                        (if (status.optString("exit_location").equals("IR", true)) ", and this one is in Iran." else ".")
+                }, color = if (vpnMissing || !aiReady) K.amber else K.muted,
                     fontSize = 12.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 22.dp))
             }
             LinkState.Connecting -> Text(
                 when (phase) {
                     "starting_core" -> "Starting ${mode.title}…"
-                    "verifying_upstream" -> "Waiting for a tunnel and a verified exit"
+                    "verifying_upstream" -> "Waiting for the tunnel and a working exit"
                     "calibrating" -> "Calibrating routes before connection"
                     else -> "Preparing routes and listeners"
                 }, color = K.muted, fontSize = 13.sp, textAlign = TextAlign.Center
@@ -176,6 +185,7 @@ private fun Hero(
                 if (coverage != "proxy") Tag(if (vpnActive) "Packet VPN active" else "VPN inactive", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
                 status.optString("exit_location").takeIf { it.isNotBlank() }?.let { Tag("Exit · $it", K.text) }
+                if (!status.optBoolean("ai_exit")) Tag("AI blocked", K.amber)
             }
         }
     }
@@ -507,7 +517,7 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
             }
         }
-        Note(if (mode == "aether") "Auto tries other WARP transports after a failed foreign-exit check. A working SOCKS listener alone is not an Internet connection. First-time setup can take several minutes."
+        Note(if (mode == "aether") "Auto tries other WARP transports when one fails. An exit located in Iran works for sites but not for AI or TikTok. A working SOCKS listener alone is not an Internet connection. First-time setup can take several minutes."
              else if (mode == "psiphon") "Psiphon-only avoids WARP. Use the separate CDN method if the direct Psiphon path is filtered."
              else "Tor-only does not use WARP. Circuit bootstrap and independently verified foreign exit may take several minutes.")
     }

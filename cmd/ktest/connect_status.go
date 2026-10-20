@@ -63,6 +63,9 @@ func (s *connectionStatus) view(now time.Time) statusView {
 	case s.mode.exitOnly():
 		v.key, v.tone, v.title = "connecting", toneWarn, "CONNECTING"
 		step := "searching for a foreign exit"
+		if s.mode == ModeAether {
+			step = "searching for a working WARP exit"
+		}
 		if total > 0 {
 			step = "verifying an exit that came up"
 		}
@@ -116,6 +119,10 @@ func (s *connectionStatus) view(now time.Time) statusView {
 func (s *connectionStatus) render(now time.Time) {
 	v := s.view(now)
 	changed := v.key != s.last
+	if changed && s.last == "" && v.key == "connected" {
+		s.since = now // connected before the panel appeared: count from now
+		v = s.view(now)
+	}
 	if changed && s.last != "" {
 		s.since = now // durations restart when the state changes
 		v = s.view(now)

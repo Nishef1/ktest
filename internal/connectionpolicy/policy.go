@@ -26,7 +26,7 @@ func allModes() []Mode {
 		{"fast", "Fast", "Every local method, fronting and learned priors; native exits on demand", true,
 			"No Psiphon, Tor or unidentified external SOCKS. Protected services still require a verified foreign exit."},
 		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
-			"Aether handles enrollment, scans and reconnect. A verified foreign exit is required."},
+			"Aether handles enrollment, scans and reconnect. AI and TikTok need an exit outside Iran."},
 		{"tor", "Aether to Tor", "Tor alone (no WARP), dialing through Fast's local anti-DPI", true,
 			"Requires a verified Tor circuit and foreign exit. First connection can take several minutes."},
 		{"windscribe", "Windscribe", "Local-only anti-DPI bridge", false,

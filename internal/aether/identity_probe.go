@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/coreprocess"
@@ -23,15 +24,51 @@ const (
 	// which says nothing about the key (the network may be filtering).
 	IdentityUnknown IdentityVerdict = iota
 	IdentityAccepted
-	// IdentityRejected: TLS to the gateway completed and the gateway refused
-	// this device's key. A key file can be intact offline and still be dead
-	// server-side; such a key never connects, however good the network is.
+	// IdentityRejected: TLS completed and several gateways refused this
+	// device's key while none accepted it. Observed 2026-10-20, such a
+	// refusal can be temporary (the same key was accepted again an hour
+	// later; concurrent use of one key or a limit after a large scan are
+	// possible causes, not established). Callers set the key aside rather
+	// than delete it.
 	IdentityRejected
 )
 
-// ProbeGateways are MASQUE gateways that answer H2 on 443 (Aether's
-// MASQUE_SEEDS / verified gateways); one that answers is enough to judge.
-var ProbeGateways = []string{"162.159.198.1:443", "162.159.198.2:443", "162.159.197.1:443"}
+// ProbeGateways are MASQUE gateways that accepted a valid key over H2 on
+// 443 from an Iranian ISP (2026-10-20). 162.159.197.x is left out: it
+// answered CONNECT-IP 400 to a key that 162.159.198.x accepted, so it
+// cannot judge a key. Gateways the core itself remembers are tried first.
+var ProbeGateways = []string{"162.159.198.8:443", "162.159.198.76:443", "162.159.198.23:443", "162.159.198.189:443"}
+
+// rejectQuorum: refusals from this many different gateways, and no
+// acceptance, before a key is called dead; one gateway's refusal is noise.
+const rejectQuorum = 2
+
+var rememberedGateway = regexp.MustCompile(`"?(\d{1,3}(?:\.\d{1,3}){3}:\d{1,5})"?`)
+
+// probePeers lists the gateways the core last connected through (its
+// masque-lastconn.toml beside the key), then ProbeGateways, each once.
+func probePeers(masquePath string) []string {
+	var peers []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if !seen[p] && !strings.HasPrefix(p, "162.159.197.") {
+			seen[p] = true
+			peers = append(peers, p)
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(filepath.Dir(masquePath), "masque-lastconn.toml")); err == nil && len(raw) < 64<<10 {
+		for _, m := range rememberedGateway.FindAllStringSubmatch(string(raw), 8) {
+			add(m[1])
+		}
+	}
+	for _, p := range ProbeGateways {
+		add(p)
+	}
+	if len(peers) > 6 {
+		peers = peers[:6]
+	}
+	return peers
+}
 
 var (
 	probeAccepted = regexp.MustCompile(`connect-ip status: 2\d\d|tunnel validated`)
@@ -72,10 +109,19 @@ func ProbeMasqueIdentity(ctx context.Context, binary, masquePath string) (Identi
 	if err := os.WriteFile(copyPath, key, 0o600); err != nil {
 		return IdentityUnknown, err
 	}
-	for _, peer := range ProbeGateways {
+	rejected := 0
+	for _, peer := range probePeers(masquePath) {
 		verdict, err := probeOnce(ctx, binary, dir, copyPath, peer)
-		if err != nil || verdict != IdentityUnknown {
-			return verdict, err
+		if err != nil {
+			return IdentityUnknown, err
+		}
+		switch verdict {
+		case IdentityAccepted:
+			return IdentityAccepted, nil
+		case IdentityRejected:
+			if rejected++; rejected >= rejectQuorum {
+				return IdentityRejected, nil
+			}
 		}
 	}
 	return IdentityUnknown, nil
