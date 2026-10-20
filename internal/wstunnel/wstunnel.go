@@ -55,6 +55,10 @@ type Config struct {
 	// are removed because pinned uTLS 1.8.2 cannot finish their TLS HRR flow.
 	// It is an alternative, not a byte-for-byte official fingerprint.
 	OfficialHello bool
+	// NativeGoTLS is an opt-in baseline for Windscribe WStunnel's Go TLS
+	// handshake. The older Chrome/randomized uTLS choices remain available
+	// for controlled comparisons on the same node and outer SNI.
+	NativeGoTLS bool
 	// Dial opens the TCP leg (directly or through a local anti-DPI core).
 	Dial func(ctx context.Context, addr string) (net.Conn, error)
 	// Timeout bounds TCP, TLS and the upgrade together; 0 means 12 s.
@@ -153,9 +157,36 @@ func DialStealth(ctx context.Context, c Config) (net.Conn, error) {
 // clientTLS builds the outer TLS connection. A WebSocket upgrade requires
 // HTTP/1.1 ALPN, while Stealth carries raw OpenVPN and preserves the chosen
 // fingerprint's ALPN (including Windscribe's randomized offer).
-func clientTLS(ctx context.Context, raw net.Conn, c Config, websocket bool) (*utls.UConn, error) {
+func clientTLS(ctx context.Context, raw net.Conn, c Config, websocket bool) (net.Conn, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = raw.SetDeadline(dl)
+	}
+	if c.NativeGoTLS && websocket {
+		// Use the standard TLS stack for an upstream-style WStunnel
+		// baseline. Leave Stealth's randomized uTLS path unchanged.
+		conf := &tls.Config{
+			ServerName: c.SNI, InsecureSkipVerify: !c.Verify,
+			MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"},
+		}
+		if c.VerifyPeer != nil {
+			check := c.VerifyPeer
+			conf.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				certs := make([]*x509.Certificate, 0, len(rawCerts))
+				for _, data := range rawCerts {
+					cert, err := x509.ParseCertificate(data)
+					if err != nil {
+						return err
+					}
+					certs = append(certs, cert)
+				}
+				return check(certs)
+			}
+		}
+		conn := tls.Client(raw, conf)
+		if err := conn.HandshakeContext(ctx); err != nil {
+			return nil, fmt.Errorf("TLS: %w", err)
+		}
+		return conn, nil
 	}
 	conf := &utls.Config{
 		ServerName:         c.SNI,
