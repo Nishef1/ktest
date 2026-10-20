@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -62,7 +63,7 @@ func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &automaticExit{ctx: ctx, cancel: cancel, done: make(chan struct{}), mode: mode, historyKey: key,
 		// privateDir lets Psiphon's CDN fronting try this network's verified edges.
-		options: nativeOptions{libraryDir: libraryDir, stateDir: filepath.Join(stateDir, "automatic-exits"), privateDir: stateDir}}
+		options: nativeOptions{libraryDir: libraryDir, stateDir: filepath.Join(stateDir, "aether"), privateDir: stateDir}}
 	a.attempt = func(ctx context.Context, p aether.Profile) (*nativeCore, observedExit, error) {
 		o, err := a.optionsForProfile(p)
 		if err != nil {
@@ -116,6 +117,13 @@ func (a *automaticExit) lockColdIdentity(p aether.Profile, dir string) func() {
 // silently replace the direct profile with a carried one.
 func (a *automaticExit) optionsForProfile(p aether.Profile) (nativeOptions, error) {
 	o := a.options
+	// Earlier Balanced/Fast used automatic-exits while standalone Aether
+	// used aether. Both now share only validated identities in aether/.
+	// Never discard or overwrite an existing valid saved key.
+	legacy := filepath.Join(o.privateDir, "automatic-exits")
+	if _, err := aether.MigrateIdentityFiles(o.stateDir, legacy); err != nil {
+		return o, fmt.Errorf("reconcile previous Android identities: %w", err)
+	}
 	o.profile = &p
 	if p.LocalCarrier() {
 		address, err := a.localCarrier()
