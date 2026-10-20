@@ -7,22 +7,22 @@ import (
 	"os"
 
 	"github.com/Nishef1/ktest/internal/aether"
-	"golang.org/x/term"
+	xterm "golang.org/x/term"
 )
 
 // The password never appears in command-line arguments or shell history.
 func readWarpBackupPassword(confirm bool) (string, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !xterm.IsTerminal(int(os.Stdin.Fd())) {
 		return "", errors.New("encrypted WARP backup needs an interactive terminal for hidden password entry")
 	}
 	fmt.Fprint(os.Stderr, "Backup password (12+ characters): ")
-	first, err := term.ReadPassword(int(os.Stdin.Fd()))
+	first, err := xterm.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil { return "", err }
 	if len(first) < 12 { return "", errors.New("password must be at least 12 characters") }
 	if confirm {
 		fmt.Fprint(os.Stderr, "Repeat backup password: ")
-		second, err := term.ReadPassword(int(os.Stdin.Fd()))
+		second, err := xterm.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Fprintln(os.Stderr)
 		if err != nil { return "", err }
 		if string(first) != string(second) { return "", errors.New("passwords do not match") }
