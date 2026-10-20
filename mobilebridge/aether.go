@@ -41,9 +41,14 @@ func AetherProfileCatalog(mode, method string) (string, error) {
 		for _, choice := range aether.Methods() {
 			if compatible[choice.ID] {
 				if choice.ID == "auto" {
-					// In Aether Auto the Android native launcher retries
-					// compatible WARP profiles after a failed exit check.
-					choice.Title = "Automatic (tries compatible WARP transports)"
+					// Only the Aether mode retries WARP transport families.
+					// Psiphon Auto selects one compatible Psiphon entry;
+					// do not imply it also tries WireGuard or MASQUE.
+					if mode == "aether" {
+						choice.Title = "Automatic (tries Aether transports)"
+					} else if mode == "psiphon" {
+						choice.Title = "Default Psiphon (direct)"
+					}
 				}
 				methods = append(methods, choice)
 			}
@@ -67,7 +72,7 @@ func AetherProfileCatalog(mode, method string) (string, error) {
 		Methods  []aether.Method `json:"methods"`
 		Profiles []entry         `json:"profiles"`
 		Note     string          `json:"note"`
-	}{methods, entries, "Shared CLI profiles without ECH-dependent variants. Android Aether Auto retries WARP transports; Aether selects gateways within each transport. Native availability and live egress require separate checks."})
+	}{methods, entries, "Built-in profiles (including core-managed ECH fallback) without independently fetched ECH-dependent variants. Only Aether Auto retries independent WARP transports; Psiphon and Tor are separate modes. Native availability and foreign egress require runtime verification."})
 	return string(raw), err
 }
 
