@@ -2,17 +2,20 @@ package mobilebridge
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
+	"github.com/Nishef1/ktest/internal/front"
 )
 
 // bootstrapAndroidWARP gives a phone with no VPN an initial path to Cloudflare
-// registration: a local Fast anti-DPI SOCKS carrier when available, followed
-// by fragmented HTTPS and a Psiphon CDN reverse bootstrap using the same
+// registration: ECH with a key ktest fetched itself, then a local Fast
+// anti-DPI SOCKS carrier when available, fragmented HTTPS and a Psiphon CDN
+// reverse bootstrap using the same
 // signed Android executable bundle. The last-resort native Aether startup can
 // still attempt its own registration; a failed bootstrap never deletes keys.
 // Registration output is discarded (it can contain access tokens).
@@ -28,12 +31,30 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	// material is staged by Aether when the outer tunnel is established.
 	identity := req[0]
 	path := filepath.Join(o.stateDir, identity.Name)
+	if identity.Protocol == "masque" && aether.CheckIdentity(path, "masque") == nil {
+		// A key can be intact on disk and refused by every gateway; then it
+		// never connects. Set it aside (never deleted) and register anew.
+		if verdict, err := aether.ProbeMasqueIdentity(ctx, paths.Aether, path); err == nil && verdict == aether.IdentityRejected {
+			if _, err := aether.SetAsideRejectedIdentity(path); err != nil {
+				return err
+			}
+		}
+	}
 	if err := aether.CheckIdentity(path, identity.Protocol); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	routes := []aether.EnrollmentRoute{}
+	// ECH first, never with --fragment: where the API name itself is
+	// filtered it is the route that registers (desktop, 2026-10-20).
+	echCtx, stopECH := context.WithTimeout(ctx, 15*time.Second)
+	if config, edge, err := front.FetchCloudflareECH(echCtx); err == nil {
+		routes = append(routes, aether.EnrollmentRoute{
+			Label: "ECH registration", Args: []string{"--ech", base64.StdEncoding.EncodeToString(config), "--api-address", edge},
+		})
+	}
+	stopECH()
 	if o.carrier != "" {
 		routes = append(routes, aether.EnrollmentRoute{
 			Label: "local Fast anti-DPI", Args: []string{"--upstream", "socks5://" + o.carrier},

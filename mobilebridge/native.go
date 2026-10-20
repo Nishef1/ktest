@@ -275,7 +275,13 @@ func (n *nativeCore) stop() {
 }
 
 func verifyModeUpstream(ctx context.Context, mode, address string) (observedExit, error) {
-	checked, err := verifyLocalUpstream(ctx, address)
+	verify := verifyLocalUpstream
+	if mode == "aether" {
+		// Like the desktop and PattNG: a working WARP counts even when its IP
+		// geolocates to Iran; AI stays on foreign exits (connectionpolicy).
+		verify = verifyLocalCarrier
+	}
+	checked, err := verify(ctx, address)
 	if err == nil && mode == "tor" {
 		err = egresscheck.ProbeTorExit(ctx, checked.Address)
 	}

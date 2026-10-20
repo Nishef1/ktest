@@ -57,7 +57,9 @@ func ClassifyIdentityLine(line string, tlsSeen bool) (verdict IdentityVerdict, t
 // (no scan), whether the key in masquePath is accepted. The core runs on a
 // private copy of the key so the saved file is never rewritten.
 func ProbeMasqueIdentity(ctx context.Context, binary, masquePath string) (IdentityVerdict, error) {
-	dir, err := os.MkdirTemp("", "ktest-identity-")
+	// Beside the key, in the private state directory: Android apps often
+	// cannot write the system temp directory.
+	dir, err := os.MkdirTemp(filepath.Dir(masquePath), ".identity-")
 	if err != nil {
 		return IdentityUnknown, err
 	}

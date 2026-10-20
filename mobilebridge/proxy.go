@@ -13,6 +13,7 @@ import (
 	"github.com/Nishef1/ktest/internal/connectiondns"
 	"github.com/Nishef1/ktest/internal/connectionpolicy"
 	"github.com/Nishef1/ktest/internal/connectionsession"
+	"github.com/Nishef1/ktest/internal/egresscheck"
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -376,7 +377,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		upstream = checked.Address
 		upstreams = append(upstreams, smartproxy.Upstream{
 			Name: "Verified " + mode + " SOCKS5", Addr: upstream,
-			Exit: true, AIEligible: true, Late: mode == "balanced" || mode == "fast",
+			Exit: true, AIEligible: foreignRegion(checked), Late: mode == "balanced" || mode == "fast",
 			Rank: 9,
 		})
 	}
@@ -500,7 +501,16 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 	}
 	if upstream != "" {
+		// VerifyExit guards AI destinations and stays foreign-only; the
+		// carrier check serves ordinary sites in Aether (ExitRequired).
 		config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {
+			checked, err := verifyLocalUpstream(ctx, upstream)
+			if err == nil && mode == "tor" {
+				err = egresscheck.ProbeTorExit(ctx, checked.Address)
+			}
+			return err
+		}
+		config.VerifyCarrier = func(ctx context.Context, _ smartproxy.Upstream) error {
 			_, err := verifyModeUpstream(ctx, mode, upstream)
 			return err
 		}

@@ -22,6 +22,22 @@ type observedExit struct {
 // verifyLocalUpstream checks the existing CLI -exit-socks route using the
 // exact same Go TLS-protected foreign-exit probe as the desktop CLI.
 func verifyLocalUpstream(parent context.Context, address string) (observedExit, error) {
+	return checkLocalUpstream(parent, address, egresscheck.ProbeForeignExit)
+}
+
+// verifyLocalCarrier is verifyLocalUpstream without the location rule: the
+// exit works, wherever it geolocates. Aether accepts such an exit for
+// ordinary sites; foreignRegion says whether it may also carry AI traffic.
+func verifyLocalCarrier(parent context.Context, address string) (observedExit, error) {
+	return checkLocalUpstream(parent, address, egresscheck.ProbeExitLocation)
+}
+
+func foreignRegion(checked observedExit) bool {
+	_, _, err := egresscheck.ParseForeignTrace("ip=" + checked.IP + "\nloc=" + checked.Region)
+	return err == nil
+}
+
+func checkLocalUpstream(parent context.Context, address string, probe func(context.Context, string) (string, string, error)) (observedExit, error) {
 	host, portText, err := net.SplitHostPort(strings.TrimSpace(address))
 	if err != nil {
 		return observedExit{}, errors.New("SOCKS address must be host:port")
@@ -38,7 +54,7 @@ func verifyLocalUpstream(parent context.Context, address string) (observedExit, 
 		return observedExit{}, errors.New("only a loopback SOCKS server is allowed")
 	}
 	address = net.JoinHostPort(host, portText)
-	outIP, country, err := egresscheck.ProbeForeignExit(parent, address)
+	outIP, country, err := probe(parent, address)
 	if err != nil {
 		return observedExit{}, err
 	}
