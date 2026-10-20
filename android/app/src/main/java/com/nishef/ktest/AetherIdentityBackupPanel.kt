@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -59,7 +58,7 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
                         val encoded = Mobilebridge.exportAetherIdentityBackup(privateDir, secret)
                         val data = Base64.decode(encoded, Base64.DEFAULT)
                         context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(data) }
-                            ?: error("Cannot open the chosen backup document")
+                            ?: throw IllegalStateException("Cannot open the chosen backup document")
                     }
                     message = "Encrypted WARP backup saved to your selected location. Keep the password separately."
                     refreshStatus()
@@ -85,9 +84,16 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
             scope.launch {
                 try {
                     val count = withContext(Dispatchers.IO) {
-                        val bytes = context.contentResolver.openInputStream(uri)?.use {
-                            it.readNBytes((8 shl 20) + 1)
-                        } ?: error("Cannot open the selected backup document")
+                        val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+                            val buffer = java.io.ByteArrayOutputStream()
+                            val chunk = ByteArray(8192)
+                            while (buffer.size() <= (8 shl 20)) {
+                                val count = stream.read(chunk)
+                                if (count < 0) break
+                                buffer.write(chunk, 0, count)
+                            }
+                            buffer.toByteArray()
+                        } ?: throw IllegalStateException("Cannot open the selected backup document")
                         require(bytes.isNotEmpty() && bytes.size <= (8 shl 20)) {
                             "Invalid or oversized backup document"
                         }
