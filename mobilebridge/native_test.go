@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/coreprocess"
 )
 
