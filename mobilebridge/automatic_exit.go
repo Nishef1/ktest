@@ -37,6 +37,7 @@ type automaticExit struct {
 	attempt    func(context.Context, aether.Profile) (*nativeCore, observedExit, error)
 	carrierMu  sync.Mutex
 	carrier    *connectionsession.Session
+	enrollMu   sync.Mutex // serialize only cold first-use WARP identity provisioning
 }
 
 func shouldWarmAutomaticExit(mode string) bool { return mode == "balanced" }
@@ -66,6 +67,19 @@ func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 		o, err := a.optionsForProfile(p)
 		if err != nil {
 			return nil, observedExit{}, err
+		}
+		// Multiple Balanced workers may otherwise enroll different identities
+		// concurrently into the same masque.toml/wg.toml files. PattNG stages
+		// enrollment separately; here serialize only the *cold* registration
+		// phase. Once the identity exists, ordinary gateway probing remains
+		// parallel. Psiphon/Tor require no shared WARP identity.
+		if len(aether.IdentityRequirements(p)) > 0 && !aether.ReadyIdentity(p, o.stateDir) {
+			a.enrollMu.Lock()
+			if aether.ReadyIdentity(p, o.stateDir) {
+				a.enrollMu.Unlock()
+			} else {
+				defer a.enrollMu.Unlock()
+			}
 		}
 		n, err := launchNative(ctx, mode, o)
 		if err != nil {
