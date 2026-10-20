@@ -358,7 +358,11 @@ func runWarp(args []string) int {
 	}
 	u := newTerm(os.Stdout)
 	active := 0
-	for _, enabled := range []bool{*enable, *disable, *backup != "", *restore != ""} { if enabled { active++ } }
+	for _, enabled := range []bool{*enable, *disable, *backup != "", *restore != ""} {
+		if enabled {
+			active++
+		}
+	}
 	if active > 1 {
 		u.Line(toneFail, "Choose exactly one of -enable, -disable, -backup or -restore")
 		return 2
