@@ -148,3 +148,36 @@ func TestAndroidAutoTriesIndependentWarpTransportsOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestAndroidAutoECHProfilesKeepDirectFallbackAndTransportIsolation(t *testing.T) {
+	withECH, err := nativeAutoCandidatesWithECH(false, "valid-config", "162.159.197.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ech, fallback int
+	for _, p := range withECH {
+		if p.Psiphon() || p.Has("--tor-only") {
+			t.Fatalf("ECH method discovery crossed Aether's exit-only boundary: %v", p.Args)
+		}
+		if p.Has("--ech") {
+			ech++
+			if p.Value("--api-address") != "162.159.197.1" {
+				t.Fatalf("ECH profile omitted its API endpoint: %v", p.Args)
+			}
+		} else {
+			fallback++
+		}
+	}
+	if ech == 0 || fallback == 0 {
+		t.Fatalf("ECH-only catalog has no connection fallback: ECH=%d direct=%d", ech, fallback)
+	}
+	carried, err := nativeAutoCandidatesWithECH(true, "valid-config", "162.159.197.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range carried {
+		if !aether.CanCarryLocally(p) {
+			t.Fatalf("TCP-only Fast carrier was given UDP method %s", p.Method())
+		}
+	}
+}
