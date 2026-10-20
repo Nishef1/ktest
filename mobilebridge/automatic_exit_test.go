@@ -2,6 +2,9 @@ package mobilebridge
 
 import (
 	"context"
+	"encoding/base64"
+	"os"
+	"path/filepath"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -163,4 +166,70 @@ func TestAutomaticStandaloneExitsUseAnIndependentLocalCarrier(t *testing.T) {
 			t.Fatal("carrier setup changed the exit profile")
 		}
 	}
+}
+
+
+func TestAutomaticExitOnlySerializesColdWarpIdentity(t *testing.T) {
+	a := &automaticExit{}
+	dir := t.TempDir()
+	warp := aether.Profile{Args: []string{"--wg"}}
+	psiphon := aether.Profile{Args: []string{"--psiphon-only"}}
+	a.enrollMu.Lock()
+	blocked := make(chan struct{})
+	go func() {
+		release := a.lockColdIdentity(warp, dir)
+		defer release()
+		close(blocked)
+	}()
+	select {
+	case <-blocked:
+		a.enrollMu.Unlock()
+		t.Fatal("first-time WARP registration bypassed its shared identity lock")
+	case <-time.After(30 * time.Millisecond):
+	}
+	// The other foreign backend must never wait for WARP key registration.
+	ready := make(chan struct{})
+	go func() {
+		release := a.lockColdIdentity(psiphon, dir)
+		release()
+		close(ready)
+	}()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		a.enrollMu.Unlock()
+		t.Fatal("Psiphon bootstrap blocked behind missing WARP keys")
+	}
+	a.enrollMu.Unlock()
+	select {
+	case <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("cold registration stayed locked after the owner finished")
+	}
+
+	// Once a valid identity was saved, ongoing Aether probes may race:
+	// they cannot be forced through the cold-start registration gate.
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	identity := "device_id = \"test-device\"\naccess_token = \"test-token\"\nipv4 = \"172.16.0.2\"\nwg_private_key = \"" + key +
+		"\"\nwg_peer_public_key = \"" + key + "\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "wg.toml"), []byte(identity), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !aether.ReadyIdentity(warp, dir) {
+		t.Fatal("valid persisted test identity was not recognized")
+	}
+	a.enrollMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		release := a.lockColdIdentity(warp, dir)
+		release()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		a.enrollMu.Unlock()
+		t.Fatal("warm connection was needlessly serialized")
+	}
+	a.enrollMu.Unlock()
 }
