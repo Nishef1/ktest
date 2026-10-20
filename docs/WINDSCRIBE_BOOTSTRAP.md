@@ -1,5 +1,29 @@
 # Windscribe bootstrap and carrier tests
 
+## Windscribe interoperability fixes (2026-10-20)
+
+- **Cold-start node lookup:** Provider mob-v2 and legacy catalog endpoints
+  are now hedged after 500 ms when the first request hangs, instead of
+  waiting for a blocked API before considering the fallback. The first
+  valid provider response wins; canceled/invalid payloads are not published.
+- **Lower catalog overhead:** A partial valid refresh is usable and does
+  not trigger a complete multi-source redownload every 30 seconds. Missing
+  exact TCP node mappings still use bounded early retries, while complete
+  provider failure retains the short recovery schedule.
+- **WStunnel TLS comparison:** Direct provider-advertised WStunnel nodes
+  now offer a Go standard TLS baseline (`hello=go-tls`) alongside the
+  existing Chrome and randomized uTLS alternatives. All three use the
+  same node address, SNI, WebSocket Host/path, and inner OpenVPN framing.
+  The legacy `hello=windscribe` label was misleading: the randomized
+  uTLS attempt is explicitly labeled `hello=randomized`. The Go TLS
+  baseline is a comparable transport, not a claim of byte-identical
+  Windscribe Desktop behavior or successful VPN authentication.
+- **Scope:** These are bounded TCP/OpenVPN bootstrap improvements.
+  They do not carry WireGuard/IKEv2/OpenVPN UDP through an HTTP CONNECT
+  bridge. Those protocols need a UDP-capable data path and separate
+  device/ISP validation; WStunnel success does not establish that path.
+
+
 The **local Windscribe** mode (`-mode windscribe`) helps the installed Windows client reach its TCP endpoint using local packet-level anti-DPI methods. It never launches Psiphon, Aether, WARP, Tor or an external SOCKS/Worker exit, even when those cores are installed. Windscribe owns VPN authentication and final VPN IP.
 
 The separately selected **Windscribe through Aether** (`-mode windscribe-aether`) uses a measured WARP carrier for raw OpenVPN TCP. It does not wrap that stream again in WStunnel or silently fall back to Psiphon/local methods. Keep ktest/Aether running; exclude their helper transport from Windscribe's tunnel to avoid recursion. A WARP carrier may exit in Iran; that permits carrying Windscribe but does not authorize direct AI traffic. See [methods, diagnosis and identity handling](NETWORK_DIAGNOSIS.md).
