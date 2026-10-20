@@ -183,6 +183,12 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	if err := os.MkdirAll(o.stateDir, 0700); err != nil {
 		return nil, fmt.Errorf("native private state: %w", err)
 	}
+	if filepath.Base(o.stateDir) == "aether" {
+		legacy := filepath.Join(filepath.Dir(o.stateDir), "automatic-exits")
+		if _, err := aether.MigrateIdentityFiles(o.stateDir, legacy); err != nil {
+			return nil, fmt.Errorf("migrate existing Android WARP identity: %w", err)
+		}
+	}
 	supported, err := aether.InspectProfiles(ctx, paths.Aether, []aether.Profile{p})
 	if err != nil {
 		return nil, err
