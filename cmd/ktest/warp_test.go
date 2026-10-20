@@ -227,13 +227,13 @@ func TestExitStatusUpdatesDuringSearchAndDeadCoreIsRemovedImmediately(t *testing
 	m := &warpManager{proxy: p, t: plainTerm(&output)}
 	m.searching.Store(true)
 	status := m.status
-	if !strings.Contains(status(), "0 exits available") {
+	if !strings.Contains(status(), "0 exits ·") {
 		t.Fatal(status())
 	}
 	if err := p.Add(smartproxy.Upstream{Name: "Exit: test", Exit: true, AIEligible: true}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(status(), "1 exit available") || !strings.Contains(status(), "search continuing") {
+	if !strings.Contains(status(), "1 exit ·") || !strings.Contains(status(), "search continuing") {
 		t.Fatal(status())
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -243,6 +243,7 @@ func runConnect(args []string) int {
 		u.Line(toneWarn, "Saved settings unavailable; using defaults: %v", settingsErr)
 	}
 	fs := connectFlagSet(&o)
+	save := fs.Bool("save", false, "keep this run's flags as the defaults for later runs; without it flags apply to this run only")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -271,7 +272,7 @@ func runConnect(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	if !handoff && settings.rememberFlags(fs) {
+	if !handoff && *save && settings.rememberFlags(fs) {
 		if err := saveSettings(path, settings); err != nil {
 			u.Line(toneWarn, "Settings were not saved: %v", err)
 		}
@@ -287,6 +288,8 @@ func runConnect(args []string) int {
 	return connectSession(ctx, o, nil, u)
 }
 
+var errAnotherSession = errors.New("another ktest connection is already running; disconnect it first (two sessions fight over the same ports, WARP keys and system proxy)")
+
 // siteEvents prints the live feed: one line per site when its winning path is
 // first known or changes, and at most one failure line per site every 20 s.
 type siteEvents struct {
@@ -294,6 +297,7 @@ type siteEvents struct {
 	last             map[string]string
 	failedAt         map[string]time.Time
 	ok, fail         atomic.Int64
+	blocked          atomic.Int64 // refused by policy, not by the network
 	tcpOnly          atomic.Int64
 	latencyOK        atomic.Int64
 	latencyFail      atomic.Int64
@@ -466,6 +470,15 @@ func (s *siteEvents) print(e smartproxy.Event) {
 		t.Line(k, "%s · %s · %s · %s", t.Bold(target), t.tinted(k, state), t.tinted(k, shortDur(e.Took)), path)
 		return
 	}
+	if e.Blocked {
+		// Deliberate and the same every time: say it once per host.
+		s.blocked.Add(1)
+		if s.last[key] != "blocked" {
+			s.last[key] = "blocked"
+			t.Line(toneWarn, "%s · %s · needs an exit outside Iran", t.Bold(target), t.Yellow("BLOCKED BY POLICY"))
+		}
+		return
+	}
 	s.fail.Add(1)
 	if s.windscribe && strings.HasPrefix(e.Err, "Windscribe race failed") {
 		return
@@ -501,6 +514,12 @@ func (s *siteEvents) detail(reason string) {
 // the caller already measured.
 func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.Result, t *term) int {
 	sessionStarted := time.Now() // the status panel counts the search from here
+	release, err := claimSession()
+	if err != nil {
+		t.Line(toneFail, "%v", err)
+		return 1
+	}
+	defer release()
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("Coverage: %s", connectionCoverage(o))
 	t.Note("%s", o.mode.message())
@@ -604,7 +623,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	step.Finish(k, "")
 	switch {
 	case poisoned:
-		t.Note("system DNS appears intercepted: www.youtube.com → %s (private/block-page address); encrypted DNS will be attempted, not yet verified", ip)
+		if o.noDoH {
+			t.Note("system DNS appears intercepted: www.youtube.com → %s (private/block-page address); -no-doh keeps it in use", ip)
+		} else {
+			t.Note("system DNS appears intercepted: www.youtube.com → %s (private/block-page address); ktest resolves sites over encrypted DNS instead", ip)
+		}
 	case derr != nil:
 		t.Note("system DNS did not answer for www.youtube.com")
 	default:
@@ -1105,7 +1128,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			return 0
 		}
 		if available {
-			wstep.Finish(toneOK, "foreign route available")
+			wstep.Finish(toneOK, exitReadyNote(o.mode, proxy))
 		} else {
 			verdict = toneFail
 			wstep.Finish(toneWarn, "still searching; managed traffic remains blocked until an exit verifies")
@@ -1211,7 +1234,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	field("Policy", string(o.mode))
 	if !o.mode.isWindscribe() {
-		field("Foreign", "AI and TikTok: verified foreign exit only; blocked when unavailable")
+		field("AI", "AI and TikTok only through an exit verified outside Iran; blocked otherwise")
 	} else {
 		if o.mode == ModeWindscribeAether {
 			field("AI", "SOCKS AI traffic requires verified foreign WARP; normal apps use Windscribe's VPN")
@@ -1342,6 +1365,9 @@ func summarize(t *term, feed *siteEvents, fronter *front.Fronter) {
 	}
 	if n := feed.rejected.Load(); n > 0 {
 		t.Line(toneWarn, "%d application %s; another route preferred on retry", n, plural(int(n), "refusal", "refusals"))
+	}
+	if n := feed.blocked.Load(); n > 0 {
+		t.Note("%d %s blocked by policy (AI/TikTok need an exit outside Iran); not network failures", n, plural(int(n), "connection", "connections"))
 	}
 	if n := feed.earlyClosed.Load(); n > 0 {
 		t.Note("%d connections closed or stalled before post-hello response data", n)
@@ -1506,6 +1532,17 @@ func exitReady(mode ConnectionMode, p *smartproxy.Proxy) bool {
 		return p.HasWorkingExit()
 	}
 	return p.HasVerifiedExit()
+}
+
+// exitReadyNote says what kind of exit exitReady found.
+func exitReadyNote(mode ConnectionMode, p *smartproxy.Proxy) string {
+	if p.HasVerifiedExit() {
+		return "exit outside Iran available"
+	}
+	if mode == ModeAether {
+		return "WARP exit available (located in Iran: AI and TikTok stay blocked)"
+	}
+	return "exit available"
 }
 
 func waitForVerifiedExit(ctx context.Context, p *smartproxy.Proxy) bool {

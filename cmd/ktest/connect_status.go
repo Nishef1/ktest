@@ -56,7 +56,7 @@ func (s *connectionStatus) view(now time.Time) statusView {
 	case s.mode == ModeAether && total > 0:
 		v.key, v.tone, v.title = "connected", toneOK, "CONNECTED"
 		status = t.Green("Connected through WARP") + " · " + plainDuration(now.Sub(s.since))
-		exitLine = "AI/TikTok: " + t.Yellow("blocked") + " · this WARP IP is located in Iran"
+		exitLine = "AI/TikTok: " + t.Yellow("blocked") + " · WARP IP located in Iran; use Balanced or Psiphon for AI"
 	case s.mode.exitOnly() && now.Sub(s.started) >= notConnectedAfter:
 		v.key, v.tone, v.title = "failing", toneFail, "NOT CONNECTED"
 		status = t.Red("No working exit yet") + " · still searching for " + plainDuration(now.Sub(s.started)) + "; traffic is blocked"
@@ -106,8 +106,12 @@ func (s *connectionStatus) view(now time.Time) statusView {
 		v.lines = append(v.lines, "         "+t.Dim(exitText))
 	}
 	if s.feed != nil {
-		if ok, fail := s.feed.ok.Load(), s.feed.fail.Load(); ok+fail > 0 {
-			v.lines = append(v.lines, fmt.Sprintf("Traffic  %d connections opened · %d without a working route", ok, fail))
+		if ok, fail, blocked := s.feed.ok.Load(), s.feed.fail.Load(), s.feed.blocked.Load(); ok+fail+blocked > 0 {
+			line := fmt.Sprintf("Traffic  %d opened · %d failed", ok, fail)
+			if blocked > 0 {
+				line += fmt.Sprintf(" · %d blocked by policy", blocked)
+			}
+			v.lines = append(v.lines, line)
 		}
 	}
 	v.lines = append(v.lines, "Stop     "+s.stop)

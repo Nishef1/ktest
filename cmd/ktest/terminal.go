@@ -28,13 +28,15 @@ import (
 type launcher func(ctx context.Context, dns *dnscheck.Result) error
 
 // terminal is the interactive menu. Every action runs in the foreground; Enter
-// or Ctrl+C ends a connection or scan and returns to the menu.
+// ends a connection or scan and returns to the menu. Ctrl+C quits the program
+// from anywhere, after the running job has cleaned up.
 type terminal struct {
 	ui *term
 
 	mu             sync.Mutex
 	cancel         context.CancelFunc // the running connection or scan
 	mainMenuActive bool
+	quitting       bool // Ctrl+C: the running job ends and the program quits
 
 	settings     userSettings
 	settingsFile string
@@ -206,14 +208,11 @@ func findItem(key string) (menuItem, bool) {
 }
 
 // input owns stdin, so a running connection can wait for Enter without
-// swallowing the next menu choice. Ctrl+C closes only the idle main menu;
-// submenus receive a Back request.
+// swallowing the next menu choice. quit closes on Ctrl+C.
 type input struct {
-	lines       <-chan string
-	request     func() // asks the reader for the next line; nil in tests
-	quit        <-chan struct{}
-	back        <-chan struct{}
-	interrupted bool
+	lines   <-chan string
+	request func() // asks the reader for the next line; nil in tests
+	quit    <-chan struct{}
 }
 
 // enter asks for a line and returns the channel it arrives on. A job waits on
@@ -253,9 +252,6 @@ func (in *input) read() (string, bool) {
 		return strings.TrimSpace(asciiDigits(l)), ok
 	case <-in.quit:
 		return "", false
-	case <-in.back:
-		in.interrupted = true
-		return "", false
 	}
 }
 
@@ -282,7 +278,8 @@ func drainLines(lines <-chan string) {
 }
 
 // run is foreground that also reports whether the job ended by itself rather
-// than being cancelled by Enter or Ctrl+C.
+// than being cancelled by Enter. After Ctrl+C it reports alive=false, so every
+// menu unwinds and the program quits.
 func (t *terminal) run(job func(ctx context.Context), lines ...<-chan string) (alive, finished bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.mu.Lock()
@@ -306,6 +303,9 @@ func (t *terminal) run(job func(ctx context.Context), lines ...<-chan string) (a
 	<-done
 	t.mu.Lock()
 	t.cancel = nil
+	if t.quitting {
+		alive = false
+	}
 	t.mu.Unlock()
 	if alive && enter != nil {
 		drainLines(enter)
@@ -332,29 +332,31 @@ func (t *terminal) holdResult(in *input) bool {
 		return true
 	}
 	t.print("\n  Press Enter to return to the menu > ")
-	if _, ok := in.read(); !ok {
-		if in.interrupted {
-			in.interrupted = false
-			return true
-		}
-		return false
-	}
-	return true
+	_, ok := in.read()
+	return ok
 }
 
-// An idle submenu goes back one level; only the idle main menu exits.
-func (t *terminal) handleInterrupt(back chan<- struct{}, quit chan struct{}) bool {
+// handleInterrupt quits the program on the first Ctrl+C, wherever it is
+// pressed. It is never a Back key (Enter and 0 are): a running job is
+// cancelled so it can restore the system proxy, TUN routes and helper
+// processes, and every prompt then reports closed input.
+func (t *terminal) handleInterrupt(quit chan struct{}) {
 	t.mu.Lock()
+	t.quitting = true
 	cancel := t.cancel
 	t.mu.Unlock()
 	if cancel != nil {
 		cancel()
-		return false
 	}
-	// Ctrl+C keeps its usual meaning: stop the running job, otherwise quit.
 	close(quit)
-	return true
 }
+
+// A second Ctrl+C, or cleanup that outlasts forceQuitAfter, ends the process
+// at once. Variables so tests never exit the test binary.
+var (
+	forceQuitAfter = 10 * time.Second
+	forceQuit      = func() { reapTracked(); os.Exit(130) }
+)
 
 // lineSource hands out stdin one line at a time, and only when asked.
 //
@@ -454,23 +456,29 @@ func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-c
 	}
 	base = options.base
 	quit := make(chan struct{})
-	back := make(chan struct{}, 1)
 	readInterrupts := make(chan struct{}, 1)
 	finished := make(chan struct{})
 	defer close(finished)
 	go func() {
+		var deadline <-chan time.Time
 		for {
 			select {
 			case <-finished:
+				return
+			case <-deadline:
+				forceQuit()
 				return
 			case <-interrupts:
 				select {
 				case readInterrupts <- struct{}{}:
 				default:
 				}
-				if t.handleInterrupt(back, quit) {
+				if deadline != nil { // second Ctrl+C
+					forceQuit()
 					return
 				}
+				t.handleInterrupt(quit)
+				deadline = time.After(forceQuitAfter)
 			}
 		}
 	}()
@@ -488,15 +496,9 @@ func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-c
 		consoleInput = xterm.IsTerminal(int(file.Fd()))
 	}
 	go scanMenuInput(in, src, finished, readInterrupts, consoleInput)
-	stdin := &input{lines: src.lines, request: src.request, quit: quit, back: back}
+	stdin := &input{lines: src.lines, request: src.request, quit: quit}
 
 	for {
-		// A Back request left over from a submenu must not be mistaken for the
-		// Ctrl+C that exits from the idle main menu.
-		select {
-		case <-back:
-		default:
-		}
 		t.mu.Lock()
 		t.mainMenuActive = true
 		t.mu.Unlock()
@@ -506,20 +508,12 @@ func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-c
 		t.mainMenuActive = false
 		t.mu.Unlock()
 		if !ok {
-			if stdin.interrupted {
-				stdin.interrupted = false
-				continue
-			}
 			t.print("\n")
 			return 0
 		}
 		switch strings.ToLower(line) {
 		case "":
 			if !t.connectFromMenu(base, stdin, t.options.mode) {
-				if stdin.interrupted {
-					stdin.interrupted = false
-					continue
-				}
 				return 0
 			}
 			continue
@@ -532,10 +526,6 @@ func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-c
 			continue
 		}
 		if !it.action(t, base, stdin) {
-			if stdin.interrupted {
-				stdin.interrupted = false
-				continue
-			}
 			return 0
 		}
 	}
@@ -544,7 +534,7 @@ func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-c
 func (t *terminal) menuConnectOptions(base string, mode ConnectionMode) connectOptions {
 	o := optionsForMode(t.options, mode)
 	o.base = base
-	o.stopHint = "Press Enter or Ctrl+C to disconnect and return to the menu"
+	o.stopHint = "Press Enter to disconnect and return to the menu · Ctrl+C quits"
 	return o
 }
 

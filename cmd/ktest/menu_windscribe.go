@@ -40,26 +40,14 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 			alive := t.connectFromMenu(base, in, mode)
 			t.options.ws.zapret = previous
 			if !alive {
-				if in.interrupted {
-					in.interrupted = false
-					continue
-				}
 				return false
 			}
 		case "3":
 			if !t.windscribeZapretMenu(base, in) {
-				if in.interrupted {
-					in.interrupted = false
-					continue
-				}
 				return false
 			}
 		case "4":
 			if !t.windscribeToolsMenu(base, in) {
-				if in.interrupted {
-					in.interrupted = false
-					continue
-				}
 				return false
 			}
 		default:
@@ -147,10 +135,6 @@ func (t *terminal) windscribeToolsMenu(base string, in *input) bool {
 			message = "Select 1-10, or 0"
 		}
 		if !alive {
-			if in.interrupted {
-				in.interrupted = false
-				continue
-			}
 			return false
 		}
 	}

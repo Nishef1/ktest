@@ -215,6 +215,9 @@ type Event struct {
 	// Stall marks a relayed flow that went silent after the handshake while
 	// still open; it is scored like an early close.
 	Stall bool
+	// Blocked: the mode's policy permits no route for this host (for example
+	// AI with no exit outside Iran). Deliberate, not a network failure.
+	Blocked bool
 }
 
 func (c *Config) defaults() {
@@ -831,7 +834,7 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 	}
 	if len(order) == 0 {
 		err := fmt.Errorf("%s: no permitted foreign exit; protected site blocked (fail-closed)", host)
-		p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Took: time.Since(began), Err: err.Error()})
+		p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Took: time.Since(began), Err: err.Error(), Blocked: true})
 		return winner{}, err
 	}
 	// Late paths go to the back, behind a gate that opens when everything else

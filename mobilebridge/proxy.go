@@ -45,6 +45,7 @@ type proxyDiagnostics struct {
 	dnsError        string
 	tcpAttempts     int
 	tcpFailures     int
+	tcpBlocked      int // refused by the mode's policy, not the network
 	tlsResponses    int
 	udpAssociations int
 	udpFailures     int
@@ -73,6 +74,7 @@ type proxyReport struct {
 	DNSError        string `json:"dns_error,omitempty"`
 	TCPAttempts     int    `json:"tcp_attempts"`
 	TCPFailures     int    `json:"tcp_failures"`
+	TCPBlocked      int    `json:"tcp_blocked"`
 	TLSResponses    int    `json:"tls_responses"`
 	UDPAssociations int    `json:"udp_associations"`
 	UDPFailures     int    `json:"udp_failures"`
@@ -131,6 +133,7 @@ func currentReportLocked() proxyReport {
 	activeProxy.diagnostics.mu.Lock()
 	report.DNSFailures, report.DNSError = activeProxy.diagnostics.dnsFailures, activeProxy.diagnostics.dnsError
 	report.TCPAttempts, report.TCPFailures, report.TLSResponses = activeProxy.diagnostics.tcpAttempts, activeProxy.diagnostics.tcpFailures, activeProxy.diagnostics.tlsResponses
+	report.TCPBlocked = activeProxy.diagnostics.tcpBlocked
 	report.UDPAssociations, report.UDPFailures, report.UDP443Failures = activeProxy.diagnostics.udpAssociations, activeProxy.diagnostics.udpFailures, activeProxy.diagnostics.udp443Failures
 	report.LastRoute, report.LastRouteMS, report.LastConnectMS = activeProxy.diagnostics.lastPath, activeProxy.diagnostics.lastRouteMS, activeProxy.diagnostics.lastConnectMS
 	report.LastFailure = activeProxy.diagnostics.lastFailure
@@ -428,7 +431,10 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 		if e.Port != "53" {
 			diagnostics.tcpAttempts++
-			if e.Err != "" {
+			switch {
+			case e.Blocked:
+				diagnostics.tcpBlocked++
+			case e.Err != "":
 				diagnostics.tcpFailures++
 			}
 			if e.Failure != "" {

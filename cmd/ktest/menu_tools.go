@@ -121,7 +121,7 @@ func (t *terminal) diagnoseMenu(base string, in *input) bool {
 		t.settings.Tools.DiagnosisMode = choice
 		t.savePreferences()
 		t.ui.leaveMenu()
-		t.ui.Note("Press Enter or Ctrl+C to cancel diagnostics and return here.")
+		t.ui.Note("Press Enter to cancel diagnostics and return here.")
 		if !t.tool(in, func(ctx context.Context) {
 			switch choice {
 			case "3", "4":
@@ -180,10 +180,6 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 			t.ui.Printf("  SNIs (Enter = %s; 0 = back) > ", previousSNIs)
 			names, ok := in.read()
 			if !ok {
-				if in.interrupted {
-					in.interrupted = false
-					continue
-				}
 				return false
 			}
 			if isBackChoice(names) {
@@ -202,7 +198,7 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 		t.settings.Tools.WindscribeTarget = target
 		t.savePreferences()
 		t.ui.leaveMenu()
-		t.ui.Note("Press Enter or Ctrl+C to cancel and return here.")
+		t.ui.Note("Press Enter to cancel and return here.")
 		best := ""
 		alive, finished := t.run(func(ctx context.Context) { runWindscribeTestContext(ctx, args, t.ui, func(sni string) { best = sni }) }, in.enter())
 		if !alive {
@@ -216,10 +212,6 @@ func (t *terminal) windscribeTestMenu(base string, in *input) bool {
 				t.ui.Printf("  Use suggested SNI %s first for the local Windscribe bridge? y = apply / Enter = keep settings / 0 = back > ", best)
 				answer, ok := in.read()
 				if !ok {
-					if in.interrupted {
-						in.interrupted = false
-						break
-					}
 					return false
 				}
 				if isYes(answer) {
@@ -276,10 +268,6 @@ func (t *terminal) cdnScanMenu(in *input) bool {
 			}
 			host, ok := in.read()
 			if !ok {
-				if in.interrupted {
-					in.interrupted = false
-					continue
-				}
 				return false
 			}
 			if isBackChoice(host) {
@@ -302,7 +290,7 @@ func (t *terminal) cdnScanMenu(in *input) bool {
 		t.settings.Tools.ScanProvider = provider
 		t.savePreferences()
 		t.ui.leaveMenu()
-		t.ui.Note("Press Enter or Ctrl+C to cancel and return here.")
+		t.ui.Note("Press Enter to cancel and return here.")
 		if !t.tool(in, func(ctx context.Context) { runQuickScanContext(ctx, args) }) {
 			return false
 		}

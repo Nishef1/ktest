@@ -418,11 +418,7 @@ func (t *terminal) setup(base string, in *input) bool {
 			if line == "1" {
 				alive = t.frontSetup(in.read)
 			} else {
-				alive = t.warpSetup(base, in.read)
-			}
-			if in.interrupted {
-				in.interrupted = false
-				continue
+				alive = t.warpSetup(base, in)
 			}
 			if !alive {
 				return false
@@ -436,12 +432,12 @@ func (t *terminal) setup(base string, in *input) bool {
 	}
 }
 
-func (t *terminal) warpSetup(base string, readLine func() (string, bool)) bool {
+func (t *terminal) warpSetup(base string, in *input) bool {
 	u := t.ui
 	for {
 		warpStatus(u, base)
 		u.Printf("  y = prepare/retry missing identities; REMOVE = delete WARP identities; Enter / 0 = back > ")
-		ans, ok := readLine()
+		ans, ok := in.read()
 		if !ok {
 			return false
 		}
@@ -456,12 +452,12 @@ func (t *terminal) warpSetup(base string, readLine func() (string, bool)) bool {
 			u.Line(toneWarn, "Select y, REMOVE, or 0 to go back.")
 			continue
 		}
-		u.Note("Press Ctrl+C to cancel setup.")
+		u.Note("Press Enter to cancel setup.")
 		if !t.foreground(func(ctx context.Context) {
 			ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 			defer cancel()
 			warpEnable(ctx, u, base, t.options.listen)
-		}) {
+		}, in.enter()) {
 			return false
 		}
 	}

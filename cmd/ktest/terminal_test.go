@@ -171,49 +171,38 @@ func TestSubmenusKeepInvalidInputAndNestedBackInTheirOwnMenu(t *testing.T) {
 	}
 }
 
-func TestCtrlCAtNestedToolPromptReturnsToToolBeforeMainMenu(t *testing.T) {
-	for _, tool := range []string{"cdn", "windscribe"} {
-		t.Run(tool, func(t *testing.T) {
-			var out bytes.Buffer
-			menu := &terminal{ui: plainTerm(&out)}
-			lines, back := make(chan string), make(chan struct{})
-			in := &input{lines: lines, back: back}
-			done := make(chan bool, 1)
-			go func() {
-				if tool == "cdn" {
-					done <- menu.cdnScanMenu(in)
-				} else {
-					done <- menu.windscribeTestMenu("unused", in)
-				}
-			}()
-			first := "example"
-			if tool == "cdn" {
-				first = "cloudflare"
-			}
-			select {
-			case lines <- first:
-			case <-time.After(time.Second):
-				t.Fatal("tool prompt unavailable")
-			}
-			select {
-			case back <- struct{}{}:
-			case <-time.After(time.Second):
-				t.Fatal("nested prompt did not receive Ctrl+C")
-			}
-			select {
-			case lines <- "0":
-			case <-time.After(time.Second):
-				t.Fatal("Ctrl+C skipped the tool menu")
-			}
-			select {
-			case alive := <-done:
-				if !alive || in.interrupted {
-					t.Fatal("nested Ctrl+C escaped the parent menu")
-				}
-			case <-time.After(time.Second):
-				t.Fatal("tool failed to go back")
-			}
-		})
+func TestCtrlCDuringAJobQuitsAfterItsCleanup(t *testing.T) {
+	menu := &terminal{ui: plainTerm(&bytes.Buffer{})}
+	quit := make(chan struct{})
+	lines := make(chan string)
+	cleaned := make(chan struct{})
+	started := make(chan struct{})
+	result := make(chan bool, 1)
+	go func() {
+		alive, _ := menu.run(func(ctx context.Context) {
+			close(started)
+			<-ctx.Done()
+			close(cleaned) // stands in for restoring the proxy and TUN
+		}, lines)
+		result <- alive
+	}()
+	<-started
+	menu.handleInterrupt(quit)
+	select {
+	case alive := <-result:
+		if alive {
+			t.Fatal("Ctrl+C during a job returned to the menu like Enter")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("job was not cancelled")
+	}
+	select {
+	case <-cleaned:
+	default:
+		t.Fatal("program would quit before the job cleaned up")
+	}
+	if _, ok := (&input{lines: lines, quit: quit}).read(); ok {
+		t.Fatal("a prompt after Ctrl+C still waited for input")
 	}
 }
 

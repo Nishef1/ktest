@@ -90,18 +90,10 @@ func (t *terminal) aetherMenu(base string, in *input) bool {
 		switch answer {
 		case "", "1":
 			if !t.connectFromMenu(base, in, ModeAether) {
-				if in.interrupted {
-					in.interrupted = false
-					continue
-				}
 				return false
 			}
 		case "2":
 			if !t.chooseAetherMethod(in) {
-				if in.interrupted {
-					in.interrupted = false
-					continue
-				}
 				return false
 			}
 		case "3", "4":

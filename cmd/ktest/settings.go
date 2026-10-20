@@ -157,8 +157,8 @@ func saveJSONFile(path string, value any) error {
 func (s *userSettings) rememberFlags(flags *flag.FlagSet) bool {
 	changed := false
 	flags.Visit(func(f *flag.Flag) {
-		if f.Name == "cert" {
-			return // issuing/installing trust is an action, never a saved default
+		if f.Name == "cert" || f.Name == "save" {
+			return // actions, never saved defaults
 		}
 		if s.Connect == nil {
 			s.Connect = map[string]string{}

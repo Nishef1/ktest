@@ -121,7 +121,7 @@ func (t *terminal) windscribeZapretTestMenu(base string, in *input) bool {
 		"-rounds", "2", "-timeout", "4s", "-zapret", strategy,
 	}
 	t.ui.leaveMenu()
-	t.ui.Note("Experiment only. Press Enter or Ctrl+C to cancel; the owned winws2 process must be stopped.")
+	t.ui.Note("Experiment only. Press Enter to cancel; the owned winws2 process must be stopped.")
 	return t.tool(in, func(ctx context.Context) {
 		runWindscribeTestContext(ctx, args, t.ui)
 	})

@@ -203,12 +203,16 @@ func (m *warpManager) status() string {
 	} else if total > 0 {
 		phase = "active"
 	}
-	status := fmt.Sprintf("%d %s available · %d AI-verified · %s", total, plural(total, "exit", "exits"), verified, phase)
+	// One short line: it sits inside the status panel.
+	status := fmt.Sprintf("%d %s · %s", total, plural(total, "exit", "exits"), phase)
+	if verified > 0 {
+		status += fmt.Sprintf(" · %d outside Iran", verified)
+	}
 	m.measureMu.Lock()
 	defer m.measureMu.Unlock()
 	if m.selected != nil {
 		r := m.selected
-		status += fmt.Sprintf(" · best measured %s · probe %s (%s) at %s", r.Method, r.ExitIP, r.Country, r.Checked.UTC().Format("15:04:05Z"))
+		status += fmt.Sprintf(" · %s · %s %s", r.Method, r.ExitIP, r.Country)
 	}
 	return status
 }

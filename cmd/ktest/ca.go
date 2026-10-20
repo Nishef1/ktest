@@ -225,7 +225,7 @@ func lastLines(s string, n int) string {
 	return strings.TrimSpace(strings.Join(lines, " | "))
 }
 
-// frontSetup returns to Setup on Enter or Ctrl+C; trust changes require an
+// frontSetup returns to Setup on Enter; trust changes require an
 // explicit action here and remain subject to the operating system's approval.
 func (t *terminal) frontSetup(readLine func() (string, bool)) bool {
 	u := t.ui
