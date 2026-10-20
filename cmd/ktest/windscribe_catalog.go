@@ -539,7 +539,11 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 	if err := c.save(path); err != nil {
 		logf("Windscribe node cache: %v", err)
 	}
-	return len(updated) == len(wsCatalogURLs)
+	// A partial valid refresh is usable: don't download all large provider
+	// lists every 30 seconds simply because one geo-scoped API is filtered.
+	// A missing requested node still triggers the separate bounded retry.
+	// If every source failed, keep the short failure backoff.
+	return len(updated) > 0
 }
 
 // Fetch success is not equivalent to coverage of the user's selected node.
