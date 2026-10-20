@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - .github/workflows/dead-code-audit.yml
+      - mobilebridge/native_test.go
 permissions:
   contents: read
 jobs:
