@@ -99,18 +99,18 @@ func TestCarrierMeasurementsNeverBecomeForeignAIRecommendations(t *testing.T) {
 	r := measurementFor(p)
 	r.State, r.Attempts, r.Successes, r.LatencyMS = "carrier", 6, 5, 100
 	r.ExitIP, r.Country = "1.1.1.1", "IR"
-	for _, mode := range []ConnectionMode{ModeFast, ModeBalanced, ModeWindscribeAether} {
+	for _, mode := range []ConnectionMode{ModeFast, ModeBalanced, ModeWindscribeAether, ModeAether} {
 		if measurementScore(r, mode) >= 1e12 {
 			t.Errorf("%s rejected a usable carrier", mode)
 		}
 	}
-	for _, mode := range []ConnectionMode{ModeAether, ModePsiphon, ModeTor} {
+	for _, mode := range []ConnectionMode{ModePsiphon, ModeTor} {
 		if measurementScore(r, mode) < 1e12 {
 			t.Errorf("%s accepted IR as a foreign exit", mode)
 		}
 	}
 	r.State = "verified" // Even a mislabeled cache entry cannot upgrade eligibility.
-	if measurementScore(r, ModeAether) < 1e12 {
+	if measurementScore(r, ModePsiphon) < 1e12 {
 		t.Fatal("cached label bypassed location policy")
 	}
 }

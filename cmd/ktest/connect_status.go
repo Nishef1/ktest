@@ -53,6 +53,10 @@ func (s *connectionStatus) view(now time.Time) statusView {
 	case s.mode.exitOnly() && verified > 0:
 		v.key, v.tone, v.title = "connected", toneOK, "CONNECTED"
 		status = t.Green("Connected through a verified foreign exit") + " · " + plainDuration(now.Sub(s.since))
+	case s.mode == ModeAether && total > 0:
+		v.key, v.tone, v.title = "connected", toneOK, "CONNECTED"
+		status = t.Green("Connected through WARP") + " · " + plainDuration(now.Sub(s.since))
+		exitLine = "AI/TikTok: " + t.Yellow("blocked") + " · this WARP IP is located in Iran"
 	case s.mode.exitOnly() && now.Sub(s.started) >= notConnectedAfter:
 		v.key, v.tone, v.title = "failing", toneFail, "NOT CONNECTED"
 		status = t.Red("No working exit yet") + " · still searching for " + plainDuration(now.Sub(s.started)) + "; traffic is blocked"

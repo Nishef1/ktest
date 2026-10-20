@@ -147,7 +147,9 @@ func saveMeasurement(key, core string, result aetherMeasurement) error {
 }
 
 func measurementScore(r aetherMeasurement, mode ConnectionMode) float64 {
-	carrierAllowed := mode == ModeWindscribeAether || mode == ModeFast || mode == ModeBalanced
+	// Aether accepts a working WARP whose IP geolocates to Iran, as PattNG
+	// does; such an exit never serves AI destinations (see connectionpolicy).
+	carrierAllowed := mode == ModeWindscribeAether || mode == ModeFast || mode == ModeBalanced || mode == ModeAether
 	if (r.State != "verified" && !(carrierAllowed && r.State == "carrier")) || r.Attempts == 0 || r.Successes == 0 || r.LatencyMS <= 0 || (mode != ModeWindscribeAether && r.Successes < 2) {
 		return 1e15
 	}

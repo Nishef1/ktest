@@ -35,15 +35,13 @@ func fastEnrollmentRoutes(routes []enrollmentRoute) []enrollmentRoute {
 // Registration is HTTPS for both protocols. A Psiphon carrier here carries
 // only enrollment, not subsequent WireGuard traffic. An IP override alone
 // still exposes the API's TLS name; ECH is supplied explicitly when available.
+// ECH goes first and never with --fragment: measured on an Iranian ISP
+// (2026-10-20), the API name was cut whatever the splitting (TCP segments,
+// TLS records, ByeDPI, Aether's own fragmenting), while ECH with an
+// unfiltered outer name (cloudflare-ech.com) registered at once. Each failed
+// route costs about a minute of retries before the next one runs.
 func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enrollmentRoute {
 	var routes []enrollmentRoute
-	if proxy != "" {
-		c, err := (&net.Dialer{Timeout: 300 * time.Millisecond}).DialContext(ctx, "tcp", proxy)
-		if err == nil {
-			c.Close()
-			routes = append(routes, enrollmentRoute{"local proxy", []string{"--upstream", "socks5://" + proxy}})
-		}
-	}
 	if ech == "" {
 		fctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		if cfg, addr, err := front.FetchCloudflareECH(fctx); err == nil {
@@ -53,6 +51,13 @@ func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enroll
 	}
 	if ech != "" && ip != "" {
 		routes = append(routes, enrollmentRoute{"ECH", []string{"--ech", ech, "--api-address", ip}})
+	}
+	if proxy != "" {
+		c, err := (&net.Dialer{Timeout: 300 * time.Millisecond}).DialContext(ctx, "tcp", proxy)
+		if err == nil {
+			c.Close()
+			routes = append(routes, enrollmentRoute{"local proxy", []string{"--upstream", "socks5://" + proxy}})
+		}
 	}
 	if fileOK(psiphonCore(base)) {
 		bin, _ := filepath.Abs(psiphonCore(base))

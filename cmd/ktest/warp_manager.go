@@ -133,6 +133,8 @@ type warpManager struct {
 	carrierMu     sync.Mutex
 	carrier       *connectionsession.Session
 	exitNodes     map[string]*exitnode.Server
+	keyMu         sync.Mutex
+	keyChecked    bool // the saved MASQUE key was put to a gateway this connection
 	psiphonEdges  []string
 }
 
@@ -649,6 +651,7 @@ func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) erro
 	if p.Psiphon() || p.Has("--tor-only") {
 		return nil // standalone carriers have no WARP enrollment requirement
 	}
+	m.checkMasqueKey(ctx, p)
 	if readyIdentity(p) {
 		return ctx.Err()
 	}
@@ -700,6 +703,35 @@ func (m *warpManager) prepareIdentity(ctx context.Context, p aetherProfile) erro
 	return nil
 }
 
+// checkMasqueKey asks a gateway, once per connection, whether the saved
+// MASQUE key is still accepted. A key can be intact on disk and dead at
+// Cloudflare (CONNECT-IP 400 / certificate refused at every gateway); it then
+// never connects, and enrollment never ran because the file looked valid.
+// A refused key is set aside, never deleted, so a fresh one is registered.
+func (m *warpManager) checkMasqueKey(ctx context.Context, p aetherProfile) {
+	method := p.Method()
+	if p.Psiphon() || p.Has("--tor-only") || method == "wireguard" || method == "wiw" {
+		return
+	}
+	// Its own lock: a ready worker must not wait behind a slow enrollment.
+	m.keyMu.Lock()
+	defer m.keyMu.Unlock()
+	if m.keyChecked || checkWarpIdentity(identityFile(), "masque") != nil {
+		return
+	}
+	m.keyChecked = true
+	verdict, err := aether.ProbeMasqueIdentity(ctx, aetherBinary(m.o.base), identityFile())
+	if err != nil || verdict != aether.IdentityRejected {
+		return
+	}
+	backup, err := aether.SetAsideRejectedIdentity(identityFile())
+	if err != nil {
+		m.t.Line(toneWarn, "WARP refused the saved MASQUE key, and it could not be set aside: %v", err)
+		return
+	}
+	m.t.Line(toneWarn, "WARP refused the saved MASQUE key; registering a new one (old key kept as %s)", filepath.Base(backup))
+}
+
 // A listening local SOCKS port is not a functioning foreign exit. Strict
 // Aether bootstrap must not try to register through its own empty proxy.
 func canUseEnrollmentProxy(mode ConnectionMode, proxy *smartproxy.Proxy) bool {
@@ -738,9 +770,15 @@ func (m *warpManager) prepareIdentityFile(ctx context.Context, protocol, path st
 		m.enrollRoutes = enrollmentRoutes(ctx, m.o.base, proxyAddr, m.ech, m.echIP)
 		if m.o.mode == ModeFast || m.o.mode == ModeBalanced || m.o.mode == ModeAether {
 			// PattNG sends the WARP API registration through the same
-			// exit-node as the tunnel: plain HTTPS with its ClientHello mask.
+			// exit-node as the tunnel. Where the API name is filtered by a
+			// reassembling DPI that does not help, so ECH stays first.
 			if node, err := m.exitNode(ctx, aether.ExitNodePreset("masque-h2")); err == nil {
-				m.enrollRoutes = append([]enrollmentRoute{{"PattNG exit-node", []string{"--upstream", "socks5://" + node}}}, m.enrollRoutes...)
+				at := 0
+				if len(m.enrollRoutes) > 0 && m.enrollRoutes[0].label == "ECH" {
+					at = 1
+				}
+				node := enrollmentRoute{"PattNG exit-node", []string{"--upstream", "socks5://" + node}}
+				m.enrollRoutes = append(m.enrollRoutes[:at], append([]enrollmentRoute{node}, m.enrollRoutes[at:]...)...)
 			}
 		}
 		if m.o.mode == ModeFast {

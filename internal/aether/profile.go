@@ -19,6 +19,9 @@ import (
 const DefaultProfiles = `# Aether profiles, one per line:  label | flags
 # Two at a time; fresh measurements for this network/core take priority.
 # ktest adds the loopback bind address, the identity files and the prompts' answers.
+# Plain MASQUE H2 first: on a filtered Iranian ISP (2026-10-20) it found
+# gateways on 162.159.198.x:443 at once, while ECH inside the tunnel found none.
+WARP, MASQUE over HTTP/2 | --masque --h2
 WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --fragment --ech {ECH} --api-address {ECHIP}
 WARP, MASQUE over HTTP/3 (QUIC) with ECH | --masque --h3 --ech {ECH} --api-address {ECHIP}
 WARP, WireGuard | --wg --noize balanced --ech {ECH} --api-address {ECHIP}

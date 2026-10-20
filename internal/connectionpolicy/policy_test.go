@@ -34,9 +34,13 @@ func TestConfigureMatchesCLIForAllModes(t *testing.T) {
 		if cfg.ExitOnly == nil || !cfg.ExitOnly("chatgpt.com") {
 			t.Fatalf("mode %s disabled protected exit rule", id)
 		}
-		isForeignOnly := id == "aether" || id == "psiphon" || id == "tor"
+		isForeignOnly := id == "psiphon" || id == "tor"
 		if cfg.ExitOnly("example.com") != isForeignOnly {
 			t.Fatalf("mode %s changed foreign-only behavior", id)
+		}
+		// Aether keeps every site on an exit, of any location (PattNG).
+		if required := cfg.ExitRequired != nil && cfg.ExitRequired("example.com"); required != (id == "aether") {
+			t.Fatalf("mode %s: ExitRequired=%v", id, required)
 		}
 		if id == "fast" && cfg.Stagger != 125*time.Millisecond {
 			t.Fatal("Fast CLI stagger differs on Android")

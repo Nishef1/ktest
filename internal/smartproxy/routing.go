@@ -111,6 +111,9 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 		if protected && (!u.Exit || !u.AIEligible || (p.aiPinned != "" && u.Name != p.aiPinned)) {
 			continue
 		}
+		if !protected && !u.Exit && p.cfg.ExitRequired != nil && p.cfg.ExitRequired(host) {
+			continue
+		}
 		if m != nil && u.Takeover != nil {
 			if s := m.routes[u.Name]; s != nil && s.rejected {
 				continue

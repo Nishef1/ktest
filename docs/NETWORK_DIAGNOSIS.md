@@ -97,6 +97,33 @@ Initial registration may be filtered even when gateways work. A strict-mode prox
 
 See [connection policies](CONNECTION_MODES.md), [Windscribe tests](WINDSCRIBE_BOOTSTRAP.md), and the pinned [Aether CLI](https://github.com/patterniha/Aether/blob/v2.3.1/aether/src/cli.rs) / [runtime](https://github.com/patterniha/Aether/blob/v2.3.1/aether/src/lib.rs).
 
+## Bare-ISP Aether connection (2026-10-20)
+
+Measured on a filtered Iranian fixed line with no VPN; MASQUE H2 now connects.
+
+* **Dead saved key.** 1,209 gateways completed TLS and answered CONNECT-IP 400
+  or refused the client certificate: the 10/16 MASQUE key was dead at
+  Cloudflare while the file was intact, so it never re-enrolled. ktest now asks
+  a fixed gateway once per connection (`aether.ProbeMasqueIdentity`, forced
+  `--peer`, judged only after TLS completes) and sets a refused key aside as
+  `masque.toml.rejected-<time>` before enrolling a new one.
+* **Registration needs ECH, without `--fragment`.** The DPI drops any
+  ClientHello naming `api.cloudflareclient.com` and reassembles TCP segments
+  and TLS records: Aether's fragmenting, record splitting, 1-byte segments,
+  the exit-node and 12 ByeDPI strategies all failed. ECH with ktest's own
+  fetched key (outer name `cloudflare-ech.com`, not filtered) registered in
+  about 3 s. ECH is now the first enrollment route.
+* **No ECH inside the tunnel.** Plain `--masque --h2` found gateways on
+  `162.159.198.x:443` at once; with ECH in the MASQUE handshake none passed.
+  It is now the first built-in profile.
+* **WARP exits in Iran.** Plain MASQUE and Gool both showed `loc=IR` via FRA.
+  Like PattNG, Aether mode now accepts such a working exit for ordinary sites
+  (`ExitRequired`); AI and TikTok still need a non-Iran exit (`ExitOnly`),
+  and the status panel says so.
+
+End to end through ktest's SOCKS: YouTube, Google, Instagram, X, Telegram
+Web and Wikipedia returned 200 (exit `104.28.214.161`, `colo=FRA`, `loc=IR`).
+
 ## PattNG exit-node (2026-10-20)
 
 PattNG (`89c760c`) never lets the Aether core dial the internet itself. Every

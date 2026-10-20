@@ -187,7 +187,7 @@ func TestEnrollmentRoutesIncludeECHAndIndependentCDNCarrier(t *testing.T) {
 	}
 	defer l.Close()
 	routes := enrollmentRoutes(context.Background(), base, l.Addr().String(), "CFG", "1.2.3.4")
-	if len(routes) != 4 || enrollmentArg(routes[0].args, "--upstream") != "socks5://"+l.Addr().String() || enrollmentArg(routes[1].args, "--ech") != "CFG" || enrollmentArg(routes[1].args, "--api-address") != "1.2.3.4" || enrollmentArg(routes[2].args, "--psiphon-mode") != "cdn" {
+	if len(routes) != 4 || enrollmentArg(routes[1].args, "--upstream") != "socks5://"+l.Addr().String() || enrollmentArg(routes[0].args, "--ech") != "CFG" || enrollmentArg(routes[0].args, "--api-address") != "1.2.3.4" || enrollmentArg(routes[2].args, "--psiphon-mode") != "cdn" {
 		t.Fatal(routes)
 	}
 }

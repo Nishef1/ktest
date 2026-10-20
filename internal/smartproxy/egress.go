@@ -6,6 +6,17 @@ import (
 	"time"
 )
 
+func (p *Proxy) exitRequired(host string) bool {
+	return p.cfg.ExitRequired != nil && p.cfg.ExitRequired(host)
+}
+
+// HasWorkingExit reports a registered exit that carries traffic, wherever it
+// geolocates. Only HasVerifiedExit speaks for protected (AI) destinations.
+func (p *Proxy) HasWorkingExit() bool {
+	total, _ := p.ExitCounts()
+	return total > 0
+}
+
 func (p *Proxy) verifyCarrier(ctx context.Context, u *upstreamState) error {
 	if p.cfg.VerifyCarrier == nil {
 		return fmt.Errorf("managed carrier verifier unavailable")

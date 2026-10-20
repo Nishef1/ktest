@@ -88,7 +88,14 @@ func Configure(id string, cfg *smartproxy.Config, protected func(string) bool) {
 		cfg.LocalOnly = true
 	case "windscribe-aether":
 		cfg.ExitOnly = protected
-	case "aether", "psiphon", "tor":
+	case "aether":
+		// Like PattNG: a working WARP carries every destination even when
+		// its IP geolocates to Iran; AI and TikTok still need a non-Iran exit.
+		cfg.ExitOnly = func(host string) bool {
+			return tiktokRequiresForeignExit(host) || (protected != nil && protected(host))
+		}
+		cfg.ExitRequired = func(string) bool { return true }
+	case "psiphon", "tor":
 		cfg.ExitOnly = func(string) bool { return true }
 	}
 }

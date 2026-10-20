@@ -1095,10 +1095,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// Website probes belong to explicit diagnostics. Listener startup must not
 	// depend on a few landing pages or claim that feeds, APIs and media work.
 	verdict := toneInfo
-	if o.mode.exitOnly() && !proxy.HasVerifiedExit() {
-		wstep := t.Progress("Waiting for a verified foreign exit", 1)
+	if o.mode.exitOnly() && !exitReady(o.mode, proxy) {
+		wstep := t.Progress("Waiting for a working exit", 1)
 		wctx, wcancel := context.WithTimeout(ctx, 20*time.Second)
-		available := waitForVerifiedExit(wctx, proxy)
+		available := waitForExit(wctx, func() bool { return exitReady(o.mode, proxy) })
 		wcancel()
 		if ctx.Err() != nil {
 			return 0
@@ -1271,7 +1271,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			if status == nil {
 				continue
 			}
-			if tunPending && proxy.HasVerifiedExit() {
+			if tunPending && exitReady(o.mode, proxy) {
 				tunPending = false
 				t.ClearPinnedBox()
 				if tn = startTunnel(ctx, o.base, lport, o.verbose, t); tn != nil {
@@ -1494,10 +1494,24 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 	return f, "on - Google, YouTube, X, Meta, Discord and Fastly-hosted sites can use fronting / ECH"
 }
 
+// exitReady is when an exit-only mode carries traffic: Aether takes any
+// working WARP (an Iran-located one serves ordinary sites, never AI); the
+// other exit-only modes still need a verified foreign exit.
+func exitReady(mode ConnectionMode, p *smartproxy.Proxy) bool {
+	if mode == ModeAether {
+		return p.HasWorkingExit()
+	}
+	return p.HasVerifiedExit()
+}
+
 func waitForVerifiedExit(ctx context.Context, p *smartproxy.Proxy) bool {
+	return waitForExit(ctx, p.HasVerifiedExit)
+}
+
+func waitForExit(ctx context.Context, ready func() bool) bool {
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
-	for !p.HasVerifiedExit() {
+	for !ready() {
 		select {
 		case <-ctx.Done():
 			return false

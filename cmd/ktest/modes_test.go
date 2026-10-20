@@ -36,7 +36,7 @@ func TestConnectionModes(t *testing.T) {
 		{"fast", true, false, false},
 		{"windscribe", true, false, false},
 		{"windscribe-aether", true, false, false},
-		{"aether", true, true, false},
+		{"aether", true, false, false}, // ordinary sites: any working exit, see ExitRequired
 		{"psiphon", true, true, false},
 		{"tor", true, true, false},
 	} {
@@ -50,6 +50,9 @@ func TestConnectionModes(t *testing.T) {
 		ordinary := cfg.ExitOnly != nil && cfg.ExitOnly("example.org")
 		if ai != c.ai || ordinary != c.ordinary || cfg.PreferVerifiedExit != c.prefer {
 			t.Errorf("%s: ai=%v, ordinary=%v, prefer=%v", c.mode, ai, ordinary, cfg.PreferVerifiedExit)
+		}
+		if required := cfg.ExitRequired != nil && cfg.ExitRequired("example.org"); required != (mode == ModeAether) {
+			t.Errorf("%s: ExitRequired=%v; only Aether sends every site through an exit of any location", c.mode, required)
 		}
 		if cfg.RejectExits != (mode == ModeWindscribe) {
 			t.Errorf("%s: RejectExits=%v; Windscribe must reject all foreign egress", c.mode, cfg.RejectExits)

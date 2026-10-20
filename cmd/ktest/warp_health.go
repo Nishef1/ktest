@@ -32,7 +32,7 @@ func (m *warpManager) watchHealth(ctx context.Context, w *warpFound) {
 			last = activity
 			addr := fmt.Sprintf("127.0.0.1:%d", w.port)
 			probe := probeForeignExit
-			if !m.o.mode.exitOnly() || m.o.mode == ModeWindscribeAether {
+			if !m.o.mode.exitOnly() || m.o.mode == ModeWindscribeAether || m.o.mode == ModeAether {
 				probe = probeExitLocation
 			}
 			if _, _, err := probe(ctx, addr); err == nil {

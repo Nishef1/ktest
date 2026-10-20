@@ -120,6 +120,11 @@ type Config struct {
 	// ExitOnly forces matched names to use only verified foreign exits.
 	// If none is present, fail closed instead of silently revealing the ISP IP.
 	ExitOnly func(string) bool
+	// ExitRequired keeps matched names on exits (never a direct or local
+	// route) without demanding a non-Iran exit: a working carrier whose IP
+	// geolocates to Iran may carry them. ExitOnly names still need a foreign
+	// exit; this only widens what the remaining names may use.
+	ExitRequired func(string) bool
 	// VerifyExit rechecks a previously eligible exit using a neutral destination.
 	// Protected connections wait for a fresh successful check before dialing.
 	VerifyExit    func(context.Context, Upstream) error
@@ -679,7 +684,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 		p.serveDNSStream(ctx, client)
 		return
 	}
-	identityRequired := p.cfg.ExitOnly != nil && !p.cfg.ExitOnly(host)
+	identityRequired := p.cfg.ExitOnly != nil && !p.cfg.ExitOnly(host) && !p.exitRequired(host)
 	firstByteWait := 400 * time.Millisecond
 	if identityRequired {
 		firstByteWait = 2 * time.Second
@@ -1377,6 +1382,17 @@ func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (
 			return nil, errors.New("protected destination requires a verified foreign exit")
 		}
 		if err := p.verifyExit(ctx, u); err != nil {
+			return nil, err
+		}
+	} else if p.exitRequired(host) {
+		if !u.Exit {
+			return nil, errors.New("this mode sends every destination through an exit")
+		}
+		verify := p.verifyCarrier
+		if u.AIEligible {
+			verify = p.verifyExit
+		}
+		if err := verify(ctx, u); err != nil {
 			return nil, err
 		}
 	}
