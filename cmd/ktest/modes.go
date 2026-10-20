@@ -26,7 +26,7 @@ const (
 	ModeFast             ConnectionMode = "fast"              // fastest usable; identity may change
 	ModeWindscribe       ConnectionMode = "windscribe"        // bootstrap, real VPN is external
 	ModeWindscribeAether ConnectionMode = "windscribe-aether" // explicit WARP carrier for OpenVPN TCP
-	ModeAether           ConnectionMode = "aether"            // verified WARP/Psiphon exits only
+	ModeAether           ConnectionMode = "aether"            // verified WARP exits only
 	ModePsiphon          ConnectionMode = "psiphon"           // Aether's Psiphon profiles only
 	ModeTor              ConnectionMode = "tor"               // verified Tor exit only
 )
@@ -66,7 +66,7 @@ func (m ConnectionMode) message() string {
 	case ModeWindscribeAether:
 		return "WARP through Aether carries Windscribe OpenVPN TCP. Keep Aether running and exclude ktest/aether from Windscribe split tunneling. No direct, Psiphon or Tor fallback. Windscribe owns the final VPN exit."
 	case ModeAether:
-		return "Aether: search WARP/Psiphon profiles; one verified foreign upstream pinned for this session; no direct fallback for managed apps."
+		return "Aether: search WARP MASQUE/WireGuard profiles only; enroll missing keys over anti-DPI or Psiphon CDN if available; verified foreign exit required."
 	case ModePsiphon:
 		return "Aether to Psiphon: Psiphon profiles only; verified foreign exit required; no WARP, Tor or direct fallback for managed apps."
 	case ModeTor:

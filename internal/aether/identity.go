@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Match Aether v2.3.0's persisted identity, without logging credentials or
+// Match the pinned Aether v2.3.1 persisted identity, without logging credentials or
 // asking Aether to load it (Aether can rename damaged files or call the API).
 func CheckIdentity(path, protocol string) error {
 	if protocol != "masque" && protocol != "wg" {

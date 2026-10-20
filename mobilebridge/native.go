@@ -183,6 +183,12 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	if err := os.MkdirAll(o.stateDir, 0700); err != nil {
 		return nil, fmt.Errorf("native private state: %w", err)
 	}
+	if filepath.Base(o.stateDir) == "aether" {
+		legacy := filepath.Join(filepath.Dir(o.stateDir), "automatic-exits")
+		if _, err := aether.MigrateIdentityFiles(o.stateDir, legacy); err != nil {
+			return nil, fmt.Errorf("migrate existing Android WARP identity: %w", err)
+		}
+	}
 	supported, err := aether.InspectProfiles(ctx, paths.Aether, []aether.Profile{p})
 	if err != nil {
 		return nil, err
@@ -193,6 +199,12 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	// InspectProfiles normalizes renamed Aether CLI flags for this exact
 	// binary. Launch the accepted profile, not its pre-normalized template.
 	p = supported[0]
+	// Identity bootstrap precedes gateway probing, not the user's VPN
+	// permission flow. It is a bounded, best-effort anti-DPI registration
+	// attempt; no helper may silently become the user's final exit method.
+	if err := bootstrapAndroidWARP(ctx, o, paths, p); err != nil {
+		return nil, fmt.Errorf("WARP identity setup: %w", err)
+	}
 	if edges := psiphonEdges(p, o.privateDir); len(edges) > 0 {
 		// Edges this network verified in CDN scans are tried first by
 		// Psiphon's fronting; its own built-in lists still follow.
