@@ -275,6 +275,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		return "", fmt.Errorf("mode %q is not available in this Android build", mode)
 	}
 	var managed *nativeCore
+	var verifiedNative *observedExit
 	var carrier *fastCarrier
 	keepCarrier := false
 	keepManaged := false
@@ -298,7 +299,15 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}()
 			native.carrier = carrier.address
 		}
-		managed, err = launchNative(startContext, mode, *native)
+		if mode == "aether" && native.profile == nil && (native.method == "" || native.method == "auto") {
+			var verified observedExit
+			managed, verified, err = launchVerifiedNativeAuto(startContext, *native)
+			if err == nil {
+				verifiedNative = &verified
+			}
+		} else {
+			managed, err = launchNative(startContext, mode, *native)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -353,7 +362,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		proxyMu.Unlock()
 		var checked observedExit
 		var err error
-		if managed != nil {
+		if verifiedNative != nil {
+			checked = *verifiedNative
+		} else if managed != nil {
 			checked, err = waitNative(startContext, mode, managed)
 		} else {
 			checked, err = verifyLocalUpstream(startContext, upstream)
