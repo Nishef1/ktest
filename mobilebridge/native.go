@@ -101,7 +101,27 @@ func nativeAutoCandidatesWithECH(viaCarrier bool, ech, ip string) ([]aether.Prof
 	if len(candidates) == 0 {
 		return nil, errors.New("no compatible WARP transport for this carrier")
 	}
-	return candidates, nil
+	// The native startup budget is shared across candidates. Probe the
+	// simplest, no-ECH profile of each independent transport first; without
+	// this a set of H2/ECH variants can exhaust the startup budget before H3
+	// or WireGuard is even attempted. Preserve the remaining candidates.
+	methods := make(map[string]bool)
+	ordered := make([]aether.Profile, 0, len(candidates))
+	taken := make([]bool, len(candidates))
+	for i, p := range candidates {
+		if p.Has("--ech") || methods[p.Method()] {
+			continue
+		}
+		methods[p.Method()] = true
+		taken[i] = true
+		ordered = append(ordered, p)
+	}
+	for i, p := range candidates {
+		if !taken[i] {
+			ordered = append(ordered, p)
+		}
+	}
+	return ordered, nil
 }
 
 // launchVerifiedNativeAuto reuses the upstream Aether's own gateway scan
