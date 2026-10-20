@@ -1,0 +1,39 @@
+name: Temporary pinned Aether Android artifact audit
+on:
+  push:
+    paths:
+      - .github/workflows/aether-binary-audit.yml
+permissions:
+  contents: read
+jobs:
+  checksums:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Verify pinned archive digests and print native payload checksums
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, io, tarfile, urllib.request
+          urlbase = "https://github.com/patterniha/Aether/releases/download/v2.3.1/"
+          archives = {
+              "arm64-v8a": ("aether-android-arm64.tar.gz", "ea9e66bf28fdf759aa55bd3a6964873abbc9b64f8f65f3672fff464c37befa7e"),
+              "armeabi-v7a": ("aether-android-armv7.tar.gz", "27937dcd68971a1b06de5503b61ccfa7acd5797cfd64bd37ca014cf9745285a4"),
+              "x86_64": ("aether-android-x86_64.tar.gz", "ba76e9720437a46b45decfb1f96b6fa003800bbd33a25a622a0125b62241b81d"),
+          }
+          for abi, (archive, checksum) in archives.items():
+              with urllib.request.urlopen(urlbase + archive, timeout=100) as response:
+                  data = response.read(80 * 1024 * 1024 + 1)
+              got = hashlib.sha256(data).hexdigest()
+              if len(data) > 80 * 1024 * 1024 or got != checksum:
+                  raise SystemExit(f"{abi}: archive SHA-256 does not match pin")
+              with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+                  members = {m.name.lstrip("./"): m for m in tf.getmembers() if m.isfile()}
+                  print("ARCHIVE_OK", abi, archive, got, flush=True)
+                  for filename, target in [("aether", "libaether.so"), ("pt/psiphon-tunnel-core", "libpsiphon-tunnel-core.so"), ("pt/lyrebird", "liblyrebird.so")]:
+                      member = members.get(filename)
+                      if member is None:
+                          raise SystemExit(f"{abi}: missing {filename}")
+                      contents = tf.extractfile(member).read()
+                      print("NATIVE_SHA256", abi, target, hashlib.sha256(contents).hexdigest(), flush=True)
+          PY
