@@ -2,6 +2,7 @@ package mobilebridge
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/egresscheck"
+	"github.com/Nishef1/ktest/internal/front"
 )
 
 type nativeOptions struct {
@@ -77,7 +79,11 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 // substitutes. Android Auto must try another protocol after a failed native
 // exit rather than calling the first profile "automatic".
 func nativeAutoCandidates(viaCarrier bool) ([]aether.Profile, error) {
-	profiles, err := aether.ParseProfiles(aether.DefaultProfiles, "", "")
+	return nativeAutoCandidatesWithECH(viaCarrier, "", "")
+}
+
+func nativeAutoCandidatesWithECH(viaCarrier bool, ech, ip string) ([]aether.Profile, error) {
+	profiles, err := aether.ParseProfiles(aether.DefaultProfiles, ech, ip)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +109,15 @@ func nativeAutoCandidates(viaCarrier bool) ([]aether.Profile, error) {
 // here. The first actual foreign HTTPS exit wins; failed native processes
 // are stopped before the next candidate starts.
 func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore, observedExit, error) {
-	profiles, err := nativeAutoCandidates(o.carrier != "")
+	// Discover ECH only once per automatic startup. Blocked ECH lookup must
+	// not suppress ordinary MASQUE H2/H3 or WireGuard profiles.
+	ech, ip := "", ""
+	discoveryCtx, stopDiscovery := context.WithTimeout(ctx, 3*time.Second)
+	if cfg, address, discoveryErr := front.FetchCloudflareECH(discoveryCtx); discoveryErr == nil {
+		ech, ip = base64.StdEncoding.EncodeToString(cfg), address
+	}
+	stopDiscovery()
+	profiles, err := nativeAutoCandidatesWithECH(o.carrier != "", ech, ip)
 	if err != nil {
 		return nil, observedExit{}, err
 	}
