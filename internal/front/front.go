@@ -864,12 +864,6 @@ func (o responseObserver) CloseWrite() error {
 	return nil
 }
 
-// Existing callers retain the original byte-counting relay interface.
-func relay(a, b io.ReadWriteCloser) (up, down int64) {
-	up, down, _ = relayObserved(a, b, nil)
-	return
-}
-
 func relayObserved(a, b io.ReadWriteCloser, onStatus func(int)) (up, down int64, status int) {
 	done := make(chan struct{}, 2)
 	cp := func(dst io.WriteCloser, src io.Reader, n *int64) {
