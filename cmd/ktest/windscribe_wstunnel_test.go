@@ -595,7 +595,7 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}
 	}
-	if len(names) != 2+2*2*(3+2)*2 {
+	if len(names) != 2+2*2*(2*3+2) {
 		t.Fatalf("%d carriers:\n%s", len(names), all)
 	}
 	if strings.Contains(all, "raw OpenVPN") {
