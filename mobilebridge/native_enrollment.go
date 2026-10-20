@@ -34,7 +34,10 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	if identity.Protocol == "masque" && aether.CheckIdentity(path, "masque") == nil {
 		// A key can be intact on disk and refused by every gateway; then it
 		// never connects. Set it aside (never deleted) and register anew.
-		if verdict, err := aether.ProbeMasqueIdentity(ctx, paths.Aether, path); err == nil && verdict == aether.IdentityRejected {
+		checkCtx, stopCheck := context.WithTimeout(ctx, 8*time.Second)
+		verdict, checkErr := aether.ProbeMasqueIdentity(checkCtx, paths.Aether, path)
+		stopCheck()
+		if checkErr == nil && verdict == aether.IdentityRejected {
 			if _, err := aether.SetAsideRejectedIdentity(path); err != nil {
 				return err
 			}

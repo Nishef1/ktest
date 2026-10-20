@@ -27,12 +27,13 @@ type nativeOptions struct {
 }
 
 type nativeCore struct {
-	address string
-	method  string
-	cancel  context.CancelFunc
-	done    chan struct{}
-	err     error // read only after done closes
-	log     *stageLog
+	address              string
+	method               string
+	cancel               context.CancelFunc
+	done                 chan struct{}
+	err                  error // read only after done closes
+	log                  *stageLog
+	advanceOnScanFailure bool // automatic MASQUE attempts yield after a full native scan fails
 }
 
 // StartNativeProxy runs the packaged Aether core, including its existing Tor
@@ -124,9 +125,25 @@ func nativeAutoCandidatesWithECH(viaCarrier bool, ech, ip string) ([]aether.Prof
 	return ordered, nil
 }
 
+func nativeAutoAttemptProfiles(profiles []aether.Profile) []aether.Profile {
+	var quick []aether.Profile
+	seen := map[string]bool{}
+	for _, p := range profiles {
+		if seen[p.Method()] {
+			continue
+		}
+		launch := aether.QuickScanProfile(p)
+		if launch.ID() != p.ID() {
+			quick = append(quick, launch)
+			seen[p.Method()] = true
+		}
+	}
+	return append(quick, profiles...)
+}
+
 // launchVerifiedNativeAuto reuses the upstream Aether's own gateway scan
 // within each transport. Only independent protocol/profile attempts happen
-// here. The first actual foreign HTTPS exit wins; failed native processes
+// here. The first actual HTTPS-verified WARP carrier wins; failed processes
 // are stopped before the next candidate starts.
 func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore, observedExit, error) {
 	// Discover ECH only once per automatic startup. Blocked ECH lookup must
@@ -142,18 +159,21 @@ func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore
 		return nil, observedExit{}, err
 	}
 	var lastErr error
-	for _, profile := range profiles {
+	for _, profile := range nativeAutoAttemptProfiles(profiles) {
 		if err := ctx.Err(); err != nil {
 			return nil, observedExit{}, err
 		}
 		candidate := o
 		candidate.profile = &profile
-		core, err := launchNative(ctx, "aether", candidate)
+		// Provisioning belongs to the attempt budget too; a blocked key/API
+		// preflight must not consume the startup allowance for every transport.
+		attempt, cancel := context.WithTimeout(ctx, aether.AttemptTimeout(profile)+15*time.Second)
+		core, err := launchNative(attempt, "aether", candidate)
 		if err != nil {
+			cancel()
 			lastErr = fmt.Errorf("%s: %w", profile.Label, err)
 			continue
 		}
-		attempt, cancel := context.WithTimeout(ctx, aether.AttemptTimeout(profile)+15*time.Second)
 		checked, err := waitNative(attempt, "aether", core)
 		cancel()
 		if err == nil {
@@ -162,7 +182,7 @@ func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore
 		core.stop()
 		lastErr = fmt.Errorf("%s: %w", profile.Label, err)
 	}
-	return nil, observedExit{}, fmt.Errorf("no Aether Auto transport passed foreign HTTPS verification: %w", lastErr)
+	return nil, observedExit{}, fmt.Errorf("no Aether Auto transport passed HTTPS carrier verification: %w", lastErr)
 }
 
 func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCore, error) {
@@ -241,6 +261,8 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 		args = append(args, "--psiphon-config", path)
 	}
 	n := &nativeCore{address: address, method: p.Method(), cancel: cancel, done: make(chan struct{}), log: newStageLog()}
+	n.advanceOnScanFailure = mode == "aether" && o.profile != nil && !p.Has("--peer") &&
+		(p.Method() == "masque-h2" || p.Method() == "masque-h3")
 	go func() {
 		defer close(n.done)
 		defer cleanupDNS()
@@ -304,6 +326,9 @@ func waitNativeWithProbe(ctx context.Context, mode string, n *nativeCore, probe 
 		if err := ctx.Err(); err != nil {
 			return observedExit{}, fmt.Errorf("native startup canceled or timed out; the selected method or verification endpoint may be unreachable (last check: %v): %w", lastErr, err)
 		}
+		if n.advanceOnScanFailure && n.log.failedScan() {
+			return observedExit{}, errors.New("native gateway scan found no usable MASQUE gateway; trying another profile (remaining candidates are untested)")
+		}
 		select {
 		case <-n.done:
 			if n.err != nil {
@@ -314,6 +339,9 @@ func waitNativeWithProbe(ctx context.Context, mode string, n *nativeCore, probe 
 		}
 		checked, err := probe(ctx, mode, n.address)
 		if err == nil {
+			if n.advanceOnScanFailure && n.log.failedScan() {
+				return observedExit{}, errors.New("native gateway scan failed during exit verification")
+			}
 			// A completed HTTPS exit check can race cancellation and a native
 			// process exit. Both conditions must still be false at promotion.
 			if ctx.Err() != nil {

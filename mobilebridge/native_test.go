@@ -3,11 +3,77 @@ package mobilebridge
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/coreprocess"
 )
+
+func TestAndroidAutoGivesIndependentTransportsAQuickPassBeforeFullScans(t *testing.T) {
+	profiles, err := nativeAutoCandidatesWithECH(false, "ECH", "1.1.1.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := nativeAutoAttemptProfiles(profiles)
+	if len(attempts) != len(profiles)+3 {
+		t.Fatalf("quick pass lost full-scan candidates: %d attempts / %d profiles", len(attempts), len(profiles))
+	}
+	seen := map[string]bool{}
+	for _, p := range attempts[:3] {
+		if p.Value("--scan") != "turbo" || seen[p.Method()] {
+			t.Fatalf("independent transports delayed by repeated/full scan: %v", attempts[:3])
+		}
+		seen[p.Method()] = true
+	}
+	for i, p := range profiles {
+		if attempts[i+3].ID() != p.ID() {
+			t.Fatal("full-scan recovery changed or dropped a profile")
+		}
+	}
+}
+
+func TestAndroidAutoAdvancesAfterNativeScanFailureWithoutPromotingExit(t *testing.T) {
+	log := newStageLog()
+	log.Write([]byte("[2026-10-20T22:00:00Z WARN aether] no usable MASQUE gateway found: rescanning shortly\n"))
+	n := &nativeCore{done: make(chan struct{}), log: log, advanceOnScanFailure: true}
+	got, err := waitNativeWithProbe(context.Background(), "aether", n, func(context.Context, string, string) (observedExit, error) {
+		t.Fatal("completed failed scan must yield before further exit probes")
+		return observedExit{}, nil
+	})
+	if err == nil || got.IP != "" || !strings.Contains(err.Error(), "native gateway scan") {
+		t.Fatalf("failed native scan became ready or lost its reason: %+v %v", got, err)
+	}
+	// Forced methods retain native retries. The scan signal is only a hint
+	// for automatic scheduling, never an unconditional process failure.
+	n.advanceOnScanFailure = false
+	_, err = waitNativeWithProbe(context.Background(), "aether", n, func(context.Context, string, string) (observedExit, error) {
+		return observedExit{IP: "1.1.1.1", Region: "IR"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAndroidAutoOnlyFinalScanFailurePreventsPromotion(t *testing.T) {
+	for _, final := range []bool{false, true} {
+		log := newStageLog()
+		n := &nativeCore{done: make(chan struct{}), log: log, advanceOnScanFailure: true}
+		got, err := waitNativeWithProbe(context.Background(), "aether", n, func(context.Context, string, string) (observedExit, error) {
+			log.Write([]byte("[2026-10-20T22:00:00Z WARN aether::prober] scan deadline reached with no gateway\n"))
+			if final {
+				log.Write([]byte("[2026-10-20T22:00:00Z WARN aether] no usable MASQUE gateway found: rescanning shortly\n"))
+			}
+			return observedExit{IP: "1.1.1.1", Region: "IR"}, nil
+		})
+		if final && (err == nil || got.IP != "") {
+			t.Fatalf("a final failed scan raced past promotion: %+v %v", got, err)
+		}
+		if !final && (err != nil || got.IP == "") {
+			t.Fatalf("a low-level timeout stopped native fallback: %+v %v", got, err)
+		}
+	}
+}
 
 func TestNativeStartupCannotSubstituteAnotherModeOrMissingBundle(t *testing.T) {
 	StopProxy()

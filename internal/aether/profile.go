@@ -151,6 +151,30 @@ func (p Profile) Value(flag string) string {
 	return ""
 }
 
+// QuickScanProfile is a first-pass launch policy. Callers retain the original
+// profile for measurements and revisit its full scan after the quick pass.
+// Explicit scan/peer choices and nested bootstrap keep their configured policy.
+func QuickScanProfile(p Profile) Profile {
+	switch p.Method() {
+	case "masque-h2", "masque-h3", "wireguard":
+	default:
+		return p
+	}
+	for _, flag := range []string{"--scan", "--turbo", "--balanced", "--thorough", "--verified", "--ironclad", "--peer", "--wg-peer"} {
+		if p.Has(flag) {
+			return p
+		}
+	}
+	p.Args = append(append([]string(nil), p.Args...), "--scan", "turbo")
+	return p
+}
+
+// MASQUEScanFailed recognizes the native final result, rather than a low-level
+// probe timeout that might still be followed by an internal fallback.
+func MASQUEScanFailed(line string) bool {
+	return strings.Contains(line, " aether]") && strings.Contains(line, "no usable MASQUE gateway found:")
+}
+
 // ECH retry configurations are short-lived discovery data, not profile identity.
 // Stable IDs keep endpoint files associated with the same transport after sorting.
 func (p Profile) ID() string {

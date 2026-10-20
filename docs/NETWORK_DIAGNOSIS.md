@@ -72,8 +72,12 @@ the remaining startup allowance on the same scan again. A low-level scan timeout
 alone does not trigger this transition; WireGuard's internal obfuscation fallbacks
 and nested bootstrap remain intact. The change cancels readiness only; an already
 selected carrier retains its session lifetime. Strict discovery still uses one
-worker and stops scanning while its winner is healthy. This scheduling change is
-limited to the desktop CLI; Android's native launcher is unchanged.
+worker and stops scanning while its winner is healthy. Android Aether Auto now
+reuses the same quick-scan policy and final-failure recognition for one first
+H2/H3/WireGuard pass, then revisits its original full-scan profiles within the
+existing four-minute startup budget. Explicit methods retain their policy;
+incomplete remaining candidates are not proof of blocking. Android key preflight
+is likewise capped at eight seconds, with inconclusive keys preserved.
 
 Windscribe-through-Aether now has the same live terminal panel as other managed
 connections. Its action says to **wait before starting Windscribe** while no WARP

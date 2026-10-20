@@ -81,7 +81,7 @@ Passing it establishes Java/Kotlin source compatibility, including callback sign
 
 ## Stable preview signing and updates
 
-The preview revision is version code **12**, version name **0.4.0-preview**, with application ID `com.nishef.ktest`. Preview Actions builds use a dedicated, stable PKCS12 signing key; they remain debug build variants for internal testing, not production releases. The signing key is separate from the app's local MITM CA key.
+The preview revision is version code **18**, version name **0.4.6-preview**, with application ID `com.nishef.ktest`. Preview Actions builds use a dedicated, stable PKCS12 signing key; they remain debug build variants for internal testing, not production releases. The signing key is separate from the app's local MITM CA key.
 
 The repository owner provisions the preview signer outside the repository with [`android/scripts/provision-preview-signing.ps1`](scripts/provision-preview-signing.ps1). Its local state is under `%LOCALAPPDATA%/KTest/preview-signing`, with DPAPI-protected password storage; the PKCS12 alias is `ktest-preview`. Consult that script for its options. Do not commit the keystore/passwords or use a CI-generated replacement key. Key provisioning and secret updates are explicit owner actions, not part of the build workflow.
 
@@ -166,7 +166,19 @@ The native directory contains `libaether.so`, `libpsiphon-tunnel-core.so` and
 implementations. Gradle preserves their exact bytes and extracts them to the
 read-only `ApplicationInfo.nativeLibraryDir`; the app must never copy them into
 writable app storage to execute them. The manual workflow verifies their hashes
-again inside the final APK. It has **not** been dispatched as part of this work.
+again inside the final APK.
+
+Aether Auto now gives one ordinary H2, H3 and WireGuard profile a native turbo
+scan before revisiting the original full-scan profiles, within the existing
+four-minute startup budget. Explicit methods and nested bootstrap retain their
+configured policy. Automatic MASQUE attempts yield when the native core reports
+that its completed scan found no usable gateway; an internal probe timeout alone
+does not stop fallback. Saved-key preflight is bounded to eight seconds per
+attempt and preserves inconclusive keys. Both key probes and carrier processes
+use the shared managed runner, so inherited `RUST_LOG=warn` cannot hide the
+acceptance markers. These are source-level scheduling guarantees; successful
+ARM-device connectivity still requires runtime evidence. Preview packaging now
+also triggers on shared `internal/**`, `go.mod` and `go.sum` changes.
 
 Balanced/Fast also package the unmodified ByeDPI v0.17.3 static executable as
 `libciadpi.so`, pinned by archive and executable hashes in

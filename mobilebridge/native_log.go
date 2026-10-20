@@ -5,15 +5,18 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/Nishef1/ktest/internal/aether"
 )
 
 // stageLog keeps the last few warnings of the native core, with addresses and
 // identifiers removed, so a failed start can say which stage broke (WARP API,
 // gateway scan, Psiphon) without exposing raw core output.
 type stageLog struct {
-	mu      sync.Mutex
-	partial []byte
-	lines   []string
+	mu         sync.Mutex
+	partial    []byte
+	lines      []string
+	scanFailed bool
 }
 
 var (
@@ -58,6 +61,9 @@ func (l *stageLog) Write(p []byte) (int, error) {
 }
 
 func (l *stageLog) add(raw string) {
+	if aether.MASQUEScanFailed(raw) {
+		l.scanFailed = true
+	}
 	m := logPrefix.FindStringSubmatch(raw)
 	if m == nil || (m[1] != "WARN" && m[1] != "ERROR") {
 		return
@@ -78,6 +84,15 @@ func (l *stageLog) add(raw string) {
 	if len(l.lines) > stageLogLines {
 		l.lines = l.lines[len(l.lines)-stageLogLines:]
 	}
+}
+
+func (l *stageLog) failedScan() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.scanFailed
 }
 
 func (l *stageLog) last() string {

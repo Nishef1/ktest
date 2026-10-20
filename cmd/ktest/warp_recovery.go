@@ -18,18 +18,7 @@ func (m *warpManager) discoveryProfile(p aetherProfile) aetherProfile {
 	if !m.automaticWARPDiscovery() || m.failedSweeps > 0 {
 		return p
 	}
-	switch p.Method() {
-	case "masque-h2", "masque-h3", "wireguard":
-	default:
-		return p // nested identity bootstrap needs its original startup budget
-	}
-	for _, flag := range []string{"--scan", "--turbo", "--balanced", "--thorough", "--verified", "--ironclad", "--peer", "--wg-peer"} {
-		if p.Has(flag) {
-			return p
-		}
-	}
-	p.Args = append(append([]string(nil), p.Args...), "--scan", "turbo")
-	return p
+	return aether.QuickScanProfile(p)
 }
 
 // Preserve measured winners, but give independent unmeasured methods a turn

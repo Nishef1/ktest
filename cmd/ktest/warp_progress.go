@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/Nishef1/ktest/internal/aether"
 )
 
 var aetherScanLine = regexp.MustCompile(`scan mode=(\w+) ip=(\w+) candidates=(\d+).* budget=([0-9.]+s)`)
@@ -29,14 +31,10 @@ func aetherMilestone(line string) string {
 	if strings.Contains(line, "scan deadline reached with no gateway") || strings.Contains(line, "scan deadline reached with no endpoint") {
 		return "native scan finished without a validated endpoint; remaining candidates are untested"
 	}
-	if nativeMASQUEScanFailed(line) {
+	if aether.MASQUEScanFailed(line) {
 		return "native scan found no usable MASQUE gateway; remaining candidates are untested"
 	}
 	return ""
-}
-
-func nativeMASQUEScanFailed(line string) bool {
-	return strings.Contains(line, " aether]") && strings.Contains(line, "no usable MASQUE gateway found:")
 }
 
 type aetherProgress struct {
@@ -63,7 +61,7 @@ func (w *aetherProgress) Write(p []byte) (int, error) {
 			w.last = stage
 			w.show(stage)
 		}
-		if w.scanFailed != nil && nativeMASQUEScanFailed(line) {
+		if w.scanFailed != nil && aether.MASQUEScanFailed(line) {
 			w.scanFailed()
 			w.scanFailed = nil
 		}

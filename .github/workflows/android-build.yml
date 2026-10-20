@@ -10,12 +10,9 @@ on:
       - "android/app/**"
       - "android/scripts/**"
       - "mobilebridge/**"
-      - "internal/front/**"
-      - "internal/xraycfg/**"
-      - "internal/quickcheck/**"
-      - "internal/routeplan/**"
-      - "internal/smartproxy/**"
-      - "internal/edges/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
 permissions:
   contents: read
 jobs:
@@ -132,8 +129,8 @@ jobs:
           test -s "$APK"
           BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK")"
           echo "$BADGING" | grep -F "package: name='com.nishef.ktest'"
-          echo "$BADGING" | grep -F "versionCode='17'"
-          echo "$BADGING" | grep -F "versionName='0.4.5-preview'"
+          echo "$BADGING" | grep -F "versionCode='18'"
+          echo "$BADGING" | grep -F "versionName='0.4.6-preview'"
           unzip -t "$APK" | tail -n 1
           test "$(unzip -Z1 "$APK" | awk -F/ '/^lib\/[^/]+\/[^/]+$/ {print $2}' | sort -u)" = arm64-v8a
           for ABI in arm64-v8a; do
