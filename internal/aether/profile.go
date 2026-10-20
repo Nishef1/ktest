@@ -148,12 +148,23 @@ func (p Profile) Value(flag string) string {
 func (p Profile) ID() string {
 	args := append([]string(nil), p.Args...)
 	for i, flag := range args {
-		if (flag == "--ech" || flag == "--enroll-address" || flag == "--api-address") && i+1 < len(args) {
+		if flag == "--enroll-address" {
+			// The old and new API-address spellings describe the same route.
+			flag, args[i] = "--api-address", "--api-address"
+		}
+		if flag == "--api-fragment" {
+			flag, args[i] = "--fragment", "--fragment"
+		}
+		if (flag == "--ech" || flag == "--api-address") && i+1 < len(args) {
 			args[i+1] = "<discovered>"
 		}
 		for _, key := range []string{"--ech=", "--enroll-address=", "--api-address="} {
 			if strings.HasPrefix(flag, key) {
-				args[i] = key + "<discovered>"
+				name := key
+				if key == "--enroll-address=" {
+					name = "--api-address="
+				}
+				args[i] = name + "<discovered>"
 			}
 		}
 	}
