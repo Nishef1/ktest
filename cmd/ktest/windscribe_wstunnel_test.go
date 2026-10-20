@@ -595,7 +595,7 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}
 	}
-	if len(names) != 2+2*2*(2+1)*2 {
+	if len(names) != 2+2*2*(3+2)*2 {
 		t.Fatalf("%d carriers:\n%s", len(names), all)
 	}
 	if strings.Contains(all, "raw OpenVPN") {
@@ -1034,9 +1034,10 @@ func TestWindscribeCarrierOffersUpstreamHelloWithoutReplacingChrome(t *testing.T
 	}
 	for _, want := range []string{
 		"WStunnel sni=example.com entry=192.0.2.10 hello=chrome",
-		"WStunnel sni=example.com entry=192.0.2.10 hello=windscribe",
+		"WStunnel sni=example.com entry=192.0.2.10 hello=go-tls",
+		"WStunnel sni=example.com entry=192.0.2.10 hello=randomized",
 		"Stealth sni=example.com entry=192.0.2.11 hello=chrome",
-		"Stealth sni=example.com entry=192.0.2.11 hello=windscribe",
+		"Stealth sni=example.com entry=192.0.2.11 hello=randomized",
 	} {
 		if !names[want] {
 			t.Fatalf("fingerprint fallback profile missing: %q", want)
