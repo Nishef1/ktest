@@ -46,7 +46,7 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 		routes = append(routes, aether.EnrollmentRoute{
 			Label: "Psiphon CDN registration", Args: []string{
 				"--psiphon-reverse", "--psiphon-mode", "cdn",
-				"--psiphon-bin", paths.Psiphon, "--psiphon-bind", "127.0.0.1:0",
+				"--psiphon-bin", paths.Psiphon, "--psiphon-dir", filepath.Join(o.stateDir, "psiphon-enrollment"), "--psiphon-bind", "127.0.0.1:0",
 			},
 		})
 	}
