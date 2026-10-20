@@ -327,8 +327,15 @@ func TestFrontServesTheSiteWithADifferentSNI(t *testing.T) {
 	if acc, _ := f.Stats(); acc != 1 {
 		t.Fatalf("accepted = %d", acc)
 	}
+	// The relay observes the HTTP status on its independent upstream goroutine.
+	// Receiving the client body does not order that goroutine's score update.
+	// Wait for the actual observation rather than racing its bookkeeping.
+	learnDeadline := time.Now().Add(2 * time.Second)
+	for len(f.Learned()) == 0 && time.Now().Before(learnDeadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if len(f.Learned()) == 0 {
-		t.Fatal("nothing learned")
+		t.Fatal("nothing learned after serving a complete HTTP response")
 	}
 }
 
