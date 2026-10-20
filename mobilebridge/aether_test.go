@@ -69,12 +69,12 @@ func TestAndroidAutomaticAetherMethodIsNotAdvertisedAsCrossMethodRace(t *testing
 	for _, choice := range result.Methods {
 		if choice.ID == "auto" {
 			found = true
-			if choice.Title != "Automatic (first compatible profile)" {
-				t.Fatalf("Android claims to compare methods without implementing it: %q", choice.Title)
+			if choice.Title != "Automatic (tries compatible WARP transports)" {
+				t.Fatalf("Android Auto method label is inaccurate: %q", choice.Title)
 			}
 		}
 	}
-	if !found || !strings.Contains(result.Note, "first compatible profile") {
+	if !found || !strings.Contains(result.Note, "retries WARP transports") {
 		t.Fatalf("inaccurate automatic method description: %+v", result)
 	}
 }
