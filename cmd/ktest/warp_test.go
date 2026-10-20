@@ -340,3 +340,43 @@ func TestTarGzAetherExtractionRejectsUnexpectedAndPublishesKnownEntries(t *testi
 		t.Fatal("unexpected archive path extracted")
 	}
 }
+
+func TestDesktopAetherAndTorModesCannotCrossNativeBackends(t *testing.T) {
+	for _, tc := range []struct {
+		mode ConnectionMode
+		wantMethod string
+	}{
+		{ModeAether, "masque-h2"},
+		{ModePsiphon, "psiphon"},
+		{ModeTor, "tor"},
+	} {
+		profiles, err := loadAetherProfiles(t.TempDir(), "", "", tc.mode)
+		if err != nil {
+			t.Fatalf("mode %s: %v", tc.mode, err)
+		}
+		if len(profiles) == 0 {
+			t.Fatalf("mode %s left without any supported default native backend", tc.mode)
+		}
+		found := false
+		for _, p := range profiles {
+			switch tc.mode {
+			case ModeAether:
+				if p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") {
+					t.Fatalf("standalone Aether silently selected foreign backend %v", p.Args)
+				}
+			case ModePsiphon:
+				if !p.Psiphon() || p.Has("--tor-only") {
+					t.Fatalf("Psiphon mode selected non-Psiphon %v", p.Args)
+				}
+			case ModeTor:
+				if !p.Has("--tor-only") || p.Psiphon() {
+					t.Fatalf("Tor mode selected non-Tor %v", p.Args)
+				}
+			}
+			found = found || p.Method() == tc.wantMethod
+		}
+		if !found {
+			t.Fatalf("mode %s lost required native method %s", tc.mode, tc.wantMethod)
+		}
+	}
+}
