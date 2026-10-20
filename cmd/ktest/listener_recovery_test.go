@@ -7,7 +7,9 @@ import (
 
 func TestDefaultListenerRelocatesWithoutClosingOwner(t *testing.T) {
 	owner, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer owner.Close()
 	occupied := owner.Addr().String()
 	chosen, changed, err := recoverLoopbackListen(occupied, occupied)
@@ -16,12 +18,16 @@ func TestDefaultListenerRelocatesWithoutClosingOwner(t *testing.T) {
 	}
 	if peer, err := net.Dial("tcp", occupied); err != nil {
 		t.Fatalf("existing listener was disrupted: %v", err)
-	} else { peer.Close() }
+	} else {
+		peer.Close()
+	}
 }
 
 func TestExplicitPortConflictMustFail(t *testing.T) {
 	owner, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer owner.Close()
 	address := owner.Addr().String()
 	if _, changed, err := recoverLoopbackListen(address, connectListenDefault); err == nil || changed {
@@ -31,7 +37,9 @@ func TestExplicitPortConflictMustFail(t *testing.T) {
 
 func TestFreeDefaultPortKeepsConfiguration(t *testing.T) {
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	address := probe.Addr().String()
 	probe.Close()
 	chosen, changed, err := recoverLoopbackListen(address, address)

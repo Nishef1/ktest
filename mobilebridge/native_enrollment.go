@@ -53,18 +53,22 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	probeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	err := aether.EnrollIdentity(probeCtx, aether.EnrollmentOptions{
-		Binary: paths.Aether,
+		Binary:   paths.Aether,
 		Protocol: identity.Protocol,
-		Path: path,
+		Path:     path,
 		StateDir: o.stateDir,
-		Routes: routes,
-		Run: aether.RunEnrollment,
+		Routes:   routes,
+		Run:      aether.RunEnrollment,
 	})
 	if err != nil {
-		if ctx.Err() != nil { return ctx.Err() }
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		// Do not preempt Aether's own provisioning or discard a
 		// still-usable key when a particular reverse route is blocked.
-		if errors.Is(err, os.ErrNotExist) { return err }
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		return nil
 	}
 	return nil

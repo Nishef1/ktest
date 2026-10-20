@@ -23,7 +23,9 @@ func ExportAetherIdentityBackup(privateDir, password string) (string, error) {
 		return "", err
 	}
 	data, err := aether.BackupIdentityBundle(target, password)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
@@ -36,10 +38,14 @@ func ImportAetherIdentityBackup(privateDir, password, encoded string) (string, e
 		return "", err
 	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil { return "", errors.New("backup document is not correctly encoded") }
+	if err != nil {
+		return "", errors.New("backup document is not correctly encoded")
+	}
 	added, err := aether.RestoreIdentityBundle(target, password, data)
-	if err != nil { return "", err }
-	raw, _ := json.Marshal(struct{
+	if err != nil {
+		return "", err
+	}
+	raw, _ := json.Marshal(struct {
 		Imported []string `json:"imported"`
 	}{Imported: added})
 	return string(raw), nil
@@ -52,14 +58,16 @@ func AetherIdentityStatus(privateDir string) string {
 	var warnings []string
 	for name, protocol := range aether.IdentityFiles {
 		err := aether.CheckIdentity(filepath.Join(target, name), protocol)
-		if err == nil { count++ } else if !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			count++
+		} else if !errors.Is(err, os.ErrNotExist) {
 			warnings = append(warnings, name)
 		}
 	}
 	raw, _ := json.Marshal(struct {
-		Valid int `json:"valid"`
-		Invalid []string `json:"invalid"`
-		PrivateDirectory string `json:"private_directory"`
+		Valid            int      `json:"valid"`
+		Invalid          []string `json:"invalid"`
+		PrivateDirectory string   `json:"private_directory"`
 	}{Valid: count, Invalid: warnings, PrivateDirectory: target})
 	return string(raw)
 }
