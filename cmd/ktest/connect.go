@@ -532,6 +532,28 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			return 2
 		}
 	}
+	// First use should not require visiting Setup manually. Install only the
+	// pinned native core here, before starting anti-DPI helper processes;
+	// registration itself happens later through the local ByeDPI/Xray/fast
+	// carrier or Psiphon CDN during the managed exit search. Never write
+	// WARP credentials into the portable application directory.
+	if !o.noWarp && (o.mode == ModeAether || o.mode == ModePsiphon ||
+		o.mode == ModeTor || o.mode == ModeWindscribeAether) &&
+		(!aetherHasModernCLI(ctx, aetherBinary(o.base)) || !fileOK(psiphonCore(o.base))) {
+		t.Note("Managed core missing or outdated; attempting first-use installation from pinned Aether %s archive.", aetherVersion)
+		url, digest, archiveErr := aetherArchiveFor(runtime.GOOS, runtime.GOARCH)
+		if archiveErr == nil {
+			installCtx, cancel := context.WithTimeout(ctx, 75*time.Second)
+			archiveErr = fetchAether(installCtx, url, digest, o.base)
+			cancel()
+		}
+		if archiveErr != nil {
+			t.Line(toneWarn, "Automatic Aether installation unavailable: %v", archiveErr)
+			t.Note("Without Internet, extract the SHA-pinned Aether release into cores/ or supply a working local anti-DPI route. No identity files were removed.")
+		} else {
+			t.Line(toneOK, "Aether %s installed; missing identities will register via the available anti-DPI/Psiphon bootstrap routes.", aetherVersion)
+		}
+	}
 	monitor := startWindscribeMonitor(ctx, o, t)
 	if o.ws.packetEnabled() {
 		if err := checkWindscribeZapret(o.base); err != nil {
