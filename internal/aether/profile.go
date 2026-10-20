@@ -25,6 +25,11 @@ WARP, WireGuard | --wg --noize balanced --ech {ECH} --api-address {ECHIP}
 WARP, MASQUE over HTTP/2, fragmented | --masque --h2 --fragment
 WARP, MASQUE over HTTP/3 | --masque --h3
 WARP, WireGuard without ECH enrollment | --wg --noize balanced
+# Runtime ECH fallback: PattNG's Aether can fetch its own ECH key when
+# our independent Cloudflare ECH bootstrap is filtered. This is not an
+# extra always-on layer: it runs only when selected as another profile.
+WARP, MASQUE HTTP/2 with core-managed ECH | --masque --h2 --fragment --ech auto
+WARP, MASQUE HTTP/3 with core-managed ECH | --masque --h3 --ech auto
 WARP, Gool WireGuard over MASQUE H2 | --gool --h2
 WARP, Gool WireGuard over MASQUE H3 | --gool --h3
 WARP, MASQUE-in-MASQUE H2 | --mim --h2
