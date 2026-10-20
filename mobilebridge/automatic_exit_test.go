@@ -3,9 +3,9 @@ package mobilebridge
 import (
 	"context"
 	"encoding/base64"
+	"net"
 	"os"
 	"path/filepath"
-	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -167,7 +167,6 @@ func TestAutomaticStandaloneExitsUseAnIndependentLocalCarrier(t *testing.T) {
 		}
 	}
 }
-
 
 func TestAutomaticExitOnlySerializesColdWarpIdentity(t *testing.T) {
 	a := &automaticExit{}
