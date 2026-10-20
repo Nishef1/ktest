@@ -130,7 +130,7 @@ func TestCarriersActuallyDialAdvertisedNonNeighbourAddresses(t *testing.T) {
 			_, _ = carrier.open(context.Background(), "203.0.113.100", "443")
 		}
 	}
-	want := []string{"198.51.100.9:443", "198.51.100.9:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443"}
+	want := []string{"198.51.100.9:443", "198.51.100.9:443", "198.51.100.9:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443"}
 	if !reflect.DeepEqual(targets, want) {
 		t.Fatalf("wrong carrier destinations: %v, want %v", targets, want)
 	}
