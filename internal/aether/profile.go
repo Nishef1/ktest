@@ -186,19 +186,47 @@ func FilterMethod(profiles []Profile, method string) []Profile {
 }
 
 // Saved recommendations and live launches use the same transport boundary.
+// ProfilesForMode enforces the advertised exit protocol, not merely whether
+// a profile can produce a foreign IP. In particular, an Aether session must
+// never silently become Psiphon/Tor, and a Tor session must never become WARP.
+// Balanced is the explicit multi-backend policy; Fast permits only WARP.
 func ProfilesForMode(profiles []Profile, mode string) []Profile {
 	var selected []Profile
 	for _, p := range profiles {
-		if mode == "windscribe" {
+		psiphon := p.Psiphon()
+		tor := p.Has("--tor-only")
+		otherHelpers := p.Has("--tor") || p.Has("--psiphon") ||
+			p.Has("--tor-reverse") || p.Has("--psiphon-reverse")
+		hasWarp := p.Has("--masque") || p.Has("--wg") ||
+			p.Has("--gool") || p.Has("--mim") ||
+			p.Has("--gool-classic") || p.Value("--protocol") != ""
+		switch mode {
+		case "windscribe":
 			continue
-		}
-		if mode == "fast" && (p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") || (p.Has("--upstream") && !p.LocalCarrier())) {
-			continue
-		}
-		if mode == "psiphon" && (!p.Psiphon() || p.Has("--tor-only") || p.Has("--masque") || p.Has("--wg") || p.Has("--gool") || p.Has("--mim") || p.Has("--gool-classic")) {
-			continue
-		}
-		if mode == "windscribe-aether" && (p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") || p.Has("--upstream")) {
+		case "aether", "windscribe-aether", "fast":
+			if psiphon || tor || otherHelpers || (p.Has("--upstream") && !p.LocalCarrier()) {
+				continue
+			}
+			// Raw WARP carrier profiles are valid only when KTest owns their
+			// loopback path; Windscribe-Aether must remain directly carried.
+			if mode == "windscribe-aether" && p.Has("--upstream") {
+				continue
+			}
+			if !hasWarp {
+				continue
+			}
+		case "psiphon":
+			if !psiphon || tor || otherHelpers || hasWarp || p.Has("--upstream") {
+				continue
+			}
+		case "tor":
+			if !tor || psiphon || otherHelpers || hasWarp || p.Has("--upstream") {
+				continue
+			}
+		case "balanced":
+			// Balanced is the only policy that intentionally mixes native
+			// exit backends. Do not impose a transport preference here.
+		default:
 			continue
 		}
 		selected = append(selected, p)
