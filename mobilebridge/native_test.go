@@ -120,3 +120,31 @@ func TestAetherThroughFastOnlyUsesTCPMethods(t *testing.T) {
 		}
 	}
 }
+
+func TestAndroidAutoTriesIndependentWarpTransportsOnly(t *testing.T) {
+	direct, err := nativeAutoCandidates(false)
+	if err != nil || len(direct) < 3 {
+		t.Fatalf("Auto lost independent H2, H3 and WireGuard methods: %v, %v", direct, err)
+	}
+	seen := map[string]bool{}
+	for _, profile := range direct {
+		if profile.Psiphon() || profile.Has("--tor-only") {
+			t.Fatalf("strict Aether Auto unexpectedly switched to another backend: %v", profile.Args)
+		}
+		seen[profile.Method()] = true
+	}
+	for _, method := range []string{"masque-h2", "masque-h3", "wireguard"} {
+		if !seen[method] {
+			t.Fatalf("Aether Auto omitted independent %s route", method)
+		}
+	}
+	carried, err := nativeAutoCandidates(true)
+	if err != nil || len(carried) == 0 {
+		t.Fatalf("Auto over Fast lost TCP candidates: %v", err)
+	}
+	for _, profile := range carried {
+		if !profile.Has("--h2") || profile.Has("--wg") || profile.Psiphon() || profile.Has("--tor-only") {
+			t.Fatalf("TCP-only Fast carrier selected unsupported method %v", profile.Args)
+		}
+	}
+}
