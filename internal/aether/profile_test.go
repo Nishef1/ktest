@@ -111,3 +111,30 @@ func TestIdentityRequirementsKeepStandaloneAndNestedKeysSeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestAetherFlagsAdaptToInstalledCoreWithoutLosingUnknownOptions(t *testing.T) {
+	oldHelp := "  --masque  protocol\n  --h2  http2\n  --enroll-address <ip>  registration\n  --api-fragment  register\n  --no-fragment  disable\n  --fragment  split\n"
+	newHelp := "  --masque  protocol\n  --h2  http2\n  --api-address <ip>  registration\n  --fragment  split\n"
+	modern := Profile{Label: "H2", Args: []string{"--masque", "--h2", "--api-address=1.2.3.4", "--fragment"}}
+	old := SupportedProfiles([]Profile{modern}, oldHelp)
+	if len(old) != 1 || !old[0].Has("--enroll-address") || old[0].Has("--api-address") {
+		t.Fatalf("new profile cannot run on the pinned legacy core: %+v", old)
+	}
+	legacy := Profile{Label: "H2", Args: []string{"--masque", "--h2", "--enroll-address=1.2.3.4", "--api-fragment", "--no-fragment"}}
+	modernized := SupportedProfiles([]Profile{legacy}, newHelp)
+	if len(modernized) != 1 || !modernized[0].Has("--api-address") || modernized[0].Has("--enroll-address") ||
+		!modernized[0].Has("--fragment") || modernized[0].Has("--no-fragment") || modernized[0].Has("--api-fragment") {
+		t.Fatalf("legacy profile cannot run on the PattNG-aligned core: %+v", modernized)
+	}
+	if got := SupportedProfiles([]Profile{{Label: "invalid", Args: []string{"--masque", "--fictional-transport"}}}, newHelp); len(got) != 0 {
+		t.Fatalf("unknown transport silently accepted: %+v", got)
+	}
+}
+
+func TestRenamedAetherAPIOptionsPreserveStableProfileIDs(t *testing.T) {
+	old := Profile{Label: "h2", Args: []string{"--masque", "--enroll-address", "1.2.3.4", "--api-fragment", "--ech", "one"}}
+	modern := Profile{Label: "h2", Args: []string{"--masque", "--api-address", "5.6.7.8", "--fragment", "--ech", "two"}}
+	if old.ID() != modern.ID() {
+		t.Fatalf("equivalent profiles lost identity across CLI upgrade: %s != %s", old.ID(), modern.ID())
+	}
+}
