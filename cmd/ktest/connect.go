@@ -514,12 +514,6 @@ func (s *siteEvents) detail(reason string) {
 // the caller already measured.
 func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.Result, t *term) int {
 	sessionStarted := time.Now() // the status panel counts the search from here
-	release, err := claimSession()
-	if err != nil {
-		t.Line(toneFail, "%v", err)
-		return 1
-	}
-	defer release()
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("Coverage: %s", connectionCoverage(o))
 	t.Note("%s", o.mode.message())
@@ -574,6 +568,14 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			t.Line(toneOK, "Aether %s installed; missing identities will register via the available anti-DPI/Psiphon bootstrap routes.", aetherVersion)
 		}
 	}
+	// Options are valid: from here this session owns ports, keys and the
+	// system proxy, which a second session would fight over.
+	release, err := claimSession()
+	if err != nil {
+		t.Line(toneFail, "%v", err)
+		return 1
+	}
+	defer release()
 	monitor := startWindscribeMonitor(ctx, o, t)
 	if o.ws.packetEnabled() {
 		if err := checkWindscribeZapret(o.base); err != nil {
@@ -1172,11 +1174,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		title, verdict = "CONNECTION DETAILS", toneInfo
 	}
 	if o.mode.isWindscribe() {
-		title = "WINDSCRIBE BRIDGE LISTENING; VPN NOT YET VERIFIED"
+		// Drawn once, before Windscribe connects: it must not claim either
+		// way. The live lines below report Windscribe's state as it changes.
+		title, verdict = "WINDSCRIBE BRIDGE READY · CONNECT IN WINDSCRIBE", toneInfo
 		if o.mode == ModeWindscribeAether {
 			carriers, _ := proxy.ExitCounts()
 			if carriers == 0 {
-				title = "BRIDGE LISTENING; AETHER CARRIER NOT YET VERIFIED"
+				title, verdict = "BRIDGE LISTENING; AETHER CARRIER NOT YET VERIFIED", toneWarn
 			}
 		}
 		if o.mode == ModeWindscribe && !proxy.HasLocalBypass() && !o.ws.enabled() {
@@ -1528,7 +1532,9 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 // working WARP (an Iran-located one serves ordinary sites, never AI); the
 // other exit-only modes still need a verified foreign exit.
 func exitReady(mode ConnectionMode, p *smartproxy.Proxy) bool {
-	if mode == ModeAether {
+	// Aether and Windscribe-through-Aether need a working WARP carrier; its
+	// location only matters for AI, which the policy gates per host.
+	if mode == ModeAether || mode == ModeWindscribeAether {
 		return p.HasWorkingExit()
 	}
 	return p.HasVerifiedExit()
@@ -1541,6 +1547,9 @@ func exitReadyNote(mode ConnectionMode, p *smartproxy.Proxy) string {
 	}
 	if mode == ModeAether {
 		return "WARP exit available (located in Iran: AI and TikTok stay blocked)"
+	}
+	if mode == ModeWindscribeAether {
+		return "WARP carrier ready; connect Windscribe now"
 	}
 	return "exit available"
 }
