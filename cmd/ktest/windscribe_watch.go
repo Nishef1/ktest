@@ -233,6 +233,9 @@ func (m *windscribeMonitor) command(ctx context.Context, args ...string) ([]byte
 	defer cancel()
 	cmd := exec.CommandContext(callCtx, m.cli, args...)
 	hideConsole(cmd)
+	// windscribe-cli may start the Windscribe app, which inherits the output
+	// pipe; without WaitDelay the read waits for the app to exit, forever.
+	cmd.WaitDelay = time.Second
 	return cmd.CombinedOutput()
 }
 

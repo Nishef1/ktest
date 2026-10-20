@@ -306,3 +306,23 @@ func activeKtestTUNs() []string {
 	}
 	return names
 }
+
+// activeVPNAdapters lists up adapters of VPN clients and TUN cores by name.
+// It only reads interfaces; it never runs or wakes a VPN client.
+func activeVPNAdapters() []string {
+	ifaces, _ := net.Interfaces()
+	var names []string
+	for _, iface := range ifaces {
+		name := strings.ToLower(iface.Name)
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		for _, mark := range []string{"windscribe", "wireguard", "wintun", "openvpn", "tap-", "sing-tun", "ktest-tun", "warp", "proton", "nord", "mullvad", "v2ray", "xray", "clash", "hiddify", "nekoray"} {
+			if strings.Contains(name, mark) {
+				names = append(names, iface.Name)
+				break
+			}
+		}
+	}
+	return names
+}

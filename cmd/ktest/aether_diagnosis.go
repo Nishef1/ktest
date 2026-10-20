@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -328,14 +329,11 @@ func runAetherDiagnosis(ctx context.Context, u *term, base string, speed bool, b
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	u.Heading("Aether comparison", "Starts temporary local cores; neutral HTTPS samples only. No system TUN, account login, or route changes.")
-	cli, _ := windscribeCLIPath("")
-	status := readWSStatus(ctx, cli)
-	if status.state == windscribeConnected || status.state == windscribeConnecting || len(activeKtestTUNs()) > 0 {
-		u.Line(toneWarn, "An active/changing VPN or ktest TUN would contaminate ISP measurements. Comparison skipped; leave the current VPN untouched.")
+	// Aether has nothing to do with Windscribe: the guard only reads the
+	// network adapters, so it never runs a VPN client or opens its app.
+	if vpns := activeVPNAdapters(); len(vpns) > 0 {
+		u.Line(toneWarn, "A VPN adapter is up (%s); it would be measured instead of the ISP. Disconnect it and run the comparison again.", strings.Join(vpns, ", "))
 		return 1
-	}
-	if status.err != nil {
-		u.Note("Windscribe state unavailable; results describe the current system route and may include another VPN.")
 	}
 	o := defaultConnectOptions(base)
 	o.mode, o.tun, o.aetherMethod = ModeAether, false, "auto"
@@ -350,24 +348,22 @@ func runAetherDiagnosis(ctx context.Context, u *term, base string, speed bool, b
 		u.Note("Small-transfer sampling: at most 128 KiB per profile and 2 MiB total payload, excluding tunnel setup/protocol overhead.")
 	}
 	var changed atomic.Bool
-	if status.state == windscribeDisconnected {
-		go func() {
-			tick := time.NewTicker(2 * time.Second)
-			defer tick.Stop()
-			for {
-				select {
-				case <-ctx.Done():
+	go func() {
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if len(activeVPNAdapters()) > 0 {
+					changed.Store(true)
+					cancel()
 					return
-				case <-tick.C:
-					if next := readWSStatus(ctx, cli); ctx.Err() == nil && next.state != windscribeDisconnected {
-						changed.Store(true)
-						cancel()
-						return
-					}
 				}
 			}
-		}()
-	}
+		}
+	}()
 	mctx, stop := context.WithCancel(ctx)
 	defer stop()
 	m.processCtx = mctx
@@ -381,7 +377,7 @@ func runAetherDiagnosis(ctx context.Context, u *term, base string, speed bool, b
 	}
 	check, stopCheck := context.WithTimeout(context.Background(), 4*time.Second)
 	key := networkSignature(check)
-	if status.state == windscribeDisconnected && readWSStatus(check, cli).state != windscribeDisconnected {
+	if len(activeVPNAdapters()) > 0 {
 		changed.Store(true)
 	}
 	stopCheck()
