@@ -174,6 +174,7 @@ type windscribeMonitor struct {
 	nextReconnect       time.Time
 	disconnectedSamples int
 	onTCPConnected      func() // optional, once the CLI confirms TCP Connected
+	issue               string // why the last status was unknown
 }
 
 func (m *windscribeMonitor) State() windscribeState {
@@ -273,7 +274,18 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	out, err := m.command(ctx, "status")
 	state, loggedIn := parseWindscribeStatus(string(out))
 	m.mu.Lock()
+	parsed := state
 	state = windscribeObservedState(m.state, m.lastValidCLIStatus, time.Now(), state, loggedIn, err)
+	switch {
+	case state != windscribeUnknown:
+		m.issue = ""
+	case err != nil:
+		m.issue = "windscribe-cli did not answer; close any open Windscribe dialog (for example SSL Error) and keep the app running"
+	case parsed == windscribeDisconnected:
+		m.issue = "Windscribe says Disconnected but a VPN adapter is up (" + strings.Join(activeVPNAdapters(), ", ") + "); disconnect that VPN first"
+	default:
+		m.issue = windscribeStatusIssue(string(out), parsed, loggedIn)
+	}
 	if err == nil && state != windscribeUnknown {
 		m.lastValidCLIStatus = time.Now()
 	}
@@ -382,9 +394,28 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 	}
 	m := &windscribeMonitor{cli: path, t: t, autoReconnect: o.windscribeReconnect, aetherCarrier: o.mode == ModeWindscribeAether}
 	m.refresh(ctx) // initial state before external tunnel scanning
+	if m.State() == windscribeUnknown && !monitorUnknownCLIAllowed(o.mode) {
+		// The app may be busy (a dialog open, still starting): ask again
+		// for a while before refusing.
+		t.Note("Waiting for Windscribe to report its state ...")
+		for deadline := time.Now().Add(20 * time.Second); m.State() == windscribeUnknown && time.Now().Before(deadline); {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(2 * time.Second):
+			}
+			m.refresh(ctx)
+		}
+	}
 	if m.State() == windscribeUnknown {
 		if !monitorUnknownCLIAllowed(o.mode) {
+			m.mu.RLock()
+			issue := m.issue
+			m.mu.RUnlock()
 			t.Note("Windscribe CLI did not confirm a safe disconnected state; no extra Aether tunnel will start")
+			if issue != "" {
+				t.Note("Reason: %s", issue)
+			}
 			return nil
 		}
 		// Continue read-only polling so a transient IPC failure does not
