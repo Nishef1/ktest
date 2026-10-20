@@ -151,3 +151,49 @@ func TestModernAetherPreservesLocalCarrierWithoutRemovedNoFragmentFlag(t *testin
 		t.Fatalf("new core lost its local carrier or received unsupported flags: %+v", accepted)
 	}
 }
+
+func TestExitModeCannotSilentlySwitchToAnotherNativeBackend(t *testing.T) {
+	profiles := []Profile{
+		{Label: "WARP", Args: []string{"--masque", "--h2"}},
+		{Label: "Psiphon", Args: []string{"--psiphon-only"}},
+		{Label: "Psiphon CDN", Args: []string{"--psiphon-only", "--psiphon-mode", "cdn"}},
+		{Label: "Tor", Args: []string{"--tor-only"}},
+		{Label: "nested disguise", Args: []string{"--masque", "--psiphon-reverse"}},
+		{Label: "external carrier", Args: []string{"--masque", "--upstream", "socks5://127.0.0.1:10001"}},
+		{Label: "local carrier", Args: []string{"--masque", "--h2", "--upstream", LocalCarrierURL}},
+	}
+	for _, tc := range []struct {
+		mode  string
+		wants []string
+	}{
+		{"aether", []string{"WARP", "local carrier"}},
+		{"fast", []string{"WARP", "local carrier"}},
+		{"windscribe-aether", []string{"WARP"}},
+		{"psiphon", []string{"Psiphon", "Psiphon CDN"}},
+		{"tor", []string{"Tor"}},
+		{"balanced", []string{"WARP", "Psiphon", "Psiphon CDN", "Tor", "nested disguise", "external carrier", "local carrier"}},
+		{"windscribe", nil},
+	} {
+		got := ProfilesForMode(profiles, tc.mode)
+		if len(got) != len(tc.wants) {
+			t.Fatalf("%s: wrong backend inventory: %+v, want %v", tc.mode, got, tc.wants)
+		}
+		for i, want := range tc.wants {
+			if got[i].Label != want {
+				t.Fatalf("%s: unexpected backend %q at %d, want %q", tc.mode, got[i].Label, i, want)
+			}
+		}
+	}
+}
+
+func TestPsiphonOnlyCannotSmuggleTorOrWarpFlags(t *testing.T) {
+	ps := []Profile{
+		{Label: "plain", Args: []string{"--psiphon-only"}},
+		{Label: "mixed tor", Args: []string{"--psiphon-only", "--tor"}},
+		{Label: "mixed warp", Args: []string{"--psiphon-only", "--wg"}},
+	}
+	got := ProfilesForMode(ps, "psiphon")
+	if len(got) != 1 || got[0].Label != "plain" {
+		t.Fatalf("Psiphon-only included mixed backends: %+v", got)
+	}
+}
