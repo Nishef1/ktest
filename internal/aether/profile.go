@@ -197,7 +197,7 @@ func ProfilesForMode(profiles []Profile, mode string) []Profile {
 		tor := p.Has("--tor-only")
 		otherHelpers := p.Has("--tor") || p.Has("--psiphon") ||
 			p.Has("--tor-reverse") || p.Has("--psiphon-reverse")
-		hasWarp := p.Has("--masque") || p.Has("--wg") ||
+		hasWarp := p.Has("--masque") || p.Has("--wg") || p.Has("--wireguard") || p.Has("--warp") ||
 			p.Has("--gool") || p.Has("--mim") ||
 			p.Has("--gool-classic") || p.Value("--protocol") != ""
 		switch mode {
@@ -212,9 +212,9 @@ func ProfilesForMode(profiles []Profile, mode string) []Profile {
 			if mode == "windscribe-aether" && p.Has("--upstream") {
 				continue
 			}
-			if !hasWarp {
-				continue
-			}
+			// An empty/--h2-only Aether profile is valid: MASQUE is
+			// the core's documented default. Reject helper backends above,
+			// but do not reject a deliberate implicit MASQUE configuration.
 		case "psiphon":
 			if !psiphon || tor || otherHelpers || hasWarp || p.Has("--upstream") {
 				continue
