@@ -54,6 +54,11 @@ func ImportAetherIdentityBackup(privateDir, password, encoded string) (string, e
 // AetherIdentityStatus reads only validity flags, never credential contents.
 func AetherIdentityStatus(privateDir string) string {
 	target := filepath.Join(privateDir, "aether")
+	if filepath.IsAbs(privateDir) {
+		// A settings visit should recognize an already-issued identity from
+		// the previous Balanced/Fast layout before offering a new one.
+		_, _ = aether.MigrateIdentityFiles(target, filepath.Join(privateDir, "automatic-exits"))
+	}
 	count := 0
 	var warnings []string
 	for name, protocol := range aether.IdentityFiles {
