@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -28,11 +29,24 @@ import (
 // reaches open too. It is opt-in because it registers a free, anonymous WARP
 // identity on this PC and sends the traffic that uses it through Cloudflare.
 const (
-	aetherVersion  = "v2.3.0"
-	aetherZipURL   = "https://github.com/CluvexStudio/Aether/releases/download/v2.3.0/aether-windows-x86_64.zip"
-	aetherZipSHA   = "0cc32dd2d7573f91d2e55d4f427bfe4c6f6252342494e1b410d61b12d1e4dc79"
+	aetherVersion  = "v2.3.1"
+	aetherZipSHA   = "a3bdd2384a624b01e9c4885f2816d75f7039fd2f62d46a94c54a0785e7c8fcb4"
 	aetherBasePort = 10830
 )
+
+// aetherHasModernCLI distinguishes old v2.3.0 installations from the newer
+// PattNG-aligned core without touching saved WARP identities. This is a
+// compatibility check, not proof of network reachability or binary provenance.
+func aetherHasModernCLI(ctx context.Context, binary string) bool {
+	if !fileOK(binary) {
+		return false
+	}
+	inspectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(inspectCtx, binary, "--help").Output()
+	return err == nil && bytes.Contains(output, []byte("--api-address")) &&
+		bytes.Contains(output, []byte("--masque-sni"))
+}
 
 // warpDir keeps the WARP identity per user, never in the portable folder.
 func warpDir() string {
@@ -70,17 +84,17 @@ func aetherArchiveFor(goos, goarch string) (string, string, error) {
 	case "windows/amd64":
 		name, sum = "aether-windows-x86_64.zip", aetherZipSHA
 	case "linux/amd64":
-		name, sum = "aether-linux-x86_64.tar.gz", "77c6ce41695a616660d834b55be235c17e7588a474dfd737b71ca80b685bdc8a"
+		name, sum = "aether-linux-x86_64.tar.gz", "371f92dcaa2b060bcd24e430f79d2b4864a38b3f7a76f1a05fd0692cc2c50a38"
 	case "linux/arm64":
-		name, sum = "aether-linux-arm64.tar.gz", "7251cbb90c4a0eccb62412727ebee9f0a7b775d20d26492c082ba5df64f8c21f"
+		name, sum = "aether-linux-arm64.tar.gz", "3725989e5a78dfccb821c66fb1204e3cc11ac0d3c9511e06d679f64b800ee2ab"
 	case "darwin/amd64":
-		name, sum = "aether-macos-x86_64.tar.gz", "25d930bba78fbd09ba86b09e21afd4e1ed1e91685a34388dd067be130aa269b3"
+		name, sum = "aether-macos-x86_64.tar.gz", "10c89a252f51a3de5d3770ca2f2587400bb4565a11e692607a953f1ed9bdbbb1"
 	case "darwin/arm64":
-		name, sum = "aether-macos-arm64.tar.gz", "e89cbb5b53848fee1a28510dac14ff358aa38ebecc7fd00eeeee5bd415d12b12"
+		name, sum = "aether-macos-arm64.tar.gz", "dfb7d24f8cadfff16f5dfbbf1b0007732a97f367763cced4c2efb54f46d5eb72"
 	default:
 		return "", "", fmt.Errorf("no checksum-pinned Aether %s archive for %s/%s", aetherVersion, goos, goarch)
 	}
-	return "https://github.com/CluvexStudio/Aether/releases/download/" + aetherVersion + "/" + name, sum, nil
+	return "https://github.com/patterniha/Aether/releases/download/" + aetherVersion + "/" + name, sum, nil
 }
 
 func identityFile() string          { return filepath.Join(warpDir(), "masque.toml") }
@@ -245,8 +259,8 @@ func warpEnable(ctx context.Context, u *term, base, proxy string) int {
 		u.Line(toneFail, "%v", err)
 		return 1
 	}
-	if !fileOK(aetherBinary(base)) || !fileOK(psiphonCore(base)) {
-		step := u.Progress("Downloading Aether "+aetherVersion, 1)
+	if !aetherHasModernCLI(ctx, aetherBinary(base)) || !fileOK(psiphonCore(base)) {
+		step := u.Progress("Installing or upgrading Aether "+aetherVersion, 1)
 		if err := fetchAether(ctx, url, hash, base); err != nil {
 			step.Finish(toneFail, err.Error())
 			u.Note("Download %s yourself, check its SHA-256 (%s) and put the core plus pt/ helpers into %s.", url, hash, filepath.Join(base, "cores"))
