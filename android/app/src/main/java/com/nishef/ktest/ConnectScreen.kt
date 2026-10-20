@@ -121,7 +121,7 @@ private fun Hero(
         Spacer(Modifier.height(14.dp))
         Text(
             when (state) {
-                LinkState.Active -> "Connected"
+                LinkState.Active -> if (coverage == "proxy") "Local proxy running" else if (vpnActive) "VPN adapter running" else "Proxy running · VPN inactive"
                 LinkState.Connecting -> "Connecting…"
                 LinkState.Unavailable -> "Not available yet"
                 LinkState.Idle -> if (manualTesting) "Testing routes…" else "Tap to connect"
@@ -130,7 +130,15 @@ private fun Hero(
         )
         Spacer(Modifier.height(6.dp))
         when (state) {
-            LinkState.Active -> Uptime()
+            LinkState.Active -> {
+                Uptime()
+                Text(if (coverage != "proxy" && !vpnActive)
+                    "The proxy is listening, but device-wide VPN is not active. Check Settings for the packet-adapter error."
+                    else "A listening proxy or VPN adapter does not prove a working external exit.",
+                    color = if (coverage != "proxy" && !vpnActive) K.amber else K.muted,
+                    fontSize = 12.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 22.dp))
+            }
             LinkState.Connecting -> Text(
                 when (phase) {
                     "starting_core" -> "Starting ${mode.title}…"
@@ -165,7 +173,7 @@ private fun Hero(
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Tag(mode.title, K.mint)
-                if (coverage != "proxy") Tag(if (vpnActive) "VPN · all apps" else "VPN starting…", if (vpnActive) K.cyan else K.amber)
+                if (coverage != "proxy") Tag(if (vpnActive) "Packet VPN active" else "VPN inactive", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
                 status.optString("exit_location").takeIf { it.isNotBlank() }?.let { Tag("Exit · $it", K.text) }
             }
@@ -499,7 +507,9 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
             }
         }
-        Note("The core scans gateways and reconnects within each method. Auto also tries other compatible WARP transports if verification fails. First-time setup can take several minutes.")
+        Note(if (mode == "aether") "Auto tries other WARP transports after a failed foreign-exit check. A working SOCKS listener alone is not an Internet connection. First-time setup can take several minutes."
+             else if (mode == "psiphon") "Psiphon-only avoids WARP. Use the separate CDN method if the direct Psiphon path is filtered."
+             else "Tor-only does not use WARP. Circuit bootstrap and independently verified foreign exit may take several minutes.")
     }
 }
 
