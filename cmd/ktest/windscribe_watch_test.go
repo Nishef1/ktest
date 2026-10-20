@@ -66,7 +66,7 @@ func TestParseWindscribeStatus(t *testing.T) {
 		{"API SSL error with live tunnel", "Login state: Error: SSL error\nConnect state: Connected: London - 1984\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeConnected, false},
 		{"API error during handshake", "Login state: Error: Network error\nConnect state: Connecting\nProtocol: TCP:443\n", windscribeConnecting, false},
 		{"API error during tunnel test", "Login state: Error: SSL error\n*Connect state: Connected: London\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeConnecting, false},
-		{"API error cannot authorize disconnect", "Login state: Error: SSL error\nConnect state: Disconnected\n", windscribeUnknown, false},
+		{"API error with local disconnect", "Login state: Error: SSL error\nConnect state: Disconnected\n", windscribeDisconnected, false},
 		{"API error without tunnel evidence", "Login state: Error: SSL error\nConnect state: Connected: London\n", windscribeConnecting, false},
 		{"API error without public exit", "Login state: Error: SSL error\nConnect state: Connected: London\nProtocol: TCP:443\nVPN IP: 10.0.0.1\n", windscribeConnecting, false},
 		{"API error without connection state", "Login state: Error: SSL error\n", windscribeUnknown, false},
@@ -164,8 +164,11 @@ func TestWindscribeCLIStatusGraceExpiresWithoutInventingDisconnection(t *testing
 		{"handshake despite API failure", windscribeUnknown, time.Time{}, windscribeConnecting, false, nil, windscribeConnecting},
 		{"unrecognized CLI status", windscribeConnected, now, windscribeUnknown, true, nil, windscribeUnknown},
 		{"actual disconnect", windscribeConnected, now, windscribeDisconnected, true, nil, windscribeDisconnected},
+		{"disconnect despite API failure", windscribeUnknown, time.Time{}, windscribeDisconnected, false, nil, windscribeDisconnected},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			vpnAdapterUp = func() bool { return false }
+			defer func() { vpnAdapterUp = func() bool { return len(activeVPNAdapters()) > 0 } }()
 			if got := windscribeObservedState(test.previous, test.last, now, test.parsed, test.login, test.err); got != test.want {
 				t.Fatalf("got %s, want %s", got, test.want)
 			}
@@ -253,5 +256,13 @@ func TestWindscribeExtraAutoReconnectIsOptIn(t *testing.T) {
 	options := defaultConnectOptions(t.TempDir())
 	if options.windscribeReconnect {
 		t.Fatal("ktest must not auto-reconnect on top of Windscribe's own retry manager by default")
+	}
+}
+
+func TestAPIErrorDisconnectIsDistrustedWhileAVPNAdapterIsUp(t *testing.T) {
+	vpnAdapterUp = func() bool { return true }
+	defer func() { vpnAdapterUp = func() bool { return len(activeVPNAdapters()) > 0 } }()
+	if got := windscribeObservedState(windscribeUnknown, time.Time{}, time.Now(), windscribeDisconnected, false, nil); got != windscribeUnknown {
+		t.Fatalf("Disconnected with a live VPN adapter was trusted: %s", got)
 	}
 }

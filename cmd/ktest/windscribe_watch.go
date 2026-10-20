@@ -93,6 +93,14 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 				// through an existing tunnel; it cannot confirm VPN success.
 				return windscribeConnecting, false
 			}
+			if state == windscribeDisconnected {
+				// The tunnel state comes from the local Windscribe service;
+				// the API error only says the account server is unreachable,
+				// which on a filtered network is always true before a tunnel
+				// exists. refresh also requires that no VPN adapter is up.
+				// Not logged in: never permission to reconnect.
+				return windscribeDisconnected, false
+			}
 		}
 		return windscribeUnknown, false
 	}
@@ -244,7 +252,10 @@ func (m *windscribeMonitor) command(ctx context.Context, args ...string) ([]byte
 // unrecognized status fails closed immediately.
 func windscribeObservedState(previous windscribeState, lastValid, now time.Time, parsed windscribeState, loggedIn bool, commandErr error) windscribeState {
 	if commandErr == nil {
-		if !loggedIn && parsed != windscribeConnected && parsed != windscribeConnecting {
+		if !loggedIn && parsed == windscribeDisconnected && vpnAdapterUp() {
+			return windscribeUnknown // the CLI says Disconnected while a tunnel is up
+		}
+		if !loggedIn && parsed != windscribeConnected && parsed != windscribeConnecting && parsed != windscribeDisconnected {
 			return windscribeUnknown
 		}
 		return parsed
@@ -254,6 +265,9 @@ func windscribeObservedState(previous windscribeState, lastValid, now time.Time,
 	}
 	return windscribeUnknown
 }
+
+// vpnAdapterUp reports a running VPN/TUN adapter. A variable for tests.
+var vpnAdapterUp = func() bool { return len(activeVPNAdapters()) > 0 }
 
 func (m *windscribeMonitor) refresh(ctx context.Context) {
 	out, err := m.command(ctx, "status")
