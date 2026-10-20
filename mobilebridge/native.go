@@ -193,6 +193,12 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	// InspectProfiles normalizes renamed Aether CLI flags for this exact
 	// binary. Launch the accepted profile, not its pre-normalized template.
 	p = supported[0]
+	// Identity bootstrap precedes gateway probing, not the user's VPN
+	// permission flow. It is a bounded, best-effort anti-DPI registration
+	// attempt; no helper may silently become the user's final exit method.
+	if err := bootstrapAndroidWARP(ctx, o, paths, p); err != nil {
+		return nil, fmt.Errorf("WARP identity setup: %w", err)
+	}
 	if edges := psiphonEdges(p, o.privateDir); len(edges) > 0 {
 		// Edges this network verified in CDN scans are tried first by
 		// Psiphon's fronting; its own built-in lists still follow.
