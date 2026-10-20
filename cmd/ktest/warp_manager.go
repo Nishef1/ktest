@@ -314,6 +314,9 @@ func (m *warpManager) run(ctx context.Context) {
 			<-w.unregistered
 		}
 		delete(active, id)
+		// The profile that was working is retried first (with its cached
+		// gateway), before a scan of other variants.
+		delete(m.attempted, id)
 		m.t.Line(toneWarn, "%s ended; replenishing available exit capacity", w.p.Label)
 	}
 	defer stopAll()

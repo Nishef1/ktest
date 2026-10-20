@@ -19,7 +19,11 @@ func (m *warpManager) watchHealth(ctx context.Context, w *warpFound) {
 		case <-w.rc.done:
 			return
 		case <-tick.C:
-			if m.monitor != nil && m.monitor.Connected() {
+			// While Windscribe is connected, connecting or flapping (for
+			// example its Auto mode trying WireGuard, which bypasses ktest),
+			// routes change under the carrier: a failed probe then says
+			// nothing about the carrier, so never retire it on that basis.
+			if m.monitor != nil && (m.monitor.State() != windscribeDisconnected || vpnAdapterUp()) {
 				continue
 			}
 			activity := 0
