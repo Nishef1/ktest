@@ -495,7 +495,7 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
             }
         }
-        Note("The packaged core finds gateways and reconnects by itself. If a method cannot connect, disconnect and try another. First-time setup can take several minutes.")
+        Note("The core scans gateways and reconnects within each method. Auto also tries other compatible WARP transports if verification fails. First-time setup can take several minutes.")
     }
 }
 
