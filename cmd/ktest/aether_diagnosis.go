@@ -89,6 +89,16 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	if len(available) == 0 {
 		return nil, errors.New("no supported profile matches this mode/method; check cores and profiles/aether-profiles.txt")
 	}
+	// Templates were capability-adapted before ECH discovery. Adapt the final
+	// live profiles too: local carrier variants can still contain 2.3.0-only
+	// --no-fragment, and only the final args are given to the native process.
+	available, err = supportedAetherProfiles(ctx, aetherBinary(o.base), available)
+	if err != nil {
+		return nil, err
+	}
+	if len(available) == 0 {
+		return nil, errors.New("no native Aether profiles remain compatible after ECH and carrier setup")
+	}
 	available = recoveryProfilesFirst(available, history, o.mode)
 	if len(history.Results) > 0 {
 		u.Note("Reusing this network's measured profile order; checking live tunnels again")
