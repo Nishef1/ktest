@@ -111,3 +111,89 @@ func TestIdentityRequirementsKeepStandaloneAndNestedKeysSeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestAetherFlagsAdaptToInstalledCoreWithoutLosingUnknownOptions(t *testing.T) {
+	oldHelp := "  --masque  protocol\n  --h2  http2\n  --enroll-address <ip>  registration\n  --api-fragment  register\n  --no-fragment  disable\n  --fragment  split\n"
+	newHelp := "  --masque  protocol\n  --h2  http2\n  --api-address <ip>  registration\n  --fragment  split\n"
+	modern := Profile{Label: "H2", Args: []string{"--masque", "--h2", "--api-address=1.2.3.4", "--fragment"}}
+	old := SupportedProfiles([]Profile{modern}, oldHelp)
+	if len(old) != 1 || !old[0].Has("--enroll-address") || old[0].Has("--api-address") {
+		t.Fatalf("new profile cannot run on the pinned legacy core: %+v", old)
+	}
+	legacy := Profile{Label: "H2", Args: []string{"--masque", "--h2", "--enroll-address=1.2.3.4", "--api-fragment", "--no-fragment"}}
+	modernized := SupportedProfiles([]Profile{legacy}, newHelp)
+	if len(modernized) != 1 || !modernized[0].Has("--api-address") || modernized[0].Has("--enroll-address") ||
+		!modernized[0].Has("--fragment") || modernized[0].Has("--no-fragment") || modernized[0].Has("--api-fragment") {
+		t.Fatalf("legacy profile cannot run on the PattNG-aligned core: %+v", modernized)
+	}
+	if got := SupportedProfiles([]Profile{{Label: "invalid", Args: []string{"--masque", "--fictional-transport"}}}, newHelp); len(got) != 0 {
+		t.Fatalf("unknown transport silently accepted: %+v", got)
+	}
+}
+
+func TestRenamedAetherAPIOptionsPreserveStableProfileIDs(t *testing.T) {
+	old := Profile{Label: "h2", Args: []string{"--masque", "--enroll-address", "1.2.3.4", "--api-fragment", "--ech", "one"}}
+	modern := Profile{Label: "h2", Args: []string{"--masque", "--api-address", "5.6.7.8", "--fragment", "--ech", "two"}}
+	if old.ID() != modern.ID() {
+		t.Fatalf("equivalent profiles lost identity across CLI upgrade: %s != %s", old.ID(), modern.ID())
+	}
+}
+
+func TestModernAetherPreservesLocalCarrierWithoutRemovedNoFragmentFlag(t *testing.T) {
+	profiles := WithLocalCarriers([]Profile{{Label: "H2", Args: []string{"--masque", "--h2"}}})
+	if len(profiles) != 2 || !profiles[1].Has("--no-fragment") {
+		t.Fatalf("test fixture no longer covers legacy carrier flags: %+v", profiles)
+	}
+	newHelp := "  --masque  protocol\n  --h2  transport\n  --upstream <url>  proxy\n  --fragment  TLS\n"
+	accepted := SupportedProfiles(profiles, newHelp)
+	if len(accepted) != 2 || accepted[1].Has("--no-fragment") ||
+		!accepted[1].LocalCarrier() {
+		t.Fatalf("new core lost its local carrier or received unsupported flags: %+v", accepted)
+	}
+}
+
+func TestExitModeCannotSilentlySwitchToAnotherNativeBackend(t *testing.T) {
+	profiles := []Profile{
+		{Label: "WARP", Args: []string{"--masque", "--h2"}},
+		{Label: "Psiphon", Args: []string{"--psiphon-only"}},
+		{Label: "Psiphon CDN", Args: []string{"--psiphon-only", "--psiphon-mode", "cdn"}},
+		{Label: "Tor", Args: []string{"--tor-only"}},
+		{Label: "nested disguise", Args: []string{"--masque", "--psiphon-reverse"}},
+		{Label: "external carrier", Args: []string{"--masque", "--upstream", "socks5://127.0.0.1:10001"}},
+		{Label: "local carrier", Args: []string{"--masque", "--h2", "--upstream", LocalCarrierURL}},
+	}
+	for _, tc := range []struct {
+		mode  string
+		wants []string
+	}{
+		{"aether", []string{"WARP", "local carrier"}},
+		{"fast", []string{"WARP", "local carrier"}},
+		{"windscribe-aether", []string{"WARP"}},
+		{"psiphon", []string{"Psiphon", "Psiphon CDN"}},
+		{"tor", []string{"Tor"}},
+		{"balanced", []string{"WARP", "Psiphon", "Psiphon CDN", "Tor", "nested disguise", "external carrier", "local carrier"}},
+		{"windscribe", nil},
+	} {
+		got := ProfilesForMode(profiles, tc.mode)
+		if len(got) != len(tc.wants) {
+			t.Fatalf("%s: wrong backend inventory: %+v, want %v", tc.mode, got, tc.wants)
+		}
+		for i, want := range tc.wants {
+			if got[i].Label != want {
+				t.Fatalf("%s: unexpected backend %q at %d, want %q", tc.mode, got[i].Label, i, want)
+			}
+		}
+	}
+}
+
+func TestPsiphonOnlyCannotSmuggleTorOrWarpFlags(t *testing.T) {
+	ps := []Profile{
+		{Label: "plain", Args: []string{"--psiphon-only"}},
+		{Label: "mixed tor", Args: []string{"--psiphon-only", "--tor"}},
+		{Label: "mixed warp", Args: []string{"--psiphon-only", "--wg"}},
+	}
+	got := ProfilesForMode(ps, "psiphon")
+	if len(got) != 1 || got[0].Label != "plain" {
+		t.Fatalf("Psiphon-only included mixed backends: %+v", got)
+	}
+}

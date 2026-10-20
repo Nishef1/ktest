@@ -446,23 +446,63 @@ func wsCatalogRequestURL(base string, now time.Time) string {
 	return u.String()
 }
 
+// updateFromSource hedges the legacy list against a slow/filtered mob-v2
+// request. A slow primary used to consume the entire first CONNECT's
+// eight-second catalog wait before the fallback was even contacted.
+// The first *validated* provider response wins; cancel the losing request
+// and never merge unauthenticated or conflicting snapshots.
 func (c *wsNodeCatalog) updateFromSource(ctx context.Context, client *http.Client, source wsCatalogSource) error {
-	urls := []string{wsCatalogRequestURL(source.url, time.Now()), source.fallback}
+	primary := wsCatalogRequestURL(source.url, time.Now())
+	fallback := source.fallback
+	if primary == "" && fallback == "" {
+		return errors.New("Windscribe catalog has no usable endpoints")
+	}
+	if primary == "" {
+		primary, fallback = fallback, ""
+	}
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		body []byte
+		err  error
+	}
+	results := make(chan result, 2)
+	start := func(address string) {
+		go func() {
+			body, err := fetchWSNodeList(reqCtx, client, address)
+			results <- result{body: body, err: err}
+		}()
+	}
+	start(primary)
+	pending := 1
+	startedFallback := fallback == "" || fallback == primary
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
 	var lastErr error
-	for _, url := range urls {
-		if url == "" {
-			continue
-		}
-		body, err := fetchWSNodeList(ctx, client, url)
-		if err == nil {
-			err = c.replace(source.name, body, time.Now())
-		}
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if ctx.Err() != nil {
+	for pending > 0 {
+		select {
+		case <-ctx.Done():
 			return ctx.Err()
+		case <-timer.C:
+			if !startedFallback {
+				startedFallback = true
+				start(fallback)
+				pending++
+			}
+		case attempt := <-results:
+			pending--
+			if attempt.err == nil {
+				attempt.err = c.replace(source.name, attempt.body, time.Now())
+			}
+			if attempt.err == nil {
+				return nil
+			}
+			lastErr = attempt.err
+			if !startedFallback {
+				startedFallback = true
+				start(fallback)
+				pending++
+			}
 		}
 	}
 	if lastErr == nil {
@@ -499,7 +539,11 @@ func (c *wsNodeCatalog) refresh(ctx context.Context, client *http.Client, path s
 	if err := c.save(path); err != nil {
 		logf("Windscribe node cache: %v", err)
 	}
-	return len(updated) == len(wsCatalogURLs)
+	// A partial valid refresh is usable: don't download all large provider
+	// lists every 30 seconds simply because one geo-scoped API is filtered.
+	// A missing requested node still triggers the separate bounded retry.
+	// If every source failed, keep the short failure backoff.
+	return len(updated) > 0
 }
 
 // Fetch success is not equivalent to coverage of the user's selected node.

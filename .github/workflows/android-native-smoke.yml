@@ -1,0 +1,75 @@
+# Unprivileged compile smoke for Android PRs. No secrets or APK upload.
+name: Android native build smoke
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/android-native-smoke.yml"
+      - "go.mod"
+      - "go.sum"
+      - "android/**"
+      - "mobilebridge/**"
+      - "internal/aether/**"
+      - "internal/front/**"
+      - "internal/connectiondns/**"
+      - "internal/smartproxy/**"
+      - "internal/byedpi/**"
+      - "internal/xraycfg/**"
+permissions:
+  contents: read
+concurrency:
+  group: android-native-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android 36 and pinned NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - name: Compile actual Go JNI bridge for arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+          MOBILE_VERSION=v0.0.0-20261011034528-197770444867
+          go install golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION
+          go get -tool golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION
+          gomobile init
+          mkdir -p android/app/libs
+          gomobile bind -target=android/arm64 -androidapi=26 -o android/app/libs/mobilebridge.aar ./mobilebridge
+      - name: Prepare SHA-pinned HEV and Aether/Xray/ByeDPI executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash android/scripts/fetch-hev-aar.sh
+          python3 android/scripts/prepare-native-cores.py --abis arm64-v8a
+      - name: Compile actual Android debug APK
+        shell: bash
+        env:
+          KTEST_REQUIRE_PREVIEW_SIGNING: 'false'
+        run: |
+          set -euo pipefail
+          gradle -p android :app:assembleDebug -PktestAbis=arm64-v8a --no-daemon --no-configuration-cache
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          python3 android/scripts/prepare-native-cores.py --abis arm64-v8a --verify-apk "$APK"
+          unzip -t "$APK" >/dev/null
+          echo "Android JNI, Kotlin and native payload digests compiled and verified; live ISP not tested."

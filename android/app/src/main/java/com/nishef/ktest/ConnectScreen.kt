@@ -121,7 +121,7 @@ private fun Hero(
         Spacer(Modifier.height(14.dp))
         Text(
             when (state) {
-                LinkState.Active -> "Connected"
+                LinkState.Active -> if (coverage == "proxy") "Local proxy running" else if (vpnActive) "VPN adapter running" else "Proxy running · VPN inactive"
                 LinkState.Connecting -> "Connecting…"
                 LinkState.Unavailable -> "Not available yet"
                 LinkState.Idle -> if (manualTesting) "Testing routes…" else "Tap to connect"
@@ -130,7 +130,15 @@ private fun Hero(
         )
         Spacer(Modifier.height(6.dp))
         when (state) {
-            LinkState.Active -> Uptime()
+            LinkState.Active -> {
+                Uptime()
+                Text(if (coverage != "proxy" && !vpnActive)
+                    "The proxy is listening, but device-wide VPN is not active. Check Settings for the packet-adapter error."
+                    else "A listening proxy or VPN adapter does not prove a working external exit.",
+                    color = if (coverage != "proxy" && !vpnActive) K.amber else K.muted,
+                    fontSize = 12.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 22.dp))
+            }
             LinkState.Connecting -> Text(
                 when (phase) {
                     "starting_core" -> "Starting ${mode.title}…"
@@ -165,7 +173,7 @@ private fun Hero(
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Tag(mode.title, K.mint)
-                if (coverage != "proxy") Tag(if (vpnActive) "VPN · all apps" else "VPN starting…", if (vpnActive) K.cyan else K.amber)
+                if (coverage != "proxy") Tag(if (vpnActive) "Packet VPN active" else "VPN inactive", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
                 status.optString("exit_location").takeIf { it.isNotBlank() }?.let { Tag("Exit · $it", K.text) }
             }
@@ -424,11 +432,9 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
         runCatching {
             val catalog = JSONObject(Mobilebridge.aetherProfileCatalog(mode, "auto"))
             val methods = catalog.getJSONArray("methods")
-            val defaultMethod = catalog.getJSONArray("profiles").getJSONObject(0).getString("method")
             (0 until methods.length()).map { i ->
                 val item = methods.getJSONObject(i)
-                item.getString("id") to if (item.getString("id") == "auto")
-                    "Default · $defaultMethod" else item.getString("title")
+                item.getString("id") to item.getString("title")
             }
         }.getOrElse { emptyList() }
     }
@@ -446,8 +452,9 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                             .padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(choices.firstOrNull { it.first == method }?.second ?: "Default",
-                            color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text(choices.firstOrNull { it.first == method }?.second ?: "Method unavailable · select another",
+                            color = if (choices.any { it.first == method }) K.text else K.amber,
+                            fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                         if (enabled && choices.size > 1) Icon(KIcons.ExpandMore, "Choose method", tint = K.cyan)
                     }
                     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
@@ -461,6 +468,11 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                     }
                 }
             }
+        }
+        if (choices.isEmpty()) {
+            Note("Native method catalog unavailable. Check the packaged Aether core before starting.", Tone.Warn)
+        } else if (choices.none { it.first == method }) {
+            Note("The saved method is no longer compatible with this mode. Select a supported method before connecting.", Tone.Warn)
         }
         if (mode == "aether") {
             val prefs = androidx.compose.ui.platform.LocalContext.current
@@ -495,7 +507,9 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
             }
         }
-        Note("The packaged core finds gateways and reconnects by itself. If a method cannot connect, disconnect and try another. First-time setup can take several minutes.")
+        Note(if (mode == "aether") "Auto tries other WARP transports after a failed foreign-exit check. A working SOCKS listener alone is not an Internet connection. First-time setup can take several minutes."
+             else if (mode == "psiphon") "Psiphon-only avoids WARP. Use the separate CDN method if the direct Psiphon path is filtered."
+             else "Tor-only does not use WARP. Circuit bootstrap and independently verified foreign exit may take several minutes.")
     }
 }
 

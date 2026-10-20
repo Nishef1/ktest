@@ -130,7 +130,7 @@ func TestCarriersActuallyDialAdvertisedNonNeighbourAddresses(t *testing.T) {
 			_, _ = carrier.open(context.Background(), "203.0.113.100", "443")
 		}
 	}
-	want := []string{"198.51.100.9:443", "198.51.100.9:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443"}
+	want := []string{"198.51.100.9:443", "198.51.100.9:443", "198.51.100.9:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443", "192.0.2.210:443"}
 	if !reflect.DeepEqual(targets, want) {
 		t.Fatalf("wrong carrier destinations: %v, want %v", targets, want)
 	}
@@ -518,5 +518,101 @@ func TestCatalogRefreshDelayDistinguishesMissingNodeFromSuccessfulFetch(t *testi
 		if got := wsCatalogRefreshDelay(tc.refreshed, tc.missing, tc.retries); got != tc.want {
 			t.Fatalf("refresh=%t missing=%t retries=%d: got %s want %s", tc.refreshed, tc.missing, tc.retries, got, tc.want)
 		}
+	}
+}
+
+func TestCatalogHedgesStalledPrimaryBeforeFirstWindscribeConnect(t *testing.T) {
+	var fallbackCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mob":
+			<-r.Context().Done() // censored/blocked API: must not prevent fallback
+		case "/legacy":
+			fallbackCalls++
+			_, _ = w.Write([]byte(globalNodeFixture))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c := newWSNodeCatalog()
+	start := time.Now()
+	err := c.updateFromSource(ctx, srv.Client(), wsCatalogSource{
+		name: "global", url: srv.URL + "/mob", fallback: srv.URL + "/legacy",
+	})
+	if err != nil || len(c.endpoints("203.0.113.100")) == 0 || fallbackCalls == 0 {
+		t.Fatalf("blocked mob-v2 prevented valid legacy node discovery: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("legacy catalog was not hedged inside first CONNECT wait: %v", d)
+	}
+}
+
+func TestCatalogInvalidPrimaryFallsBackWithoutPublishingBadNodes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mob" {
+			_, _ = w.Write([]byte("{malformed"))
+			return
+		}
+		_, _ = w.Write([]byte(regionalNodeFixture))
+	}))
+	defer srv.Close()
+	c := newWSNodeCatalog()
+	if err := c.updateFromSource(context.Background(), srv.Client(), wsCatalogSource{
+		name: "regional", url: srv.URL + "/mob", fallback: srv.URL + "/legacy",
+	}); err != nil {
+		t.Fatalf("valid fallback rejected after malformed primary: %v", err)
+	}
+	if got := c.endpoints("203.0.113.100"); len(got) == 0 || got[0].source != "regional/ip" {
+		t.Fatalf("unverified primary response poisoned provider nodes: %+v", got)
+	}
+}
+
+func TestCatalogFastPrimaryDoesNotDownloadFallback(t *testing.T) {
+	var fallbackCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/legacy" {
+			fallbackCalls++
+			http.Error(w, "not needed", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(globalNodeFixture))
+	}))
+	defer srv.Close()
+	c := newWSNodeCatalog()
+	if err := c.updateFromSource(context.Background(), srv.Client(), wsCatalogSource{
+		name: "global", url: srv.URL + "/mob", fallback: srv.URL + "/legacy",
+	}); err != nil || fallbackCalls != 0 {
+		t.Fatalf("healthy fast primary needlessly loaded legacy catalog: %v, requests=%d", err, fallbackCalls)
+	}
+}
+
+func TestPartialWindscribeCatalogRefreshAvoidsFullRetryFlood(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/okay") {
+			_, _ = w.Write([]byte(globalNodeFixture))
+			return
+		}
+		http.Error(w, "restricted regional API", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	oldSources := wsCatalogURLs
+	wsCatalogURLs = []wsCatalogSource{
+		{name: "global", url: srv.URL + "/okay/", fallback: srv.URL + "/okay-fallback"},
+		{name: "regional", url: srv.URL + "/blocked/", fallback: srv.URL + "/blocked-fallback"},
+	}
+	defer func() { wsCatalogURLs = oldSources }()
+	c := newWSNodeCatalog()
+	refreshed := c.refresh(context.Background(), srv.Client(), filepath.Join(t.TempDir(), "nodes.json"), func(string, ...any) {})
+	if !refreshed || len(c.endpoints("203.0.113.100")) == 0 {
+		t.Fatal("one working official list must unblock the exact Windscribe node")
+	}
+	if next := wsCatalogRefreshDelay(refreshed, false, 0); next != 30*time.Minute {
+		t.Fatalf("partial provider outage causes repeated full inventory downloads: %s", next)
+	}
+	if next := wsCatalogRefreshDelay(refreshed, true, 0); next != 45*time.Second {
+		t.Fatalf("missing target was not scheduled for prompt recovery: %s", next)
 	}
 }

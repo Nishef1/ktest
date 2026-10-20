@@ -12,7 +12,7 @@ ktest connect -mode windscribe-aether -aether-method gool-h2
 
 ## Methods
 
-These names follow the pinned Aether v2.3.0 CLI/runtime, including the distinction between current Gool and classic WARP-in-WARP:
+These names follow the Aether v2.3.1 CLI/runtime, including the distinction between current Gool and classic WARP-in-WARP:
 
 | Saved method | Transport |
 | --- | --- |
@@ -37,7 +37,7 @@ Comparison uses two profile workers. Each attempt's deadline includes the Aether
 
 Measurements live in the per-user WARP directory's `network-measurements.json`. A locally hashed interface/network signature and core SHA-256 isolate networks and core versions. Raw network names, gateways and DNS inventories are not stored. Measurements expire after 24 hours; at most 16 network entries are retained. Corrupt caches are reported and preserved. The cache orders attempts and recommends methods; it cannot authorize a connection or replace live location verification.
 
-Fast weighs latency and any optional transfer sample more strongly. Balanced and strict Aether weigh sample failures more heavily. Automatic discovery starts with a 40-second sweep; forced or isolated slow profiles get a deadline based on configured startup, capped at 250 seconds, rather than being cancelled before the core can finish. Up to three measured exits are retained. A suitable cached foreign winner (or a working carrier in Windscribe-through-Aether) uses a single probe worker first. A failed winner yields to other candidates; recent failed attempts are deprioritized for ten minutes. If no exit is retained, discovery retries with a 30-second, 1-minute, then 2-minute backoff without repeatedly registering the same missing identity in that session. Cancelled Gool outer bootstrap does not mark its inner enrollment attempted. The pinned Aether 2.3.0 can reuse a failed gateway indefinitely (upstream issue #147, fixed in unreleased source); ktest now chooses fresh scans by default, unless a profile explicitly requests quick reconnect. H2/ECH profiles no longer disable TLS fragmentation.
+Fast weighs latency and any optional transfer sample more strongly. Balanced and strict Aether weigh sample failures more heavily. Automatic discovery starts with a 40-second sweep; forced or isolated slow profiles get a deadline based on configured startup, capped at 250 seconds, rather than being cancelled before the core can finish. Up to three measured exits are retained. A suitable cached foreign winner (or a working carrier in Windscribe-through-Aether) uses a single probe worker first. A failed winner yields to other candidates; recent failed attempts are deprioritized for ten minutes. If no exit is retained, discovery retries with a 30-second, 1-minute, then 2-minute backoff without repeatedly registering the same missing identity in that session. Cancelled Gool outer bootstrap does not mark its inner enrollment attempted. Aether v2.3.1 includes upstream PR #147, which changes selection and retirement of failing gateways. KTest still chooses fresh gateway scans by default, unless a profile explicitly requests quick reconnect; that conservative setting can be revisited with live measurements. H2/ECH profiles no longer disable TLS fragmentation.
 
 For active sessions, small neutral health checks run every three minutes only when proxy activity has advanced. Two failed checks retire a core. Discovery resumes when all retained exits have ended. Checks pause while Windscribe reports Connected so an independent probe cannot tear down its working carrier. Protected AI routes remain pinned and fail closed after their selected exit disappears; reconnect to select a new protected identity. Ordinary mixed-mode destinations keep their existing per-host adaptive fallback policy.
 
@@ -55,11 +55,42 @@ Standalone comparisons skip an already Connected/Connecting Windscribe session o
 
 Initial registration may be filtered even when gateways work. A strict-mode proxy listener without a live verified exit is never used as its own registration upstream; prepared identities are allowed to bypass the global enrollment lock so independently runnable profiles are not starved. Existing offline-valid keys are reused; damaged files are kept for explicit repair. Inner identities are prepared only for methods that need them: `wg-secondary.toml` for classic WARP-in-WARP, `masque-secondary.toml` for MASQUE-in-MASQUE, and `masque-gool.toml` for Gool. Gool's inner WireGuard registration travels through a temporary outer MASQUE tunnel. Staged registration validates the exact expected file and publishes without replacing an existing identity. Runtime cores run with automatic reprovisioning disabled. A successful ECH enrollment saves an identity only: it never establishes that a data-plane MASQUE or WireGuard tunnel is reachable. An unreachable exit-location probe is recorded as unverified, not as proof that its country is rejected. In strict Aether/Psiphon/Tor modes installing a local fronting CA is not a relevant recovery action; CA trust is reserved for explicit website-fronting in mixed modes.
 
-See [connection policies](CONNECTION_MODES.md), [Windscribe tests](WINDSCRIBE_BOOTSTRAP.md), and the authoritative pinned [Aether CLI](https://github.com/CluvexStudio/Aether/blob/v2.3.0/aether/src/cli.rs) / [runtime](https://github.com/CluvexStudio/Aether/blob/v2.3.0/aether/src/lib.rs).
+See [connection policies](CONNECTION_MODES.md), [Windscribe tests](WINDSCRIBE_BOOTSTRAP.md), and the pinned [Aether CLI](https://github.com/patterniha/Aether/blob/v2.3.1/aether/src/cli.rs) / [runtime](https://github.com/patterniha/Aether/blob/v2.3.1/aether/src/lib.rs).
 
-## Verified upstream limitations (2026-10-17)
+## Aether core and Android Auto upgrade (2026-10-20)
 
-The published Aether 2.3.0 may re-enable WARP via a filtered API on each MASQUE startup even with a saved identity. CluvexStudio/Aether #147 fixes this in newer source, not in the latest published v2.3.0 artifact. Increasing ktest timeouts cannot solve a blocked API. Do not silently replace the pinned binary with an unaudited snapshot. The upstream TLS verification default is off; --tls-verify is supported but should be validated against the intended Cloudflare TLS endpoint before enabling for all methods. Preserve a fail-closed verified-foreign-exit policy regardless of the upstream core's exit-location claim.
+Desktop core downloads now pin the published `patterniha/Aether` v2.3.1
+archives with per-platform SHA-256. Their transport source descends from
+`CluvexStudio/Aether` commit `577a4c8`, also used by PattNG, with
+MASQUE SNI selection (`www.cloudflare.com` by default), updated WARP
+registration, new `--api-address`, and gateway-failure handling. The
+setup command upgrades an existing legacy executable when the modern
+`--api-address` and `--masque-sni` capabilities are not present.
+Saved identities are kept; the new binary still requires a fresh live test.
+
+Android now pins verified v2.3.1 native payloads for ARM64, ARMv7 and
+x86_64 in `internal/aether/android-cores.json`. All three archive digests
+and the nine contained binary digests were checked through a dedicated
+GitHub Actions release-audit run before the manifest changed. The original
+Psiphon and Lyrebird helper digests were unchanged.
+
+In standalone Android **Aether Auto**, a failed WARP method no longer
+ends the entire attempt at the first supported profile. KTest iterates
+independent WARP methods, reusing Aether's own gateway scanning within
+each candidate and stopping unsuccessful processes before switching.
+The total startup deadline remains bounded; TCP-only Fast carrying
+excludes UDP-dependent methods. Strict foreign-exit verification remains
+separate from native process and SOCKS readiness. Balanced/Fast already
+have their own independent native exit discovery.
+
+This is source and artifact-integrity evidence, not proof of successful
+WARP egress on an Iranian ISP. Validate native CONNECT-IP, real HTTPS
+through the selected SOCKS, Windscribe carrier feasibility, TUN, DNS, UDP
+and end-to-end country/IP before considering the upgrade operational.
+
+## Historical upstream limitations (2026-10-17)
+
+The published Aether 2.3.0 may re-enable WARP via a filtered API on each MASQUE startup even with a saved identity. CluvexStudio/Aether #147 fixes this in newer source, not in the previously pinned v2.3.0 artifact. This historical finding motivated the 2026-10-20 upgrade above. Increasing ktest timeouts cannot solve a blocked API. The newer published archives are now pinned and verified separately; a release digest alone does not prove network compatibility. The upstream TLS verification default is off; --tls-verify is supported but should be validated against the intended Cloudflare TLS endpoint before enabling for all methods. Preserve a fail-closed verified-foreign-exit policy regardless of the upstream core's exit-location claim.
 
 ### Native-only Windows investigation (2026-10-19)
 

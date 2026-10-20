@@ -39,6 +39,7 @@ func TestExplicitWStunnelOverrideDoesNotInventStealth(t *testing.T) {
 
 func TestWSOptionsValidate(t *testing.T) {
 	good := []wsOptions{
+		{direct: true, sni: "none"},
 		{direct: true, sni: "www.speedtest.net,a.example.com"},
 		{cdnHost: "ws.example.com", cdnSNI: "front.example.net", cdnEdges: "104.16.1.1, 172.67.2.2:8443"},
 	}
@@ -595,7 +596,7 @@ func TestDefaultCarriersCoverEveryMethod(t *testing.T) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}
 	}
-	if len(names) != 2+2*2*(2+1)*2 {
+	if len(names) != 2+2*2*(2*3+2) {
 		t.Fatalf("%d carriers:\n%s", len(names), all)
 	}
 	if strings.Contains(all, "raw OpenVPN") {
@@ -1034,9 +1035,10 @@ func TestWindscribeCarrierOffersUpstreamHelloWithoutReplacingChrome(t *testing.T
 	}
 	for _, want := range []string{
 		"WStunnel sni=example.com entry=192.0.2.10 hello=chrome",
-		"WStunnel sni=example.com entry=192.0.2.10 hello=windscribe",
+		"WStunnel sni=example.com entry=192.0.2.10 hello=go-tls",
+		"WStunnel sni=example.com entry=192.0.2.10 hello=randomized",
 		"Stealth sni=example.com entry=192.0.2.11 hello=chrome",
-		"Stealth sni=example.com entry=192.0.2.11 hello=windscribe",
+		"Stealth sni=example.com entry=192.0.2.11 hello=randomized",
 	} {
 		if !names[want] {
 			t.Fatalf("fingerprint fallback profile missing: %q", want)
@@ -1306,5 +1308,23 @@ func TestInitialReplyDeadlineDoesNotExpireTheSelectedVPNStream(t *testing.T) {
 	buf := make([]byte, len("VPN data"))
 	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "VPN data" {
 		t.Fatalf("stream lost continuation data: %q, %v", buf, err)
+	}
+}
+
+func TestProviderNativeSNIIsNotTransmittedAsLiteralNone(t *testing.T) {
+	b := newWSBridge(wsOptions{direct: true, sni: "none"}, nil, nil, func(string, ...any) {})
+	b.catalog = newWSNodeCatalog()
+	if err := b.catalog.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range b.carriersFor("203.0.113.100") {
+		if strings.HasPrefix(c.name, "WStunnel ") || strings.HasPrefix(c.name, "Stealth ") {
+			if !strings.Contains(c.name, "sni=none") {
+				t.Fatalf("provider-native profile misidentified: %s", c.name)
+			}
+		}
+	}
+	if !strings.HasPrefix(defaultWindscribeSNIs, "none,") {
+		t.Fatal("automatic WStunnel discovery omitted the no-custom-SNI baseline")
 	}
 }

@@ -543,3 +543,24 @@ func TestProbeDoesNotConfuseCustomPeerCallbackWithPKIVerification(t *testing.T) 
 		t.Fatalf("peer callback/HTTP 101 must not imply certificate or VPN authentication: %+v", result)
 	}
 }
+
+func TestNativeGoTLSWStunnelBaselineCarriesOpenVPNBytes(t *testing.T) {
+	srv := wsEcho(t, DefaultPath, nil)
+	conn, err := Dial(context.Background(), Config{
+		Addr: srv.Listener.Addr().String(), Host: "203.0.113.7",
+		Dial: dialTCP, NativeGoTLS: true,
+	})
+	if err != nil {
+		t.Fatalf("native Go TLS baseline could not upgrade: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	data := []byte("OpenVPN-control-over-Go-TLS")
+	if _, err := conn.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	out := make([]byte, len(data))
+	if _, err := io.ReadFull(conn, out); err != nil || !bytes.Equal(out, data) {
+		t.Fatalf("Go TLS WStunnel changed tunneled bytes: %q, %v", out, err)
+	}
+}

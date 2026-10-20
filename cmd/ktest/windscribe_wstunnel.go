@@ -40,7 +40,7 @@ type wsOptions struct {
 
 // defaultWindscribeSNIs are raced on the direct carriers: names a filtering
 // SNI allowlist is likely to pass. The Windscribe node ignores the SNI.
-const defaultWindscribeSNIs = "www.speedtest.net,www.digikala.com,www.aparat.com"
+const defaultWindscribeSNIs = "none,www.speedtest.net,www.digikala.com,www.aparat.com"
 
 func (o wsOptions) enabled() bool { return o.direct || o.cdnHost != "" }
 
@@ -90,8 +90,8 @@ func splitList(s string) []string {
 
 func (o wsOptions) validate() error {
 	for _, s := range splitList(o.sni) {
-		if !validHostname(s) {
-			return fmt.Errorf("-windscribe-wstunnel-sni %q is not a hostname", s)
+		if s != "none" && !validHostname(s) {
+			return fmt.Errorf("-windscribe-wstunnel-sni %q is not a hostname or none", s)
 		}
 	}
 	if o.serverIP != "" {
@@ -371,7 +371,13 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 			b.logf("Windscribe %s: no fresh provider node mapping; no IP neighbours guessed; raw destination retained", host)
 		}
 		for _, leg := range legs {
-			for _, sni := range snis {
+			for _, chosen := range snis {
+				sni := chosen
+				if sni == "none" {
+					// The provider-native baseline sends no custom TLS
+					// server name; do not put the word "none" on the wire.
+					sni = ""
+				}
 				label := sni
 				if label == "" {
 					label = "none"
@@ -386,11 +392,12 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 					// upstream TLS fingerprint as a separately scored retry.
 					// A ClientHello alone is not evidence of working OpenVPN.
 					for _, fp := range []struct {
-						name     string
-						official bool
-					}{{"chrome", false}, {"windscribe", true}} {
+						name   string
+						random bool
+						goTLS  bool
+					}{{"go-tls", false, true}, {"chrome", false, false}, {"randomized", true, false}} {
 						out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, method: leg.method, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
-							return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial, OfficialHello: fp.official})
+							return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial, OfficialHello: fp.random, NativeGoTLS: fp.goTLS})
 						}})
 					}
 				}
@@ -404,7 +411,7 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 						for _, fp := range []struct {
 							name     string
 							official bool
-						}{{"chrome", false}, {"windscribe", true}} {
+						}{{"chrome", false}, {"randomized", true}} {
 							out = append(out, wsCarrier{name: "Stealth sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, method: leg.method, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 								// Windscribe's official wrapper leaves outer TLS chain
 								// verification to the authenticated inner OpenVPN client.

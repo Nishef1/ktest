@@ -68,6 +68,19 @@ class MainActivity : ComponentActivity() {
 
 private val connectingPhases = setOf("preparing", "starting_core", "verifying_upstream", "calibrating")
 
+// A saved native method can disappear after a core upgrade or a mode change.
+// Validate it against the same Go-owned method catalog used by the selector.
+// Falling back to Auto never switches the user to another backend: Go's
+// Aether/Psiphon/Tor mode policies enforce the actual permitted protocols.
+private fun validNativeMethod(mode: String, saved: String): String {
+    if (mode !in nativeModes) return "auto"
+    return runCatching {
+        val methods = JSONObject(Mobilebridge.aetherProfileCatalog(mode, "auto")).getJSONArray("methods")
+        if ((0 until methods.length()).any { methods.getJSONObject(it).optString("id") == saved }) saved
+        else "auto"
+    }.getOrDefault("auto")
+}
+
 @Composable
 private fun KTestApp() {
     val context = LocalContext.current
@@ -78,7 +91,7 @@ private fun KTestApp() {
     val scrolls = listOf(rememberScrollState(), rememberScrollState(), rememberScrollState())
     var modeId by rememberSaveable { mutableStateOf(prefs.getString("mode", "balanced") ?: "balanced") }
     var upstream by remember { mutableStateOf(prefs.getString("upstream_$modeId", "") ?: "") }
-    var nativeMethod by remember { mutableStateOf(prefs.getString("method_$modeId", "auto") ?: "auto") }
+    var nativeMethod by remember { mutableStateOf(validNativeMethod(modeId, prefs.getString("method_$modeId", "auto") ?: "auto")) }
     var status by remember { mutableStateOf(JSONObject(Mobilebridge.proxyStatus())) }
     var vpnCapability by remember { mutableStateOf(JSONObject(Mobilebridge.vpnCapability())) }
     var connecting by remember { mutableStateOf(false) }
@@ -295,7 +308,7 @@ private fun KTestApp() {
                                 if (offline && !routeTargets.busy) {
                                     modeId = it
                                     upstream = prefs.getString("upstream_$it", "") ?: ""
-                                    nativeMethod = prefs.getString("method_$it", "auto") ?: "auto"
+                                    nativeMethod = validNativeMethod(it, prefs.getString("method_$it", "auto") ?: "auto")
                                     prefs.edit().putString("mode", it).apply()
                                     error = null
                                     ProxyService.lastError = null

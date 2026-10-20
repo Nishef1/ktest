@@ -47,8 +47,15 @@ func TestAllAetherFamiliesRemainAvailableWithoutECH(t *testing.T) {
 		if method.value == "auto" {
 			continue
 		}
+		if strings.HasPrefix(method.value, "psiphon") {
+			psiphon, err := loadAetherProfiles(t.TempDir(), "", "", ModePsiphon)
+			if err != nil || len(filterAetherMethod(psiphon, method.value)) == 0 {
+				t.Errorf("dedicated Psiphon mode lost %s without ECH: %v", method.value, err)
+			}
+			continue
+		}
 		if len(filterAetherMethod(profiles, method.value)) == 0 {
-			t.Errorf("missing %s without ECH", method.value)
+			t.Errorf("Aether lost %s without ECH", method.value)
 		}
 	}
 	for _, method := range []string{"masque-h2", "masque-h3", "wireguard", "gool-h2", "gool-h3", "wiw", "mim-h2", "mim-h3"} {

@@ -105,7 +105,7 @@ An older APK signed with a runner-generated random debug key cannot be updated i
 
 ## Aether / Tor / Psiphon upstream provenance and trust boundary
 
-- The Android package uses the **official `CluvexStudio/Aether` v2.3.0 release archives**, not independently downloaded Psiphon or Tor binaries. Exact archive SHA-256 values are pinned in `internal/aether/android-cores.json`, and the unmodified executable SHA-256 values are checked both by the Android packager and at runtime by `AndroidBundlePaths`.
+- The Android package uses the **checksum-pinned `patterniha/Aether` v2.3.1 release archives**, not independently downloaded Psiphon or Tor binaries. Exact archive SHA-256 values are pinned in `internal/aether/android-cores.json`, and the unmodified executable SHA-256 values are checked both by the Android packager and at runtime by `AndroidBundlePaths`.
 - `libaether.so` contains the **Arti** Tor implementation, built by upstream with Cargo feature `tor`. Standalone Tor uses Aether's `--tor-only`; neither the Go app nor Kotlin includes a second Tor implementation. The extracted `liblyrebird.so` provides Tor pluggable-transport support; `ProfileArgs` explicitly passes its package path through `--tor-pt` and an app-private `--tor-dir`.
 - `libpsiphon-tunnel-core.so` is the **console-client helper from the `CluvexStudio/psiphon-tunnel-core` fork** selected by Aether v2.3.0's `psiphon-build.sh`. That script names `shirokhorshid` and source commit `83aa73b9b982e7421e00117f5b0c5aceb5dda452`. `ProfileArgs` passes the pinned APK helper path with `--psiphon-bin` and the private `--psiphon-dir`. This is not a separately selected Psiphon Android SDK.
 - **Source provenance limitation:** the upstream `psiphon-build.sh` explicitly falls back to the current branch when checkout of the pinned commit fails; `pt-build.sh` can similarly fall back to the Lyrebird repository default branch. Thus the release archives' known hashes establish **artifact identity**, not reproducible proof that every ABI was built at those source commits. A self-built replacement must remove these fallback paths and lock all inputs before making that stronger claim.
@@ -140,7 +140,7 @@ Generating or installing the CA alone does not activate optional fronting, enabl
 
 ## Native Aether packaging
 
-The official v2.3.0 release includes dedicated Android arm64, ARMv7 and x86_64
+The pinned v2.3.1 release includes dedicated Android arm64, ARMv7 and x86_64
 archives. `internal/aether/android-cores.json` pins each archive and every
 unmodified Aether, Psiphon and Lyrebird executable. It is shared by the Python
 packager and the Go runtime verifier; a missing, modified or wrong-ABI bundle

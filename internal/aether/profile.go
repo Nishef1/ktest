@@ -19,22 +19,27 @@ import (
 const DefaultProfiles = `# Aether profiles, one per line:  label | flags
 # Two at a time; fresh measurements for this network/core take priority.
 # ktest adds the loopback bind address, the identity files and the prompts' answers.
-WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --fragment --ech {ECH} --enroll-address {ECHIP}
-WARP, MASQUE over HTTP/3 (QUIC) with ECH | --masque --h3 --ech {ECH} --enroll-address {ECHIP}
-WARP, WireGuard | --wg --noize balanced --ech {ECH} --enroll-address {ECHIP}
-WARP, MASQUE over HTTP/2, fragmented | --masque --h2 --api-fragment
+WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --fragment --ech {ECH} --api-address {ECHIP}
+WARP, MASQUE over HTTP/3 (QUIC) with ECH | --masque --h3 --ech {ECH} --api-address {ECHIP}
+WARP, WireGuard | --wg --noize balanced --ech {ECH} --api-address {ECHIP}
+WARP, MASQUE over HTTP/2, fragmented | --masque --h2 --fragment
 WARP, MASQUE over HTTP/3 | --masque --h3
 WARP, WireGuard without ECH enrollment | --wg --noize balanced
+# Runtime ECH fallback: PattNG's Aether can fetch its own ECH key when
+# our independent Cloudflare ECH bootstrap is filtered. This is not an
+# extra always-on layer: it runs only when selected as another profile.
+WARP, MASQUE HTTP/2 with core-managed ECH | --masque --h2 --fragment --ech auto
+WARP, MASQUE HTTP/3 with core-managed ECH | --masque --h3 --ech auto
 WARP, Gool WireGuard over MASQUE H2 | --gool --h2
 WARP, Gool WireGuard over MASQUE H3 | --gool --h3
 WARP, MASQUE-in-MASQUE H2 | --mim --h2
 WARP, MASQUE-in-MASQUE H3 | --mim --h3
 WARP, classic WireGuard-in-WireGuard | --gool-classic
-WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --enroll-address {ECHIP}
-WARP, MASQUE over HTTP/2 with ECH, IPv6 | --masque --h2 --no-fragment -6 --ech {ECH} --enroll-address {ECHIP}
+WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --api-address {ECHIP}
+WARP, MASQUE over HTTP/2 with ECH, IPv6 | --masque --h2 -6 --ech {ECH} --api-address {ECHIP}
 Psiphon | --psiphon-only
 Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
-WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --fragment --scan thorough --startup-secs 100 --ech {ECH} --enroll-address {ECHIP}
+WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --fragment --scan thorough --startup-secs 100 --ech {ECH} --api-address {ECHIP}
 `
 
 // Profile is one way of running Aether.
@@ -148,12 +153,23 @@ func (p Profile) Value(flag string) string {
 func (p Profile) ID() string {
 	args := append([]string(nil), p.Args...)
 	for i, flag := range args {
-		if (flag == "--ech" || flag == "--enroll-address") && i+1 < len(args) {
+		if flag == "--enroll-address" {
+			// The old and new API-address spellings describe the same route.
+			flag, args[i] = "--api-address", "--api-address"
+		}
+		if flag == "--api-fragment" {
+			flag, args[i] = "--fragment", "--fragment"
+		}
+		if (flag == "--ech" || flag == "--api-address") && i+1 < len(args) {
 			args[i+1] = "<discovered>"
 		}
-		for _, key := range []string{"--ech=", "--enroll-address="} {
+		for _, key := range []string{"--ech=", "--enroll-address=", "--api-address="} {
 			if strings.HasPrefix(flag, key) {
-				args[i] = key + "<discovered>"
+				name := key
+				if key == "--enroll-address=" {
+					name = "--api-address="
+				}
+				args[i] = name + "<discovered>"
 			}
 		}
 	}
@@ -175,19 +191,47 @@ func FilterMethod(profiles []Profile, method string) []Profile {
 }
 
 // Saved recommendations and live launches use the same transport boundary.
+// ProfilesForMode enforces the advertised exit protocol, not merely whether
+// a profile can produce a foreign IP. In particular, an Aether session must
+// never silently become Psiphon/Tor, and a Tor session must never become WARP.
+// Balanced is the explicit multi-backend policy; Fast permits only WARP.
 func ProfilesForMode(profiles []Profile, mode string) []Profile {
 	var selected []Profile
 	for _, p := range profiles {
-		if mode == "windscribe" {
+		psiphon := p.Psiphon()
+		tor := p.Has("--tor-only")
+		otherHelpers := p.Has("--tor") || p.Has("--psiphon") ||
+			p.Has("--tor-reverse") || p.Has("--psiphon-reverse")
+		hasWarp := p.Has("--masque") || p.Has("--wg") || p.Has("--wireguard") || p.Has("--warp") ||
+			p.Has("--gool") || p.Has("--mim") ||
+			p.Has("--gool-classic") || p.Value("--protocol") != ""
+		switch mode {
+		case "windscribe":
 			continue
-		}
-		if mode == "fast" && (p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") || (p.Has("--upstream") && !p.LocalCarrier())) {
-			continue
-		}
-		if mode == "psiphon" && (!p.Psiphon() || p.Has("--tor-only") || p.Has("--masque") || p.Has("--wg") || p.Has("--gool") || p.Has("--mim") || p.Has("--gool-classic")) {
-			continue
-		}
-		if mode == "windscribe-aether" && (p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") || p.Has("--upstream")) {
+		case "aether", "windscribe-aether", "fast":
+			if psiphon || tor || otherHelpers || (p.Has("--upstream") && !p.LocalCarrier()) {
+				continue
+			}
+			// Raw WARP carrier profiles are valid only when KTest owns their
+			// loopback path; Windscribe-Aether must remain directly carried.
+			if mode == "windscribe-aether" && p.Has("--upstream") {
+				continue
+			}
+			// An empty/--h2-only Aether profile is valid: MASQUE is
+			// the core's documented default. Reject helper backends above,
+			// but do not reject a deliberate implicit MASQUE configuration.
+		case "psiphon":
+			if !psiphon || tor || otherHelpers || hasWarp || p.Has("--upstream") {
+				continue
+			}
+		case "tor":
+			if !tor || psiphon || otherHelpers || hasWarp || p.Has("--upstream") {
+				continue
+			}
+		case "balanced":
+			// Balanced is the only policy that intentionally mixes native
+			// exit backends. Do not impose a transport preference here.
+		default:
 			continue
 		}
 		selected = append(selected, p)
@@ -301,13 +345,13 @@ func RunArgs(p Profile, port int, stateDir string) []string {
 			args = append(args, "-4")
 		}
 		if !has("--scan", "--turbo", "--balanced", "--thorough", "--verified", "--ironclad") {
-			args = append(args, "--turbo")
+			args = append(args, "--balanced")
 		}
 		if !has("--startup-secs") {
 			args = append(args, "--startup-secs", "45")
 		}
 		if !has("--quick-reconnect", "--no-quick-reconnect") {
-			// Aether 2.3.0 can repeatedly select a failed cached gateway (upstream #147).
+			// Keep conservative fresh gateway scanning until the packaged-core upgrade is verified.
 			// Explicit profile quick-reconnect settings still take precedence.
 			args = append(args, "--no-quick-reconnect")
 		}
@@ -338,10 +382,51 @@ func AttemptTimeout(p Profile) time.Duration {
 	return startup + 20*time.Second
 }
 
+// adaptProfileFlags keeps the shipped and user-defined profile catalog usable
+// with both the older 2.3.0 binary and the newer source used by PattNG.
+// It changes only renamed/removed CLI flags and never silently drops an
+// unknown transport option.
+func adaptProfileFlags(p Profile, known map[string]bool) Profile {
+	args := make([]string, 0, len(p.Args))
+	for _, arg := range p.Args {
+		name, value, inline := strings.Cut(arg, "=")
+		replacement := name
+		switch name {
+		case "--enroll-address":
+			if !known[name] && known["--api-address"] {
+				replacement = "--api-address"
+			}
+		case "--api-address":
+			if !known[name] && known["--enroll-address"] {
+				replacement = "--enroll-address"
+			}
+		case "--api-fragment":
+			if !known[name] && known["--fragment"] {
+				replacement = "--fragment"
+			}
+		case "--no-fragment":
+			// The new core defaults to no fragmentation; the old core
+			// supported an explicit --no-fragment with the opposite default.
+			if !known[name] && known["--fragment"] {
+				continue
+			}
+		}
+		if inline {
+			args = append(args, replacement+"="+value)
+		} else {
+			args = append(args, replacement)
+		}
+	}
+	return Profile{Label: p.Label, Args: args}
+}
+
+// SupportedProfiles also returns CLI-adapted profiles, so a profile that
+// passes capability checks is the same one later given to the process.
 func SupportedProfiles(profiles []Profile, help string) []Profile {
 	known := DocumentedOptions(help)
 	var supported []Profile
-	for _, p := range profiles {
+	for _, original := range profiles {
+		p := adaptProfileFlags(original, known)
 		ok := true
 		for _, arg := range p.Args {
 			if strings.HasPrefix(arg, "--") {

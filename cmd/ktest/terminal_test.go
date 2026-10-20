@@ -449,15 +449,6 @@ func (s *session) expectExit() {
 	}
 }
 
-func (s *session) expectRunning() {
-	s.t.Helper()
-	select {
-	case code := <-s.code:
-		s.t.Fatalf("program exited (%d) but should have stayed open:\n%s", code, s.out.String())
-	case <-time.After(100 * time.Millisecond):
-	}
-}
-
 func TestCtrlCAtTheIdleMainMenuExitsCleanly(t *testing.T) {
 	s := startSession(t)
 	s.waitFor("Select >", 1)

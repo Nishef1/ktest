@@ -11,7 +11,7 @@ The ktest menu and scanner are an independent Go orchestration project. The pack
 - **sing-box v1.14.3** (SagerNet), https://github.com/SagerNet/sing-box — GPL-3.0-or-later. The official Windows amd64 archive is SHA-256 pinned; the full license is included in THIRD_PARTY/sing-box-GPL-3.0.txt. Used only for opt-in system-wide Windows TUN.
 - **Wintun v0.14.1** (WireGuard LLC), https://www.wintun.net/ — signed upstream prebuilt DLL with redistribution terms from the official archive (THIRD_PARTY/Wintun-LICENSE.txt); archive SHA-256 pinned. The developer prebuilt license differs from the Wintun source-code GPL-2.0 terms.
 
-- **Aether v2.3.0** (CluvexStudio), https://github.com/CluvexStudio/Aether — AGPL-3.0. A Rust WARP core (MASQUE over HTTP/2 and HTTP/3) run as a separate, unmodified process only when the user enables the WARP exit; the official Windows archive is SHA-256 pinned (0cc32dd2d7573f91d2e55d4f427bfe4c6f6252342494e1b410d61b12d1e4dc79) and the license text is in THIRD_PARTY/Aether-AGPL-3.0.txt. The corresponding source is at the URL above. Enabling it registers a free anonymous Cloudflare WARP identity on the user's PC; traffic that uses it leaves through Cloudflare.
+- **Aether v2.3.1** (patterniha release of the CluvexStudio Aether source lineage), https://github.com/patterniha/Aether/releases/tag/v2.3.1 — AGPL-3.0. A Rust WARP core (MASQUE over HTTP/2 and HTTP/3) run as a separate, unmodified process only when the user enables the WARP exit; the official Windows archive is SHA-256 pinned (a3bdd2384a624b01e9c4885f2816d75f7039fd2f62d46a94c54a0785e7c8fcb4) and the license text is in THIRD_PARTY/Aether-AGPL-3.0.txt. The corresponding source is at the URL above. Enabling it registers a free anonymous Cloudflare WARP identity on the user's PC; traffic that uses it leaves through Cloudflare.
 
 - **psiphon-tunnel-core** (Psiphon Labs; bundled build from [CluvexStudio's fork](https://github.com/CluvexStudio/psiphon-tunnel-core), branch `shirokhorshid`, revision `83aa73b9b982e7421e00117f5b0c5aceb5dda452`, GPL-3.0) and **lyrebird** (Tor Project, https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird, BSD-style) are the unmodified helpers that ship in the `pt/` folder of the pinned Aether archive. They are extracted next to `aether.exe` only when the user enables the exit paths, and only Aether starts them. Psiphon's original upstream is https://github.com/Psiphon-Labs/psiphon-tunnel-core; no separate KTest Psiphon engine is used.
 
@@ -19,7 +19,7 @@ TUN may temporarily change system routes or DNS behavior. Windows requires Admin
 
 - **Zapret2 winws2 v1.0.5.2** (bol-van), https://github.com/bol-van/zapret2 — MIT. The optional Windows-only packet engine, two Lua scripts, Cygwin runtime and WinDivert 2.2.2-A files are copied from the public `bol-van/zapret-win-bundle` repository at immutable revision `6eb463a6758fb48cd101bc55dfd057e6e9d98af1`. The portable workflow verifies every file against its pinned Git blob ID and checks the Windows driver's Authenticode signature. Zapret2 and WinDivert license files are shipped as `THIRD_PARTY/Zapret2-MIT.txt` and `THIRD_PARTY/WinDivert-LICENSE.txt`. The executable is never automatically started: only `windscribe-test -zapret fake|split` can enable its IP:443-scoped interception, from an Administrator terminal after user opt-in. Cygwin runtime redistribution obligations also apply; the portable package includes `THIRD_PARTY/Cygwin-GPL-3.0.txt`. Keep the matching Cygwin Runtime source available under its upstream licensing terms (see https://cygwin.com/licensing.html); shipping only the DLL without meeting applicable source obligations is not sufficient. No driver is permanently installed by ktest.\n\n## Android native preparation
 
-Android uses the unmodified Android executables in the official Aether v2.3.0
+Android uses the unmodified Android executables in the pinned patterniha Aether v2.3.1
 release, not the Windows or generic Linux Aether binary. Archive and per-file
 SHA-256 values are recorded in `internal/aether/android-cores.json`; the native
 packaging script verifies both levels before copying any file into `jniLibs`.
@@ -47,6 +47,6 @@ sources and license notices must be preserved in Android distribution just as
 for the desktop executables. No Android APK/AAR has been produced or distributed
 by this native-preparation step.
 
-- Aether source and build scripts: https://github.com/CluvexStudio/Aether/tree/v2.3.0
+- Aether source and build scripts: https://github.com/patterniha/Aether/tree/v2.3.1
 - Psiphon helper source: https://github.com/CluvexStudio/psiphon-tunnel-core/tree/83aa73b9b982e7421e00117f5b0c5aceb5dda452
 - Lyrebird helper source: https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/-/tree/fc105a03c0e0acc2479301c361c012ffed359c43

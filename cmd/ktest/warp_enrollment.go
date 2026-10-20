@@ -52,7 +52,7 @@ func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enroll
 		cancel()
 	}
 	if ech != "" && ip != "" {
-		routes = append(routes, enrollmentRoute{"ECH", []string{"--ech", ech, "--enroll-address", ip}})
+		routes = append(routes, enrollmentRoute{"ECH", []string{"--ech", ech, "--api-address", ip}})
 	}
 	if fileOK(psiphonCore(base)) {
 		bin, _ := filepath.Abs(psiphonCore(base))
@@ -61,7 +61,7 @@ func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enroll
 			"--psiphon-bind", "127.0.0.1:0",
 		}})
 	}
-	return append(routes, enrollmentRoute{"fragmented API HTTPS", []string{"--api-fragment"}})
+	return append(routes, enrollmentRoute{"fragmented API HTTPS", []string{"--fragment"}})
 }
 
 type enrollmentRunner func(context.Context, string, []string) error

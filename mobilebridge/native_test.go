@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/coreprocess"
 )
 
@@ -117,6 +118,85 @@ func TestAetherThroughFastOnlyUsesTCPMethods(t *testing.T) {
 	for _, method := range []string{"masque-h3", "wireguard", "psiphon", "psiphon-cdn"} {
 		if _, err := nativeProfile("aether", method, true); err == nil {
 			t.Fatalf("%s needs UDP or its own helper and must be refused through Fast", method)
+		}
+	}
+}
+
+func TestAndroidAutoTriesIndependentWarpTransportsOnly(t *testing.T) {
+	direct, err := nativeAutoCandidates(false)
+	if err != nil || len(direct) < 3 {
+		t.Fatalf("Auto lost independent H2, H3 and WireGuard methods: %v, %v", direct, err)
+	}
+	seen := map[string]bool{}
+	for _, profile := range direct {
+		if profile.Psiphon() || profile.Has("--tor-only") {
+			t.Fatalf("strict Aether Auto unexpectedly switched to another backend: %v", profile.Args)
+		}
+		seen[profile.Method()] = true
+	}
+	for _, method := range []string{"masque-h2", "masque-h3", "wireguard"} {
+		if !seen[method] {
+			t.Fatalf("Aether Auto omitted independent %s route", method)
+		}
+	}
+	carried, err := nativeAutoCandidates(true)
+	if err != nil || len(carried) == 0 {
+		t.Fatalf("Auto over Fast lost TCP candidates: %v", err)
+	}
+	for _, profile := range carried {
+		if !profile.Has("--h2") || profile.Has("--wg") || profile.Psiphon() || profile.Has("--tor-only") {
+			t.Fatalf("TCP-only Fast carrier selected unsupported method %v", profile.Args)
+		}
+	}
+}
+
+func TestAndroidAutoECHProfilesKeepDirectFallbackAndTransportIsolation(t *testing.T) {
+	withECH, err := nativeAutoCandidatesWithECH(false, "valid-config", "162.159.197.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ech, fallback int
+	for _, p := range withECH {
+		if p.Psiphon() || p.Has("--tor-only") {
+			t.Fatalf("ECH method discovery crossed Aether's exit-only boundary: %v", p.Args)
+		}
+		if p.Has("--ech") {
+			ech++
+			if p.Value("--ech") == "auto" {
+				// Aether 2.3.1 can fetch the ECH configuration itself,
+				// independent of our optional three-second lookup.
+				if p.Has("--api-address") {
+					t.Fatalf("core-managed ECH must not accidentally pin an API address: %v", p.Args)
+				}
+			} else if p.Value("--api-address") != "162.159.197.1" {
+				t.Fatalf("pinned ECH profile omitted its API endpoint: %v", p.Args)
+			}
+		} else {
+			fallback++
+		}
+	}
+	if ech == 0 || fallback == 0 {
+		t.Fatalf("ECH-only catalog has no connection fallback: ECH=%d direct=%d", ech, fallback)
+	}
+	firstMethods := map[string]bool{}
+	for _, p := range withECH[:min(3, len(withECH))] {
+		if p.Has("--ech") || firstMethods[p.Method()] {
+			t.Fatalf("Android Auto spent its first startup attempts on duplicate/ECH variants: %v", p.Args)
+		}
+		firstMethods[p.Method()] = true
+	}
+	for _, method := range []string{"masque-h2", "masque-h3", "wireguard"} {
+		if !firstMethods[method] {
+			t.Fatalf("independent transport %s is starved behind slow variants", method)
+		}
+	}
+	carried, err := nativeAutoCandidatesWithECH(true, "valid-config", "162.159.197.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range carried {
+		if !aether.CanCarryLocally(p) {
+			t.Fatalf("TCP-only Fast carrier was given UDP method %s", p.Method())
 		}
 	}
 }

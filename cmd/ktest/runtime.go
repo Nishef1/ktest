@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/byedpi"
-	"github.com/Nishef1/ktest/internal/quickcheck"
 )
 
 // xrayPort is where Connect's main Xray profile listens.
@@ -58,17 +57,6 @@ func waitForByeDPI(ctx context.Context, done <-chan struct{}, port int, limit ti
 	readyCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	return byedpi.WaitReady(readyCtx, done, fmt.Sprintf("127.0.0.1:%d", port))
-}
-
-// proxiedPassCount counts targets that worked through the proxy.
-func proxiedPassCount(results []quickcheck.Result) int {
-	n := 0
-	for _, r := range results {
-		if r.Success {
-			n++
-		}
-	}
-	return n
 }
 
 // defaultBase finds the portable folder (the one holding cores/). The exe's

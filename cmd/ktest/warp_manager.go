@@ -40,7 +40,7 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 	if err != nil {
 		return profiles, err
 	}
-	if mode == ModeBalanced {
+	if mode == ModeBalanced || mode == ModeTor {
 		hasTor := false
 		for _, p := range profiles {
 			hasTor = hasTor || p.Has("--tor-only")

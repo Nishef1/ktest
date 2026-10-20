@@ -100,7 +100,7 @@ func TestDefaultProfilesCoverTheTransportsAndSkipWhatNeedsECH(t *testing.T) {
 	}
 	// HTTP/2 and HTTP/3 MASQUE, WireGuard, IPv6 and Psiphon: networks differ in
 	// which of them gets through.
-	for _, want := range []string{"--h2", "--h3", "--wg", "-6", "--psiphon-only", "--ech CFG", "--enroll-address 1.2.3.4", "--api-fragment"} {
+	for _, want := range []string{"--h2", "--h3", "--wg", "-6", "--psiphon-only", "--ech CFG", "--api-address 1.2.3.4", "--fragment"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("default profiles lack %q", want)
 		}
@@ -145,13 +145,13 @@ func TestAetherRunArgsNeverPromptStayOnLoopbackAndDoNotRepeatFlags(t *testing.T)
 		}
 	}
 	plain := strings.Join(aetherRunArgs(1, aetherProfile{Label: "y", Args: []string{"--masque"}}, 10831), " ")
-	for _, want := range []string{"-4", "--turbo", "--startup-secs 45"} {
+	for _, want := range []string{"-4", "--balanced", "--startup-secs 45"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("default %s missing: %s", want, plain)
 		}
 	}
 	ps := strings.Join(aetherRunArgs(2, aetherProfile{Label: "p", Args: []string{"--psiphon-only"}}, 10832), " ")
-	if strings.Contains(ps, "--turbo") || strings.Contains(ps, "--quick-reconnect") || !strings.Contains(ps, "--bind 127.0.0.1:10832") {
+	if strings.Contains(ps, "--balanced") || strings.Contains(ps, "--quick-reconnect") || !strings.Contains(ps, "--bind 127.0.0.1:10832") {
 		t.Errorf("psiphon args: %s", ps)
 	}
 }
@@ -287,7 +287,7 @@ func TestAetherHelpOptionMatchingAndEqualsValues(t *testing.T) {
 func TestOfficialAetherAssetSelection(t *testing.T) {
 	for _, platform := range [][2]string{{"windows", "amd64"}, {"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}} {
 		url, hash, err := aetherArchiveFor(platform[0], platform[1])
-		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/v2.3.0/") {
+		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/v2.3.1/") {
 			t.Fatalf("%v: %s / %s / %v", platform, url, hash, err)
 		}
 	}
@@ -338,5 +338,45 @@ func TestTarGzAetherExtractionRejectsUnexpectedAndPublishesKnownEntries(t *testi
 	}
 	if fileOK(filepath.Join(base, "cores", "unexpected")) {
 		t.Fatal("unexpected archive path extracted")
+	}
+}
+
+func TestDesktopAetherAndTorModesCannotCrossNativeBackends(t *testing.T) {
+	for _, tc := range []struct {
+		mode       ConnectionMode
+		wantMethod string
+	}{
+		{ModeAether, "masque-h2"},
+		{ModePsiphon, "psiphon"},
+		{ModeTor, "tor"},
+	} {
+		profiles, err := loadAetherProfiles(t.TempDir(), "", "", tc.mode)
+		if err != nil {
+			t.Fatalf("mode %s: %v", tc.mode, err)
+		}
+		if len(profiles) == 0 {
+			t.Fatalf("mode %s left without any supported default native backend", tc.mode)
+		}
+		found := false
+		for _, p := range profiles {
+			switch tc.mode {
+			case ModeAether:
+				if p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") {
+					t.Fatalf("standalone Aether silently selected foreign backend %v", p.Args)
+				}
+			case ModePsiphon:
+				if !p.Psiphon() || p.Has("--tor-only") {
+					t.Fatalf("Psiphon mode selected non-Psiphon %v", p.Args)
+				}
+			case ModeTor:
+				if !p.Has("--tor-only") || p.Psiphon() {
+					t.Fatalf("Tor mode selected non-Tor %v", p.Args)
+				}
+			}
+			found = found || p.Method() == tc.wantMethod
+		}
+		if !found {
+			t.Fatalf("mode %s lost required native method %s", tc.mode, tc.wantMethod)
+		}
 	}
 }
