@@ -416,15 +416,6 @@ func Refresh(ctx context.Context, client *http.Client, dir string) ([]Report, er
 	return reports, nil
 }
 
-// RefreshIfStale refreshes only when the cache is due.
-func RefreshIfStale(ctx context.Context, client *http.Client, dir string) ([]Report, bool, error) {
-	if !Load(dir).Stale() {
-		return nil, false, nil
-	}
-	reports, err := Refresh(ctx, client, dir)
-	return reports, true, err
-}
-
 // plausible refuses a refresh that lost most of the known inventory: a block
 // page, a truncated download or a filtered mirror must not shrink it.
 func plausible(r, old *Range) error {
