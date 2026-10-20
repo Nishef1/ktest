@@ -52,8 +52,8 @@ private val notices = listOf(
         "https://github.com/hufrea/byedpi/tree/v0.17.3"),
     Notice("Xray v26.10.10", "XTLS · official ARMv8 native TLS fragmentation core", "MPL-2.0",
         "https://github.com/XTLS/Xray-core/releases/tag/v26.10.10"),
-    Notice("Aether v2.3.0", "CluvexStudio · MASQUE / WireGuard core with Tor (Arti)", "AGPL-3.0",
-        "https://github.com/CluvexStudio/Aether/tree/v2.3.0"),
+    Notice("Aether v2.3.1", "patterniha release · MASQUE / WireGuard / Tor / Psiphon core", "AGPL-3.0",
+        "https://github.com/patterniha/Aether/releases/tag/v2.3.1"),
     Notice("psiphon-tunnel-core", "CluvexStudio fork, shirokhorshid @ 83aa73b", "GPL-3.0",
         "https://github.com/CluvexStudio/psiphon-tunnel-core/tree/83aa73b9b982e7421e00117f5b0c5aceb5dda452"),
     Notice("lyrebird", "Tor Project pluggable transports @ fc105a0", "BSD",
@@ -185,7 +185,7 @@ internal fun SettingsScreen(
                 Column(Modifier.weight(1f)) {
                     Text("System-wide VPN", color = K.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     Text(when (vpnServiceState) {
-                        "tun_running_unverified" -> "Adapter running"
+                        "tun_running_unverified" -> "Packet adapter running · Internet not yet verified"
                         "failed" -> "Adapter failed"
                         "revoked" -> "Permission revoked"
                         else -> if (vpn.optBoolean("available")) "Ready" else "Not available yet"
@@ -345,11 +345,11 @@ internal fun SettingsScreen(
 
         Panel {
             SectionLabel("Privacy")
-            PrivacyRow(KIcons.Lock, "No logs leave the device", "Native core output can contain identifiers, so it is discarded rather than shown or written to logcat.")
+            PrivacyRow(KIcons.Lock, "No telemetry upload", "Native warnings are kept locally for diagnosis and may contain connection metadata. Enrollment secrets are not added to app logs.")
             Hairline()
             PrivacyRow(KIcons.Key, "No automatic CA installation", "A local certificate can be generated only on request. You export and install its public part manually; private key stays on the phone.")
             Hairline()
-            PrivacyRow(KIcons.Globe, "No analytics", "The only network calls are the ones you start: connections, tools and update checks.")
+            PrivacyRow(KIcons.Globe, "No analytics", "While connected, KTest also refreshes routing checks, probes exits and may retrieve network inventories. Update checks remain manual.")
         }
 
         Panel {
