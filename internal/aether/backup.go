@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/crypto/scrypt"
 )
@@ -251,10 +250,8 @@ func MigrateIdentityFiles(destination, legacy string) ([]string, error) {
 			continue
 		}
 		if err != nil {
-			if strings.Contains(err.Error(), "cannot") {
-				continue
-			}
-			// Old malformed identities are left in place, never imported.
+			// Old malformed or unreadable identities stay in place and are
+			// never copied into the consolidated Android identity directory.
 			continue
 		}
 		added, err := publishIdentity(destination, name, protocol, data)
