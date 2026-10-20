@@ -172,6 +172,18 @@ func TestAndroidAutoECHProfilesKeepDirectFallbackAndTransportIsolation(t *testin
 	if ech == 0 || fallback == 0 {
 		t.Fatalf("ECH-only catalog has no connection fallback: ECH=%d direct=%d", ech, fallback)
 	}
+	firstMethods := map[string]bool{}
+	for _, p := range withECH[:min(3, len(withECH))] {
+		if p.Has("--ech") || firstMethods[p.Method()] {
+			t.Fatalf("Android Auto spent its first startup attempts on duplicate/ECH variants: %v", p.Args)
+		}
+		firstMethods[p.Method()] = true
+	}
+	for _, method := range []string{"masque-h2", "masque-h3", "wireguard"} {
+		if !firstMethods[method] {
+			t.Fatalf("independent transport %s is starved behind slow variants", method)
+		}
+	}
 	carried, err := nativeAutoCandidatesWithECH(true, "valid-config", "162.159.197.1")
 	if err != nil {
 		t.Fatal(err)
