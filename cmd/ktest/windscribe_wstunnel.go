@@ -40,7 +40,7 @@ type wsOptions struct {
 
 // defaultWindscribeSNIs are raced on the direct carriers: names a filtering
 // SNI allowlist is likely to pass. The Windscribe node ignores the SNI.
-const defaultWindscribeSNIs = "www.speedtest.net,www.digikala.com,www.aparat.com"
+const defaultWindscribeSNIs = "none,www.speedtest.net,www.digikala.com,www.aparat.com"
 
 func (o wsOptions) enabled() bool { return o.direct || o.cdnHost != "" }
 
@@ -90,8 +90,8 @@ func splitList(s string) []string {
 
 func (o wsOptions) validate() error {
 	for _, s := range splitList(o.sni) {
-		if !validHostname(s) {
-			return fmt.Errorf("-windscribe-wstunnel-sni %q is not a hostname", s)
+		if s != "none" && !validHostname(s) {
+			return fmt.Errorf("-windscribe-wstunnel-sni %q is not a hostname or none", s)
 		}
 	}
 	if o.serverIP != "" {
@@ -371,7 +371,13 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 			b.logf("Windscribe %s: no fresh provider node mapping; no IP neighbours guessed; raw destination retained", host)
 		}
 		for _, leg := range legs {
-			for _, sni := range snis {
+			for _, chosen := range snis {
+				sni := chosen
+				if sni == "none" {
+					// The provider-native baseline sends no custom TLS
+					// server name; do not put the word "none" on the wire.
+					sni = ""
+				}
 				label := sni
 				if label == "" {
 					label = "none"
