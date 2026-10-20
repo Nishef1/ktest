@@ -593,12 +593,26 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// The listen address is needed at the end; find out now, not after the cores
 	// have been started.
-	if lis, err := net.Listen("tcp", o.listen); err != nil {
+	if chosen, changed, err := recoverLoopbackListen(o.listen, connectListenDefault); err != nil {
 		t.Println("")
-		t.Box("CANNOT LISTEN", toneFail, []string{o.listen + " is already in use.", "Close the other ktest or proxy using it, or pass -listen 127.0.0.1:<other port>."})
+		t.Box("CANNOT LISTEN", toneFail, []string{err.Error(), "An explicit -listen port is never changed without your request."})
 		return 1
-	} else {
-		_ = lis.Close()
+	} else if changed {
+		t.Note("Default SOCKS port %s is occupied. Using %s for this session; the other process is untouched.", o.listen, chosen)
+		o.listen = chosen
+	}
+	if !o.noHTTP {
+		if chosen, changed, err := recoverLoopbackListen(o.httpListen, connectHTTPDefault); err == nil {
+			if changed {
+				t.Note("Default HTTP port %s is occupied. Using %s; update any application's manual proxy setting.", o.httpListen, chosen)
+				o.httpListen = chosen
+			}
+		} else if o.mode.isWindscribe() {
+			t.Line(toneFail, "Windscribe requires its HTTP bridge: %v", err)
+			return 1
+		} else {
+			t.Note("HTTP port preflight: %v (SOCKS can still work)", err)
+		}
 	}
 
 	// 2. The cores that carry the external paths.
