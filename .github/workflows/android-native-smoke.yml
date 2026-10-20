@@ -16,6 +16,9 @@ on:
       - "internal/xraycfg/**"
 permissions:
   contents: read
+concurrency:
+  group: android-native-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   compile:
     runs-on: ubuntu-latest
