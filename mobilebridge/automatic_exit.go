@@ -68,19 +68,10 @@ func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 		if err != nil {
 			return nil, observedExit{}, err
 		}
-		// Multiple Balanced workers may otherwise enroll different identities
-		// concurrently into the same masque.toml/wg.toml files. PattNG stages
-		// enrollment separately; here serialize only the *cold* registration
-		// phase. Once the identity exists, ordinary gateway probing remains
-		// parallel. Psiphon/Tor require no shared WARP identity.
-		if len(aether.IdentityRequirements(p)) > 0 && !aether.ReadyIdentity(p, o.stateDir) {
-			a.enrollMu.Lock()
-			if aether.ReadyIdentity(p, o.stateDir) {
-				a.enrollMu.Unlock()
-			} else {
-				defer a.enrollMu.Unlock()
-			}
-		}
+		// Shared WARP key files must not be concurrently provisioned
+		// on a cold start. Already-valid profiles retain parallel probing.
+		releaseEnrollment := a.lockColdIdentity(p, o.stateDir)
+		defer releaseEnrollment()
 		n, err := launchNative(ctx, mode, o)
 		if err != nil {
 			return nil, observedExit{}, err
@@ -101,6 +92,23 @@ func newAutomaticExit(mode, libraryDir, stateDir, key string) *automaticExit {
 		return n, checked, nil
 	}
 	return a
+}
+
+// lockColdIdentity protects a first-time enrollment against other Balanced
+// workers sharing the same state directory. Recheck after taking the lock:
+// another worker may already have saved a complete identity while we waited.
+// A direct Aether Auto uses sequential starts; Psiphon and Tor bypass the lock.
+// The selected process owns its registration lifecycle until the attempt ends.
+func (a *automaticExit) lockColdIdentity(p aether.Profile, dir string) func() {
+	if len(aether.IdentityRequirements(p)) == 0 || aether.ReadyIdentity(p, dir) {
+		return func() {}
+	}
+	a.enrollMu.Lock()
+	if aether.ReadyIdentity(p, dir) {
+		a.enrollMu.Unlock()
+		return func() {}
+	}
+	return a.enrollMu.Unlock
 }
 
 // The carrier variant is independent of direct startup. In particular,
