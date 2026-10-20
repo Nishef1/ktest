@@ -98,12 +98,15 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	if len(supported) == 0 {
 		return nil, errors.New("packaged Aether does not support this profile")
 	}
+	// InspectProfiles normalizes renamed Aether CLI flags for this exact
+	// binary. Launch the accepted profile, not its pre-normalized template.
+	p = supported[0]
 	if edges := psiphonEdges(p, o.privateDir); len(edges) > 0 {
 		// Edges this network verified in CDN scans are tried first by
 		// Psiphon's fronting; its own built-in lists still follow.
 		withEdges := aether.Profile{Label: p.Label, Args: append(append([]string(nil), p.Args...), "--psiphon-cdn-ips", strings.Join(edges, ","))}
 		if ok, inspectErr := aether.InspectProfiles(ctx, paths.Aether, []aether.Profile{withEdges}); inspectErr == nil && len(ok) > 0 {
-			p = withEdges
+			p = ok[0]
 		}
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
