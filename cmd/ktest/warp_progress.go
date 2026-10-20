@@ -29,14 +29,22 @@ func aetherMilestone(line string) string {
 	if strings.Contains(line, "scan deadline reached with no gateway") || strings.Contains(line, "scan deadline reached with no endpoint") {
 		return "native scan finished without a validated endpoint; remaining candidates are untested"
 	}
+	if nativeMASQUEScanFailed(line) {
+		return "native scan found no usable MASQUE gateway; remaining candidates are untested"
+	}
 	return ""
 }
 
+func nativeMASQUEScanFailed(line string) bool {
+	return strings.Contains(line, " aether]") && strings.Contains(line, "no usable MASQUE gateway found:")
+}
+
 type aetherProgress struct {
-	mu      sync.Mutex
-	partial []byte
-	last    string
-	show    func(string)
+	mu         sync.Mutex
+	partial    []byte
+	last       string
+	show       func(string)
+	scanFailed func()
 }
 
 func (w *aetherProgress) Write(p []byte) (int, error) {
@@ -48,11 +56,16 @@ func (w *aetherProgress) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		stage := aetherMilestone(string(w.partial[:i]))
+		line := string(w.partial[:i])
+		stage := aetherMilestone(line)
 		w.partial = w.partial[i+1:]
 		if stage != "" && stage != w.last {
 			w.last = stage
 			w.show(stage)
+		}
+		if w.scanFailed != nil && nativeMASQUEScanFailed(line) {
+			w.scanFailed()
+			w.scanFailed = nil
 		}
 	}
 	if len(w.partial) > 8192 {

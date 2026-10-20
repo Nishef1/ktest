@@ -345,14 +345,26 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 			m.t.Line(toneOK, "Windscribe Connected (CLI); ktest carrier attribution is separate. VPN routing, IP and firewall belong to Windscribe.")
 		case windscribeDisconnected:
 			if m.aetherCarrier {
-				m.t.Line(toneWarn, "Windscribe disconnected (CLI): waiting for the selected Aether WARP carrier")
+				if ready {
+					m.t.Line(toneInfo, "Windscribe disconnected (CLI); WARP carrier ready. Connect Windscribe now.")
+				} else {
+					m.t.Line(toneWarn, "Wait; do not start Windscribe yet. Searching for a verified Aether WARP carrier.")
+				}
 			} else {
 				m.t.Line(toneWarn, "Windscribe disconnected (CLI): ktest local anti-DPI TCP bootstrap ready; NO Psiphon/Aether or foreign exit")
 			}
 		case windscribeConnecting:
 			m.t.Note("Windscribe is connecting or validating its tunnel; no duplicate reconnect command")
 		default:
-			m.t.Note("Windscribe connection status is unavailable; connect manually in the app")
+			if m.aetherCarrier {
+				if ready {
+					m.t.Note("WARP carrier ready; Windscribe CLI status unavailable. Check the app and connect if disconnected.")
+				} else {
+					m.t.Note("Windscribe CLI status unavailable; wait for a verified WARP carrier before connecting.")
+				}
+			} else {
+				m.t.Note("Windscribe connection status is unavailable; connect manually in the app")
+			}
 		}
 	}
 	if state == windscribeConnected && (changed || ipChanged) {

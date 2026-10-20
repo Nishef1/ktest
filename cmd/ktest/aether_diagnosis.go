@@ -237,8 +237,11 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 				m.attempted[p.ID()] = true
 				mu.Unlock()
 				// A slow/blocked family cannot consume the whole comparison.
+				launch := m.discoveryProfile(p)
+				// Keep the outer allowance for identity preparation and independent
+				// HTTPS checks; the native quick scan ends earlier on its own.
 				attempt, stopAttempt := context.WithTimeout(ctx, profileAttemptBudget(p))
-				up, rc, failure := m.try(attempt, i, p)
+				up, rc, failure := m.try(attempt, i, launch)
 				// The core must outlive this probe deadline when selected. try
 				// uses m's session context for the process, attempt for readiness.
 				r := measurementFor(p)

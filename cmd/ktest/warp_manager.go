@@ -523,8 +523,16 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 		m.t.Note("skipped %s: %v", p.Label, err)
 		return false, nil, "local SOCKS port occupied"
 	}
+	readyCtx, cancelReady := context.WithCancel(ctx)
+	defer cancelReady()
 	logs := &tailBuffer{max: 8192}
 	progress := &aetherProgress{show: func(stage string) { m.t.Note("%s: %s", p.Label, stage) }}
+	if m.automaticWARPDiscovery() && (p.Method() == "masque-h2" || p.Method() == "masque-h3") && !p.Has("--peer") {
+		// A completed failed scan is a scheduling result. Don't spend the
+		// remaining startup allowance repeating it before other methods run.
+		// Only readiness is cancelled: a selected core owns the session context.
+		progress.scanFailed = cancelReady
+	}
 	logPath := filepath.Join(warpDir(), fmt.Sprintf("aether-%d.log", i+1))
 	var sinks []io.Writer
 	var logFile *os.File
@@ -618,14 +626,16 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 		}()
 	}
 	deadline := time.Now().Add(attemptTimeout(p))
-	ready := waitForPort(ctx, rc.done, port, time.Until(deadline))
-	if ready && exitCarries(ctx, rc.done, port, time.Until(deadline)) {
+	ready := waitForPort(readyCtx, rc.done, port, time.Until(deadline))
+	if ready && exitCarries(readyCtx, rc.done, port, time.Until(deadline)) {
 		return true, rc, ""
 	}
 	reason := "gateway scan/startup budget expired before SOCKS readiness; discovery incomplete"
 	switch {
 	case ctx.Err() != nil:
 		reason = "attempt cancelled or timed out"
+	case readyCtx.Err() != nil:
+		reason = "native gateway scan finished without a usable gateway; trying another profile (remaining candidates are untested)"
 	case ready:
 		reason = "SOCKS opened but upstream TLS carrier did not verify"
 	default:
@@ -727,7 +737,22 @@ func (m *warpManager) checkMasqueKey(ctx context.Context, p aetherProfile) {
 		return
 	}
 	m.keyChecked = true
-	verdict, err := aether.ProbeMasqueIdentity(ctx, aetherBinary(m.o.base), identityFile())
+	probeCtx := ctx
+	if !m.diagnosis {
+		// This optional preflight must not spend up to six 20-second peer
+		// timeouts before the real carrier attempt even starts. An inconclusive
+		// check preserves the key; live tunnel/HTTPS validation remains required.
+		var cancel context.CancelFunc
+		probeCtx, cancel = context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		if m.t != nil {
+			m.t.Note("Checking the saved WARP key (up to 8s); live carrier search follows")
+		}
+	}
+	verdict, err := aether.ProbeMasqueIdentity(probeCtx, aetherBinary(m.o.base), identityFile())
+	if err != nil && ctx.Err() == nil && m.t != nil {
+		m.t.Note("Saved WARP key check inconclusive; keeping the key and trying the live carrier")
+	}
 	if err != nil || verdict != aether.IdentityRejected {
 		return
 	}

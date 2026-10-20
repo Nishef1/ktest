@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Nishef1/ktest/internal/coreprocess"
 )
 
 // IdentityVerdict is what a WARP gateway said about a saved MASQUE key.
@@ -137,13 +135,14 @@ func probeOnce(parent context.Context, binary, dir, masquePath, peer string) (Id
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	r, w := io.Pipe()
-	cmd := coreprocess.Command(ctx, binary, "--masque", "--h2", "-4", "--peer", peer, "--startup-secs", "15",
-		"--bind", "127.0.0.1:"+strconv.Itoa(port), "--config", filepath.Join(dir, "run.toml"),
-		"--masque-config", masquePath, "--wg-config", filepath.Join(dir, "wg.toml"), "--log-level", "info")
-	cmd.Env = append(os.Environ(), "AETHER_REPROVISION=0")
-	cmd.Stdout, cmd.Stderr = w, w
+	args := []string{"--masque", "--h2", "-4", "--peer", peer, "--startup-secs", "15",
+		"--bind", "127.0.0.1:" + strconv.Itoa(port), "--config", filepath.Join(dir, "run.toml"),
+		"--masque-config", masquePath, "--wg-config", filepath.Join(dir, "wg.toml"), "--log-level", "info"}
 	done := make(chan error, 1)
-	go func() { done <- coreprocess.Run(cmd); w.Close() }()
+	// Use the same managed environment as carrier startup. An inherited
+	// RUST_LOG=warn hides the INFO-level acceptance/TLS markers below and
+	// otherwise makes a working tunnel look inconclusive until timeout.
+	go func() { done <- Run(ctx, binary, args, w); w.Close() }()
 	verdict, tls := IdentityUnknown, false
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {

@@ -46,3 +46,62 @@ func TestConnectionStatusStates(t *testing.T) {
 		t.Fatalf("fast = %+v", v)
 	}
 }
+
+func TestWindscribeAetherStatusSaysWhenToWaitAndWhenToConnect(t *testing.T) {
+	p, err := smartproxy.New(smartproxy.Config{ExitOnly: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	start := time.Now()
+	monitor := &windscribeMonitor{state: windscribeDisconnected}
+	s := &connectionStatus{t: plainTerm(&out), mode: ModeWindscribeAether, proxy: p, windscribe: monitor,
+		http: "127.0.0.1:10801", stop: "Press Enter", started: start, since: start}
+	check := func(key, action string) {
+		t.Helper()
+		v := s.view(start)
+		if v.key != key || !strings.Contains(strings.Join(v.lines, "\n"), action) {
+			t.Fatalf("expected %s / %s, got %+v", key, action, v)
+		}
+		s.render(start)
+	}
+	check("carrier-searching", "Wait; do not start Windscribe yet")
+	s.render(start.Add(time.Second))
+	if err := p.Add(smartproxy.Upstream{Name: "Exit: carrier", Exit: true, AIEligible: false}); err != nil {
+		t.Fatal(err)
+	}
+	// A working local-country carrier is sufficient for Windscribe; a
+	// foreign/AI-eligible WARP exit must not be an additional waiting gate.
+	check("carrier-ready", "Connect Windscribe now")
+	if strings.Contains(out.String(), "WINDSCRIBE CONNECTED") {
+		t.Fatalf("carrier readiness was presented as VPN authentication: %s", out.String())
+	}
+	monitor.state = windscribeConnecting
+	check("vpn-connecting", "do not reconnect")
+	monitor.state = windscribeConnected
+	check("vpn-connected", "Keep ktest and Aether running")
+	p.Remove("Exit: carrier")
+	check("vpn-connected", "Keep ktest and Aether running")
+	monitor.state = windscribeDisconnected
+	check("carrier-searching", "Wait; do not start Windscribe yet")
+	if strings.Count(out.String(), "WINDSCRIBE CONNECTED (CLI)") != 1 {
+		t.Fatalf("unchanged VPN state was repeatedly announced: %s", out.String())
+	}
+	t.Log("State transition transcript:\n" + out.String())
+}
+
+func TestWindscribeAetherUnknownCLIRequiresCheckingAppBeforeConnecting(t *testing.T) {
+	p, err := smartproxy.New(smartproxy.Config{ExitOnly: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Add(smartproxy.Upstream{Name: "Exit: carrier", Exit: true}); err != nil {
+		t.Fatal(err)
+	}
+	s := &connectionStatus{t: plainTerm(&bytes.Buffer{}), mode: ModeWindscribeAether, proxy: p, started: time.Now()}
+	v := s.view(time.Now())
+	text := strings.Join(v.lines, "\n")
+	if v.key != "carrier-ready-unknown" || !strings.Contains(text, "Check Windscribe") || strings.Contains(text, "Connect Windscribe now") {
+		t.Fatalf("unknown CLI status led to an unconditional connect instruction: %+v", v)
+	}
+}

@@ -13,26 +13,28 @@ import (
 // title. It is computed from live proxy state, never from the startup verdict,
 // so it changes the moment an exit verifies or disappears.
 type connectionStatus struct {
-	t       *term
-	mode    ConnectionMode
-	proxy   *smartproxy.Proxy
-	exit    func() string // managed exit status; may be nil
-	socks   string
-	http    string
-	stop    string
-	tunWant bool
-	tunOn   func() bool
-	feed    *siteEvents
-	started time.Time
-	since   time.Time // when the current state began
-	last    string    // state key last announced
+	t          *term
+	mode       ConnectionMode
+	proxy      *smartproxy.Proxy
+	exit       func() string // managed exit status; may be nil
+	socks      string
+	http       string
+	stop       string
+	tunWant    bool
+	tunOn      func() bool
+	feed       *siteEvents
+	started    time.Time
+	since      time.Time // when the current state began
+	last       string    // state key last announced
+	windscribe *windscribeMonitor
 }
 
 type statusView struct {
-	key   string // state identity; a change is announced in the log
-	tone  tone
-	title string
-	lines []string
+	key     string // state identity; a change is announced in the log
+	tone    tone
+	title   string
+	lines   []string
+	message string // actionable state-change announcement, when policy-specific
 }
 
 // Searching longer than this without a verified exit is shown as a failure,
@@ -40,6 +42,9 @@ type statusView struct {
 const notConnectedAfter = 3 * time.Minute
 
 func (s *connectionStatus) view(now time.Time) statusView {
+	if s.mode == ModeWindscribeAether {
+		return s.windscribeView(now)
+	}
 	t := s.t
 	total, verified := s.proxy.ExitCounts()
 	exitText := ""
@@ -118,6 +123,52 @@ func (s *connectionStatus) view(now time.Time) statusView {
 	return v
 }
 
+// Carrier readiness answers when the user can start Windscribe. Only the
+// official CLI can answer whether Windscribe has finished connecting.
+func (s *connectionStatus) windscribeView(now time.Time) statusView {
+	state := windscribeUnknown
+	if s.windscribe != nil {
+		state = s.windscribe.State()
+	}
+	total, _ := s.proxy.ExitCounts()
+	var v statusView
+	var status string
+	switch {
+	case state == windscribeConnected:
+		v.key, v.tone, v.title = "vpn-connected", toneOK, "WINDSCRIBE CONNECTED (CLI)"
+		status = "Windscribe reports Connected; carrier attribution is separate"
+		v.message = "Keep ktest and Aether running while using Windscribe."
+	case total == 0:
+		v.key, v.tone, v.title = "carrier-searching", toneWarn, "WAIT - SEARCHING FOR WARP CARRIER"
+		status = "No verified WARP carrier; searching for " + plainDuration(now.Sub(s.since))
+		v.message = "Wait; do not start Windscribe yet. Carrier search continues automatically."
+		if state == windscribeConnecting {
+			v.message = "Wait for the WARP carrier; Windscribe is already retrying. Do not start another connection."
+		}
+	case state == windscribeConnecting:
+		v.key, v.tone, v.title = "vpn-connecting", toneWarn, "WAIT - WINDSCRIBE IS CONNECTING"
+		status = "WARP carrier ready; Windscribe is connecting or validating its tunnel"
+		v.message = "Wait for Windscribe to finish; do not reconnect while it is connecting."
+	case state == windscribeUnknown:
+		v.key, v.tone, v.title = "carrier-ready-unknown", toneWarn, "CARRIER READY - CHECK WINDSCRIBE"
+		status = "WARP carrier ready; Windscribe CLI status is unavailable"
+		v.message = "Check Windscribe in the app; connect if it is disconnected."
+	default:
+		v.key, v.tone, v.title = "carrier-ready", toneOK, "CARRIER READY - CONNECT WINDSCRIBE NOW"
+		status = "WARP carrier verified; Windscribe is disconnected"
+		v.message = "Connect Windscribe now (OpenVPN TCP 443). No need to wait for more scans."
+	}
+	v.lines = []string{"Status   " + status, "Action   " + s.t.Bold(v.message)}
+	if s.http != "" {
+		v.lines = append(v.lines, "Proxy    Windscribe HTTP proxy: "+s.http)
+	}
+	if s.exit != nil {
+		v.lines = append(v.lines, "Carrier  "+s.exit())
+	}
+	v.lines = append(v.lines, "Coverage Windscribe controls the system VPN", "Stop     "+s.stop)
+	return v
+}
+
 // render redraws the panel; a state change is also written to the log and
 // the window title, so it stays visible in scrollback and from the taskbar.
 func (s *connectionStatus) render(now time.Time) {
@@ -130,15 +181,23 @@ func (s *connectionStatus) render(now time.Time) {
 	if changed && s.last != "" {
 		s.since = now // durations restart when the state changes
 		v = s.view(now)
-		s.t.Line(v.tone, "%s", map[string]string{
-			"connected":  "Connected",
-			"connecting": "Connection lost; searching for another exit",
-			"failing":    "Still not connected; the search continues",
-		}[v.key])
+		message := v.message
+		if message == "" {
+			message = map[string]string{
+				"connected":  "Connected",
+				"connecting": "Connection lost; searching for another exit",
+				"failing":    "Still not connected; the search continues",
+			}[v.key]
+		}
+		s.t.Line(v.tone, "%s", message)
 	}
 	if changed {
 		s.last = v.key
-		s.t.SetTitle("ktest · " + map[string]string{"connected": "connected", "connecting": "connecting…", "failing": "NOT connected"}[v.key])
+		title := map[string]string{"connected": "connected", "connecting": "connecting…", "failing": "NOT connected"}[v.key]
+		if v.message != "" {
+			title = v.title
+		}
+		s.t.SetTitle("ktest · " + title)
 	}
 	if s.t.PinBox(v.title, v.tone, v.lines) {
 		return

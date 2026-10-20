@@ -1122,7 +1122,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	// depend on a few landing pages or claim that feeds, APIs and media work.
 	verdict := toneInfo
 	if o.mode.exitOnly() && !exitReady(o.mode, proxy) {
-		wstep := t.Progress("Waiting for a working exit", 1)
+		waiting := "Waiting for a working exit"
+		if o.mode == ModeWindscribeAether {
+			waiting = "Finding WARP carrier; wait before connecting Windscribe"
+		}
+		wstep := t.Progress(waiting, 1)
 		wctx, wcancel := context.WithTimeout(ctx, 20*time.Second)
 		available := waitForExit(wctx, func() bool { return exitReady(o.mode, proxy) })
 		wcancel()
@@ -1167,23 +1171,20 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// 5. The result.
 	title := map[tone]string{toneInfo: "PROXY LISTENING", toneOK: "TUN TCP VERIFIED", toneWarn: "COVERAGE NOT VERIFIED", toneFail: "WAITING FOR VERIFIED EXIT"}[verdict]
-	// Outside Windscribe the live status panel below answers "connected?";
+	// Except for local-only Windscribe, the live panel answers "connected?";
 	// this box only lists how to reach the proxy, so it never goes stale.
-	liveStatus := !o.mode.isWindscribe()
+	liveStatus := o.mode != ModeWindscribe
 	if liveStatus {
 		title, verdict = "CONNECTION DETAILS", toneInfo
 	}
-	if o.mode.isWindscribe() {
+	if o.mode == ModeWindscribeAether {
+		title = "WINDSCRIBE BRIDGE DETAILS"
+	}
+	if o.mode == ModeWindscribe {
 		// Drawn once, before Windscribe connects: it must not claim either
 		// way. The live lines below report Windscribe's state as it changes.
 		title, verdict = "WINDSCRIBE BRIDGE READY · CONNECT IN WINDSCRIBE", toneInfo
-		if o.mode == ModeWindscribeAether {
-			carriers, _ := proxy.ExitCounts()
-			if carriers == 0 {
-				title, verdict = "BRIDGE LISTENING; AETHER CARRIER NOT YET VERIFIED", toneWarn
-			}
-		}
-		if o.mode == ModeWindscribe && !proxy.HasLocalBypass() && !o.ws.enabled() {
+		if !proxy.HasLocalBypass() && !o.ws.enabled() {
 			title = "NO LOCAL ANTI-DPI PATH AVAILABLE"
 		}
 	}
@@ -1247,6 +1248,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 	}
 	switch {
+	case o.mode == ModeWindscribeAether:
+		field("Result", "Live status below says when to connect Windscribe or keep waiting")
 	case o.mode.isWindscribe():
 		if monitor == nil || monitor.State() == windscribeUnknown {
 			field("Result", t.Yellow("Windscribe CLI unverified; bridge listening only; VPN and auto-reconnect NOT confirmed"))
@@ -1289,7 +1292,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if liveStatus {
 		now := time.Now()
 		status = &connectionStatus{t: t, mode: o.mode, proxy: proxy, exit: currentExitStatus, socks: l.Addr().String(), http: httpAddr,
-			stop: o.stopHint, tunWant: o.tun, tunOn: func() bool { return tn != nil }, feed: feed, started: sessionStarted, since: sessionStarted}
+			stop: o.stopHint, tunWant: o.tun, tunOn: func() bool { return tn != nil }, feed: feed, started: sessionStarted, since: sessionStarted, windscribe: monitor}
 		if warpNote != "" && currentExitStatus == nil {
 			status.exit = func() string { return warpNote }
 		}

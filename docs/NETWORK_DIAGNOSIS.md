@@ -48,6 +48,46 @@ listener timeout, or its 40-second automatic wave, could terminate the core
 before even that first scan ended. Shared readiness budgets now include the
 scan; they still bound retries and do not promise that every candidate was tried.
 
+The Windows/desktop CLI's automatic `aether` and `windscribe-aether` searches
+now use two sweeps. In the first sweep, ordinary MASQUE H2/H3 and WireGuard
+profiles without an explicit scan policy use the core's `--scan turbo`:
+45 seconds for MASQUE discovery, 30 seconds for WireGuard discovery. Remembered
+gateways are still revalidated first, and a selected tunnel still needs the
+independent TLS and HTTPS exit checks. Identity preparation and exit verification
+retain the original outer allowance. The optional saved-MASQUE-key preflight is
+limited to eight seconds during Connect and reports its progress: a timeout
+preserves the key and allows the live carrier attempt to proceed. Explicit
+diagnostic comparisons retain their existing key-check allowance. Key probes
+also reuse the managed Aether runner so an inherited `RUST_LOG=warn` cannot hide
+the TLS/CONNECT-IP acceptance markers and cause a false timeout. If the sweep
+finds no usable exit, subsequent sweeps restore the profiles' full scan policies.
+Nested tunnels, explicit scan
+flags/peers, forced methods, and diagnostic comparisons keep their existing
+budgets. These are native scan budgets, not measured end-to-end connection times;
+cached-peer checks, enrollment and tunnel startup can add time.
+
+During automatic MASQUE discovery, the native core's final `no usable MASQUE
+gateway found` result yields to the next profile immediately instead of spending
+the remaining startup allowance on the same scan again. A low-level scan timeout
+alone does not trigger this transition; WireGuard's internal obfuscation fallbacks
+and nested bootstrap remain intact. The change cancels readiness only; an already
+selected carrier retains its session lifetime. Strict discovery still uses one
+worker and stops scanning while its winner is healthy. This scheduling change is
+limited to the desktop CLI; Android's native launcher is unchanged.
+
+Windscribe-through-Aether now has the same live terminal panel as other managed
+connections. Its action says to **wait before starting Windscribe** while no WARP
+carrier is verified, **connect Windscribe now** as soon as a carrier is ready,
+or **wait for Windscribe to finish** when the CLI reports Connecting. A carrier
+ready in Iran is sufficient for this step; the user need not wait for a foreign
+WARP exit or a complete inventory scan. Unknown CLI status instead asks the user
+to check the app before connecting. The panel updates every second and returns
+to the waiting instruction if the carrier disappears while Windscribe is
+disconnected. Carrier readiness is never labeled as authenticated VPN success.
+Both Aether and Windscribe-through-Aether reuse the same per-network/core
+measurements: a direct plain-H2 winner from Aether takes priority over failing
+ECH variants when launching Windscribe-through-Aether as well.
+
 Following [PattNG's scanner](https://github.com/patterniha/PattNG/blob/my-releases/V2rayNG/app/src/main/java/com/v2ray/ang/core/AetherScanner.kt),
 managed runtime logging uses INFO to observe native scan/selection milestones.
 An inherited `RUST_LOG=warn` no longer overrides the managed CLI log setting.
@@ -56,14 +96,26 @@ selection, while withholding arbitrary INFO messages from the terminal. A select
 endpoint still needs separate HTTPS/foreign-exit verification. Full native logs
 remain local; identities and shell settings are preserved.
 
-Live samples on the current system route loaded the existing identities and
+Earlier live samples on the system route loaded the existing identities and
 completed the first 120-second MASQUE and 80-second WireGuard scans without a
 usable endpoint. Forced H2 samples with fresh ECH did not establish a validated
 tunnel; a sampled alternate TCP port refused connection. These are bounded
 observations, not proof that every endpoint or ISP is blocked. The subsequent
 KTest comparison refused to run while Windscribe reported Connecting; no VPN
-or system route was changed to bypass that check. A bare-ISP comparison and a
-successful end-to-end foreign exit remain unverified.
+or system route was changed to bypass that check. At that stage, a bare-ISP
+comparison and a successful end-to-end foreign exit remained unverified.
+
+A later supplied Aether session reused plain MASQUE H2 gateway
+`162.159.198.8:443` and reported carrier readiness in 4.3 seconds. A controlled
+Windscribe-through-Aether run on 2026-10-20 reused the same plain-H2 gateway and
+reported carrier readiness in 3.8 seconds after the key-probe logging repair;
+the live panel displayed `CARRIER READY - CONNECT WINDSCRIBE NOW`. The neutral
+HTTPS measurement reported an IR carrier (8/9 samples), which is sufficient
+to carry Windscribe but does not authorize direct protected AI traffic. These
+times measure the carrier waiting stage, excluding compilation and initial
+Windscribe CLI checks. Windscribe remained Disconnected in that sample, so
+authenticated VPN connectivity and a foreign exit were not verified. Temporary
+test sessions were stopped without changing Windscribe settings or VPN routes.
 
 The reference inspected was PattNG `89c760c`, whose Aether submodule is
 `cfc27c5` (the same v2.3.1 core pinned here). `AetherScanner.kt` launches that

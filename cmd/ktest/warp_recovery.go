@@ -6,6 +6,32 @@ import (
 	"github.com/Nishef1/ktest/internal/aether"
 )
 
+func (m *warpManager) automaticWARPDiscovery() bool {
+	return !m.diagnosis && (m.o.mode == ModeAether || m.o.mode == ModeWindscribeAether) &&
+		(m.o.aetherMethod == "" || m.o.aetherMethod == "auto")
+}
+
+// Use the native fast scan for the first automatic sweep, then revisit every
+// candidate with its full configured scan. This changes only launch arguments:
+// stored measurements, profile IDs and assigned ports keep the original profile.
+func (m *warpManager) discoveryProfile(p aetherProfile) aetherProfile {
+	if !m.automaticWARPDiscovery() || m.failedSweeps > 0 {
+		return p
+	}
+	switch p.Method() {
+	case "masque-h2", "masque-h3", "wireguard":
+	default:
+		return p // nested identity bootstrap needs its original startup budget
+	}
+	for _, flag := range []string{"--scan", "--turbo", "--balanced", "--thorough", "--verified", "--ironclad", "--peer", "--wg-peer"} {
+		if p.Has(flag) {
+			return p
+		}
+	}
+	p.Args = append(append([]string(nil), p.Args...), "--scan", "turbo")
+	return p
+}
+
 // Preserve measured winners, but give independent unmeasured methods a turn
 // before trying many variants of the same blocked transport. Psiphon CDN is
 // independent of WARP enrollment/gateways; mode filtering happens beforehand.

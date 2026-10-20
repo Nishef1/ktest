@@ -40,6 +40,93 @@ func TestAutomaticDiscoveryLetsFirstWorkersFinishNativeScans(t *testing.T) {
 	}
 }
 
+func TestQuickDiscoveryEscalatesAfterCompletedSweep(t *testing.T) {
+	m := &warpManager{o: connectOptions{mode: ModeAether}, profs: []aetherProfile{
+		recoveryProfile("h2", "--masque", "--h2"),
+		recoveryProfile("wg", "--wg"),
+		recoveryProfile("h3", "--masque", "--h3"),
+	}}
+	m.attempted = map[string]bool{}
+	for _, p := range m.profs {
+		if got := m.discoveryProfile(p); got.Value("--scan") != "turbo" {
+			t.Fatalf("first sweep did not use native quick discovery: %v", got.Args)
+		}
+		m.attempted[p.ID()] = true
+	}
+	if m.recoveryDelay() != 30*time.Second {
+		t.Fatal("quick sweep did not finish")
+	}
+	for _, p := range m.profs {
+		if got := m.discoveryProfile(p); got.Has("--scan") {
+			t.Fatalf("full recovery remained on a shortened scan: %v", got.Args)
+		}
+	}
+}
+
+func TestQuickDiscoveryPreservesExplicitPoliciesAndProfileIdentity(t *testing.T) {
+	p := recoveryProfile("h2", "--masque", "--h2")
+	for _, mode := range []ConnectionMode{ModeAether, ModeWindscribeAether} {
+		m := &warpManager{o: connectOptions{mode: mode}}
+		got := m.discoveryProfile(p)
+		if got.Value("--scan") != "turbo" || attemptTimeout(got) >= attemptTimeout(p) {
+			t.Fatalf("%s did not use native quick discovery: %v", mode, got.Args)
+		}
+		if p.Has("--scan") || p.ID() != recoveryProfile("h2", "--masque", "--h2").ID() {
+			t.Fatal("runtime scan policy changed the saved profile")
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		m    *warpManager
+		p    aetherProfile
+	}{
+		{"forced method", &warpManager{o: connectOptions{mode: ModeAether, aetherMethod: "masque-h2"}}, p},
+		{"diagnosis", &warpManager{o: connectOptions{mode: ModeAether}, diagnosis: true}, p},
+		{"mixed policy", &warpManager{o: connectOptions{mode: ModeBalanced}}, p},
+		{"explicit scan", &warpManager{o: connectOptions{mode: ModeAether}}, recoveryProfile("deep", "--masque", "--scan=thorough")},
+		{"scan alias", &warpManager{o: connectOptions{mode: ModeAether}}, recoveryProfile("deep", "--masque", "--balanced")},
+		{"forced peer", &warpManager{o: connectOptions{mode: ModeAether}}, recoveryProfile("peer", "--masque", "--peer", "162.159.198.8:443")},
+		{"nested identity", &warpManager{o: connectOptions{mode: ModeAether}}, recoveryProfile("nested", "--gool", "--h2")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.m.discoveryProfile(tc.p); got.ID() != tc.p.ID() {
+				t.Fatalf("explicit or independent policy changed: %v -> %v", tc.p.Args, got.Args)
+			}
+		})
+	}
+}
+
+func TestAetherWinnerIsReusedForWindscribeThroughAether(t *testing.T) {
+	base := t.TempDir()
+	profiles, err := loadAetherProfiles(base, "ECH", "1.1.1.1", ModeAether)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var winner aetherProfile
+	for _, p := range profiles {
+		if p.Method() == "masque-h2" && !p.Has("--ech") && !p.Has("--fragment") && !p.Has("--upstream") {
+			winner = p
+			break
+		}
+	}
+	if winner.Label == "" {
+		t.Fatal("plain H2 carrier is unavailable")
+	}
+	history := networkProfile{Results: map[string]aetherMeasurement{
+		winner.ID(): {State: "carrier", Checked: time.Now(), Attempts: 9, Successes: 8, LatencyMS: 531, ExitIP: "104.28.246.163", Country: "IR"},
+	}}
+	for _, mode := range []ConnectionMode{ModeAether, ModeWindscribeAether} {
+		candidates, err := loadAetherProfiles(base, "fresh ECH", "1.0.0.1", mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ordered := recoveryProfilesFirst(candidates, history, mode)
+		if len(ordered) == 0 || ordered[0].ID() != winner.ID() {
+			t.Fatalf("%s did not reuse the working Aether carrier first: %v", mode, profileLabels(ordered))
+		}
+	}
+}
+
 func profileLabels(profiles []aetherProfile) []string {
 	var labels []string
 	for _, p := range profiles {
