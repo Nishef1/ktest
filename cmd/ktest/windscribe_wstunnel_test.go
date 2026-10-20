@@ -39,6 +39,7 @@ func TestExplicitWStunnelOverrideDoesNotInventStealth(t *testing.T) {
 
 func TestWSOptionsValidate(t *testing.T) {
 	good := []wsOptions{
+		{direct: true, sni: "none"},
 		{direct: true, sni: "www.speedtest.net,a.example.com"},
 		{cdnHost: "ws.example.com", cdnSNI: "front.example.net", cdnEdges: "104.16.1.1, 172.67.2.2:8443"},
 	}
@@ -1307,5 +1308,23 @@ func TestInitialReplyDeadlineDoesNotExpireTheSelectedVPNStream(t *testing.T) {
 	buf := make([]byte, len("VPN data"))
 	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "VPN data" {
 		t.Fatalf("stream lost continuation data: %q, %v", buf, err)
+	}
+}
+
+func TestProviderNativeSNIIsNotTransmittedAsLiteralNone(t *testing.T) {
+	b := newWSBridge(wsOptions{direct: true, sni: "none"}, nil, nil, func(string, ...any) {})
+	b.catalog = newWSNodeCatalog()
+	if err := b.catalog.replace("global", []byte(globalNodeFixture), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range b.carriersFor("203.0.113.100") {
+		if strings.HasPrefix(c.name, "WStunnel ") || strings.HasPrefix(c.name, "Stealth ") {
+			if !strings.Contains(c.name, "sni=none") {
+				t.Fatalf("provider-native profile misidentified: %s", c.name)
+			}
+		}
+	}
+	if !strings.HasPrefix(defaultWindscribeSNIs, "none,") {
+		t.Fatal("automatic WStunnel discovery omitted the no-custom-SNI baseline")
 	}
 }
