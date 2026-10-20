@@ -330,15 +330,18 @@ func warpStatus(u *term, base string) {
 	u.Note("Initial registration uses HTTPS to the WARP API; a working gateway does not prove that registration is reachable.")
 	u.Note("Saved keys are reused. ECH or Psiphon can carry initial registration; they do not guarantee access on every network.")
 	u.Note("Gool and nested MASQUE/WireGuard prepare separate inner identities only when selected. Gool registers its inner key through the outer MASQUE tunnel.")
+	u.Note("Portable folder updates keep the key directory %s. To survive removal of user data, use warp -backup / -restore with an encrypted file.", warpDir())
 	u.Note("Traffic using these exits leaves through Cloudflare or Psiphon. When they join routing depends on the selected policy.")
 	u.Note("Edit profiles/aether-profiles.txt to change what is tried; logs are in %s.", warpDir())
 }
 
-const warpUsage = `usage: ktest warp [-enable | -disable] [-base DIR]
+const warpUsage = `usage: ktest warp [-enable | -disable | -backup FILE | -restore FILE] [-base DIR]
 
   (no flag)   show the state of the exit paths
   -enable     download Aether if needed; prepare missing MASQUE and WireGuard identities
   -disable    delete the MASQUE and WireGuard identities (other settings are kept)
+  -backup     save encrypted identities to a new file; hidden password prompt
+  -restore    restore missing valid identities; never overwrite current keys
 `
 
 // runWarp is `ktest warp`.
@@ -347,12 +350,24 @@ func runWarp(args []string) int {
 	base := fs.String("base", defaultBase(), "")
 	enable := fs.Bool("enable", false, "")
 	disable := fs.Bool("disable", false, "")
+	backup := fs.String("backup", "", "")
+	restore := fs.String("restore", "", "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, warpUsage) }
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return 2
 	}
 	u := newTerm(os.Stdout)
+	active := 0
+	for _, enabled := range []bool{*enable, *disable, *backup != "", *restore != ""} { if enabled { active++ } }
+	if active > 1 {
+		u.Line(toneFail, "Choose exactly one of -enable, -disable, -backup or -restore")
+		return 2
+	}
 	switch {
+	case *backup != "":
+		return runWarpBackup(*backup, false, u)
+	case *restore != "":
+		return runWarpBackup(*restore, true, u)
 	case *enable:
 		return warpEnable(context.Background(), u, *base, connectListenDefault)
 	case *disable:
