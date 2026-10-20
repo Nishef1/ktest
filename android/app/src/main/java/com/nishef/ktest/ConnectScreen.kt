@@ -424,11 +424,9 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
         runCatching {
             val catalog = JSONObject(Mobilebridge.aetherProfileCatalog(mode, "auto"))
             val methods = catalog.getJSONArray("methods")
-            val defaultMethod = catalog.getJSONArray("profiles").getJSONObject(0).getString("method")
             (0 until methods.length()).map { i ->
                 val item = methods.getJSONObject(i)
-                item.getString("id") to if (item.getString("id") == "auto")
-                    "Default · $defaultMethod" else item.getString("title")
+                item.getString("id") to item.getString("title")
             }
         }.getOrElse { emptyList() }
     }
@@ -446,8 +444,9 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                             .padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(choices.firstOrNull { it.first == method }?.second ?: "Default",
-                            color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text(choices.firstOrNull { it.first == method }?.second ?: "Method unavailable · select another",
+                            color = if (choices.any { it.first == method }) K.text else K.amber,
+                            fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                         if (enabled && choices.size > 1) Icon(KIcons.ExpandMore, "Choose method", tint = K.cyan)
                     }
                     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
@@ -461,6 +460,11 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                     }
                 }
             }
+        }
+        if (choices.isEmpty()) {
+            Note("Native method catalog unavailable. Check the packaged Aether core before starting.", Tone.Warn)
+        } else if (choices.none { it.first == method }) {
+            Note("The saved method is no longer compatible with this mode. Select a supported method before connecting.", Tone.Warn)
         }
         if (mode == "aether") {
             val prefs = androidx.compose.ui.platform.LocalContext.current
