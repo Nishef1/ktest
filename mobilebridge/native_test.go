@@ -162,8 +162,14 @@ func TestAndroidAutoECHProfilesKeepDirectFallbackAndTransportIsolation(t *testin
 		}
 		if p.Has("--ech") {
 			ech++
-			if p.Value("--api-address") != "162.159.197.1" {
-				t.Fatalf("ECH profile omitted its API endpoint: %v", p.Args)
+			if p.Value("--ech") == "auto" {
+				// Aether 2.3.1 can fetch the ECH configuration itself,
+				// independent of our optional three-second lookup.
+				if p.Has("--api-address") {
+					t.Fatalf("core-managed ECH must not accidentally pin an API address: %v", p.Args)
+				}
+			} else if p.Value("--api-address") != "162.159.197.1" {
+				t.Fatalf("pinned ECH profile omitted its API endpoint: %v", p.Args)
 			}
 		} else {
 			fallback++
