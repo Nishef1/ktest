@@ -520,3 +520,71 @@ func TestCatalogRefreshDelayDistinguishesMissingNodeFromSuccessfulFetch(t *testi
 		}
 	}
 }
+
+func TestCatalogHedgesStalledPrimaryBeforeFirstWindscribeConnect(t *testing.T) {
+	var fallbackCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mob":
+			<-r.Context().Done() // censored/blocked API: must not prevent fallback
+		case "/legacy":
+			fallbackCalls++
+			_, _ = w.Write([]byte(globalNodeFixture))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c := newWSNodeCatalog()
+	start := time.Now()
+	err := c.updateFromSource(ctx, srv.Client(), wsCatalogSource{
+		name: "global", url: srv.URL + "/mob", fallback: srv.URL + "/legacy",
+	})
+	if err != nil || len(c.endpoints("203.0.113.100")) == 0 || fallbackCalls == 0 {
+		t.Fatalf("blocked mob-v2 prevented valid legacy node discovery: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("legacy catalog was not hedged inside first CONNECT wait: %v", d)
+	}
+}
+
+func TestCatalogInvalidPrimaryFallsBackWithoutPublishingBadNodes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mob" {
+			_, _ = w.Write([]byte("{malformed"))
+			return
+		}
+		_, _ = w.Write([]byte(regionalNodeFixture))
+	}))
+	defer srv.Close()
+	c := newWSNodeCatalog()
+	if err := c.updateFromSource(context.Background(), srv.Client(), wsCatalogSource{
+		name: "regional", url: srv.URL + "/mob", fallback: srv.URL + "/legacy",
+	}); err != nil {
+		t.Fatalf("valid fallback rejected after malformed primary: %v", err)
+	}
+	if got := c.endpoints("203.0.113.100"); len(got) == 0 || got[0].source != "regional/ip" {
+		t.Fatalf("unverified primary response poisoned provider nodes: %+v", got)
+	}
+}
+
+func TestCatalogFastPrimaryDoesNotDownloadFallback(t *testing.T) {
+	var fallbackCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/legacy" {
+			fallbackCalls++
+			http.Error(w, "not needed", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(globalNodeFixture))
+	}))
+	defer srv.Close()
+	c := newWSNodeCatalog()
+	if err := c.updateFromSource(context.Background(), srv.Client(), wsCatalogSource{
+		name: "global", url: srv.URL + "/mob", fallback: srv.URL + "/legacy",
+	}); err != nil || fallbackCalls != 0 {
+		t.Fatalf("healthy fast primary needlessly loaded legacy catalog: %v, requests=%d", err, fallbackCalls)
+	}
+}
