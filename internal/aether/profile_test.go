@@ -87,13 +87,36 @@ func TestNativeStartupDeadlinePreservesEqualsFormAndCannotOverflow(t *testing.T)
 		t.Fatalf("Psiphon is canceled before its native 180-second readiness deadline and verification margin: %s", got)
 	}
 	for _, args := range [][]string{{"--startup-secs", "100"}, {"--startup-secs=100"}} {
-		if got := AttemptTimeout(Profile{Args: args}); got != 120*time.Second {
+		if got := AttemptTimeout(Profile{Args: args}); got < 240*time.Second {
 			t.Fatalf("core can be canceled before its configured startup deadline: %v", got)
 		}
 	}
 	for _, value := range []string{"-1", "invalid", "999999999999999999999999999"} {
-		if got := AttemptTimeout(Profile{Args: []string{"--startup-secs=" + value}}); got != 65*time.Second {
+		if got := AttemptTimeout(Profile{Args: []string{"--startup-secs=" + value}}); got < 185*time.Second || got > 4*time.Minute {
 			t.Fatalf("invalid native startup created an unsafe timeout: %v", got)
+		}
+	}
+}
+
+// In the pinned PattNG core, gateway scanning precedes --startup-secs.
+// A listener deadline based on startup alone kills even the first scan.
+func TestNativeReadinessAllowsScanThenTunnelStartup(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		scan time.Duration
+	}{
+		{[]string{"--masque", "--h2"}, 120 * time.Second},
+		{[]string{"--wg"}, 80 * time.Second},
+		{[]string{"--masque", "--scan=thorough"}, 300 * time.Second},
+		{[]string{"--wg", "--thorough"}, 250 * time.Second},
+		{[]string{"--masque", "--turbo"}, 45 * time.Second},
+		{[]string{"--wg", "--scan", "turbo"}, 30 * time.Second},
+		{[]string{"--masque", "--ironclad"}, 180 * time.Second},
+		{[]string{"--masque", "--peer", "162.159.197.1:443"}, 0},
+		{[]string{"--wg", "--wg-peer=162.159.192.1:2408"}, 0},
+	} {
+		if got := AttemptTimeout(Profile{Args: tc.args}); got < tc.scan+65*time.Second {
+			t.Errorf("%v: scan plus startup truncated: %s", tc.args, got)
 		}
 	}
 }

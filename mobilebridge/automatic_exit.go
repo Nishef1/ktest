@@ -16,6 +16,7 @@ import (
 
 	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/connectionsession"
+	"github.com/Nishef1/ktest/internal/exitnode"
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
@@ -38,6 +39,7 @@ type automaticExit struct {
 	attempt    func(context.Context, aether.Profile) (*nativeCore, observedExit, error)
 	carrierMu  sync.Mutex
 	carrier    *connectionsession.Session
+	exitNodes  map[string]*exitnode.Server
 	enrollMu   sync.Mutex // serialize only cold first-use WARP identity provisioning
 }
 
@@ -125,7 +127,13 @@ func (a *automaticExit) optionsForProfile(p aether.Profile) (nativeOptions, erro
 		return o, fmt.Errorf("reconcile previous Android identities: %w", err)
 	}
 	o.profile = &p
-	if p.LocalCarrier() {
+	if preset := p.ExitNode(); preset != "" {
+		address, err := a.exitNode(preset)
+		if err != nil {
+			return o, err
+		}
+		o.carrier = address
+	} else if p.LocalCarrier() {
 		address, err := a.localCarrier()
 		if err != nil {
 			return o, err
@@ -133,6 +141,28 @@ func (a *automaticExit) optionsForProfile(p aether.Profile) (nativeOptions, erro
 		o.carrier = address
 	}
 	return o, nil
+}
+
+// exitNode starts PattNG's loopback exit-node for a finalMask preset once.
+func (a *automaticExit) exitNode(preset string) (string, error) {
+	a.carrierMu.Lock()
+	defer a.carrierMu.Unlock()
+	if s := a.exitNodes[preset]; s != nil {
+		return s.Addr(), nil
+	}
+	mask, err := exitnode.Preset(preset)
+	if err != nil {
+		return "", err
+	}
+	s, err := exitnode.Start(a.ctx, "127.0.0.1:0", mask)
+	if err != nil {
+		return "", err
+	}
+	if a.exitNodes == nil {
+		a.exitNodes = map[string]*exitnode.Server{}
+	}
+	a.exitNodes[preset] = s
+	return s.Addr(), nil
 }
 
 func (a *automaticExit) localCarrier() (string, error) {
@@ -199,7 +229,7 @@ func (a *automaticExit) profiles() []aether.Profile {
 	if a.mode == "balanced" {
 		profiles = append(profiles, aether.Profile{Label: "Tor-only", Args: []string{"--tor-only"}})
 	}
-	profiles = aether.WithLocalCarriers(profiles)
+	profiles = aether.WithLocalCarriers(aether.WithExitNodes(profiles))
 	var hint nativeHint
 	if raw, err := os.ReadFile(a.hintFile()); err == nil && len(raw) < 4096 && json.Unmarshal(raw, &hint) == nil && hint.Key == a.historyKey && hint.Key != "" && time.Since(hint.Checked) < 24*time.Hour && time.Until(hint.Checked) < time.Minute {
 		sort.SliceStable(profiles, func(i, j int) bool { return profiles[i].ID() == hint.ID && profiles[j].ID() != hint.ID })
@@ -284,6 +314,12 @@ func (a *automaticExit) run() {
 		if a.carrier != nil {
 			a.carrier.Stop()
 		}
+		a.carrierMu.Lock()
+		for _, s := range a.exitNodes {
+			s.Stop()
+		}
+		a.exitNodes = nil
+		a.carrierMu.Unlock()
 	}()
 	profiles := a.profiles()
 	for a.ctx.Err() == nil {

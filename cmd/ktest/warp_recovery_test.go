@@ -24,6 +24,22 @@ func TestBalancedDiscoveryAllowsIndependentBackendStartupBudget(t *testing.T) {
 	}
 }
 
+func TestAutomaticDiscoveryLetsFirstWorkersFinishNativeScans(t *testing.T) {
+	m := &warpManager{o: connectOptions{mode: ModeAether}, profs: []aetherProfile{
+		recoveryProfile("h2", "--masque", "--h2"),
+		recoveryProfile("wg", "--wg"),
+		recoveryProfile("h3", "--masque", "--h3"),
+	}}
+	if got := m.searchBudget([]int{0, 1, 2}); got < 200*time.Second {
+		t.Fatalf("automatic wave cancels initial native scans: %s", got)
+	}
+	// A later deep-scan variant must not inflate the current worker wave.
+	m.profs = append(m.profs, recoveryProfile("deep", "--masque", "--thorough"))
+	if got := m.searchBudget([]int{0, 1, 2, 3}); got > 4*time.Minute {
+		t.Fatalf("unscheduled deep scan inflated first wave: %s", got)
+	}
+}
+
 func profileLabels(profiles []aetherProfile) []string {
 	var labels []string
 	for _, p := range profiles {

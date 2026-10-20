@@ -201,10 +201,7 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 	var workers sync.WaitGroup
 	var speedSlots atomic.Int32
 	speedSlots.Store(16) // at most 2 MiB of optional download payload per comparison
-	count := 2
-	if m.o.mode == ModeBalanced {
-		count = 3
-	}
+	count := m.probeWorkers()
 	if limit == 1 && m.o.mode != ModeBalanced && m.o.mode != ModeFast {
 		history, _ := cachedNetwork(m.network, m.core)
 		if len(indices) > 0 {
@@ -317,6 +314,9 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 	if m.diagnosis && m.carrier != nil {
 		m.carrier.Stop()
 	}
+	if m.diagnosis {
+		m.stopExitNodes()
+	}
 	sort.SliceStable(found, func(i, j int) bool {
 		return measurementScore(found[i].result, m.o.mode) < measurementScore(found[j].result, m.o.mode)
 	})
@@ -345,7 +345,7 @@ func runAetherDiagnosis(ctx context.Context, u *term, base string, speed bool, b
 		return 1
 	}
 	m.diagnosis = true
-	u.Note("Budget %s · up to two profiles at once · up to 8 KiB website bodies per profile", budget)
+	u.Note("Budget %s · one WARP profile at a time (shared device keys) · up to 8 KiB website bodies per profile", budget)
 	if speed {
 		u.Note("Small-transfer sampling: at most 128 KiB per profile and 2 MiB total payload, excluding tunnel setup/protocol overhead.")
 	}

@@ -221,7 +221,7 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	address := listener.Addr().String()
 	_ = listener.Close() // Aether binds its own socket; no inherited-fd API.
 	args := paths.ProfileArgs(p, port, o.stateDir)
-	if p.LocalCarrier() {
+	if p.OwnedUpstream() {
 		args, err = aether.BindLocalCarrier(args, o.carrier)
 		if err != nil {
 			return nil, err

@@ -176,10 +176,10 @@ func TestNestedBootstrapBudgetAndRecoverySearch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(warpDir(), "masque-gool.toml"), enrollmentFixture(t, time.Now().Add(time.Hour)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if got := profileAttemptBudget(p); got != 80*time.Second {
+	if got := profileAttemptBudget(p); got != 200*time.Second {
 		t.Fatalf("existing nested identity should use fast budget, got %v", got)
 	}
-	if got := m.searchBudget([]int{0}); got != 92*time.Second {
+	if got := m.searchBudget([]int{0}); got != 212*time.Second {
 		t.Fatalf("ordinary automatic search got %v", got)
 	}
 }
@@ -211,7 +211,7 @@ func TestUnavailableEgressProbeIsNotCountryRejection(t *testing.T) {
 	}
 }
 
-func TestDefaultAetherH2AndFreshGatewayPolicy(t *testing.T) {
+func TestDefaultAetherH2AndValidatedReconnectPolicy(t *testing.T) {
 	profiles, err := loadAetherProfiles(t.TempDir(), "ECH", "162.159.1.1", ModeAether)
 	if err != nil {
 		t.Fatal(err)
@@ -226,8 +226,8 @@ func TestDefaultAetherH2AndFreshGatewayPolicy(t *testing.T) {
 			t.Fatalf("H2 ECH disables fragmentation: %+v", p)
 		}
 		args := strings.Join(aetherRunArgs(0, p, 10830), " ")
-		if !strings.Contains(args, "--no-quick-reconnect") || strings.Contains(args, " --quick-reconnect") {
-			t.Fatalf("stale gateway reused: %s", args)
+		if !strings.Contains(args, "--quick-reconnect") || strings.Contains(args, "--no-quick-reconnect") {
+			t.Fatalf("validated native reconnect disabled: %s", args)
 		}
 	}
 	if !found {
@@ -251,8 +251,8 @@ func TestAetherThoroughBudgetHonorsConfiguredStartup(t *testing.T) {
 	}
 	m.o.aetherMethod = "auto"
 	m.profs = append(m.profs, aetherProfile{Args: []string{"--wg"}}, aetherProfile{Args: []string{"--masque", "--h3"}})
-	if got := m.searchBudget([]int{0, 1, 2}); got != 40*time.Second {
-		t.Fatalf("automatic wave too long: %v", got)
+	if got := m.searchBudget([]int{0, 1, 2}); got < profileAttemptBudget(p)+10*time.Second {
+		t.Fatalf("automatic wave truncates native scanning: %v", got)
 	}
 }
 

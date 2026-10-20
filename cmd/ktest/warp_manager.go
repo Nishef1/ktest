@@ -14,6 +14,7 @@ import (
 
 	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/connectionsession"
+	"github.com/Nishef1/ktest/internal/exitnode"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -50,7 +51,7 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 		}
 	}
 	if mode == ModeFast || mode == ModeBalanced || mode == ModeAether {
-		profiles = aether.WithLocalCarriers(profiles)
+		profiles = aether.WithLocalCarriers(aether.WithExitNodes(profiles))
 	}
 	return profilesForMode(profiles, mode), nil
 }
@@ -83,29 +84,25 @@ func profileAttemptBudget(p aetherProfile) time.Duration {
 	return budget
 }
 
-// Automatic discovery keeps a short first sweep. A forced/isolated slow
-// profile must not be cancelled before its own configured startup deadline.
+// Each wave gives its first workers a complete native scan and tunnel startup.
+// Later variants are retried in subsequent waves without inflating this one.
 func (m *warpManager) searchBudget(indices []int) time.Duration {
 	budget := 40 * time.Second
-	ceiling := 250 * time.Second
-	forced := m.o.aetherMethod != "" && m.o.aetherMethod != "auto"
-	if !forced && len(indices) > 2 && m.o.mode != ModeBalanced {
-		return budget
+	workers := m.probeWorkers()
+	if len(indices) > workers {
+		indices = indices[:workers]
 	}
 	for _, i := range indices {
 		if i < 0 || i >= len(m.profs) {
 			continue
 		}
 		candidate := profileAttemptBudget(m.profs[i]) + 12*time.Second
-		if m.profs[i].Has("--tor-only") {
-			ceiling = 8 * time.Minute
-		}
 		if candidate > budget {
 			budget = candidate
 		}
 	}
-	if budget > ceiling {
-		budget = ceiling
+	if budget > 8*time.Minute {
+		budget = 8 * time.Minute
 	}
 	return budget
 }
@@ -135,7 +132,44 @@ type warpManager struct {
 	failedSweeps  int
 	carrierMu     sync.Mutex
 	carrier       *connectionsession.Session
+	exitNodes     map[string]*exitnode.Server
 	psiphonEdges  []string
+}
+
+// exitNode starts, once per preset, PattNG's loopback exit-node: the masked
+// freedom outbound every core of that preset dials out through.
+func (m *warpManager) exitNode(ctx context.Context, preset string) (string, error) {
+	m.carrierMu.Lock()
+	defer m.carrierMu.Unlock()
+	if s := m.exitNodes[preset]; s != nil {
+		return s.Addr(), nil
+	}
+	mask, err := exitnode.Preset(preset)
+	if err != nil {
+		return "", err
+	}
+	owner := m.processCtx
+	if owner == nil {
+		owner = ctx
+	}
+	s, err := exitnode.Start(owner, "127.0.0.1:0", mask)
+	if err != nil {
+		return "", err
+	}
+	if m.exitNodes == nil {
+		m.exitNodes = map[string]*exitnode.Server{}
+	}
+	m.exitNodes[preset] = s
+	return s.Addr(), nil
+}
+
+func (m *warpManager) stopExitNodes() {
+	m.carrierMu.Lock()
+	defer m.carrierMu.Unlock()
+	for preset, s := range m.exitNodes {
+		s.Stop()
+		delete(m.exitNodes, preset)
+	}
 }
 
 func (m *warpManager) localCarrier(ctx context.Context) (string, error) {
@@ -223,8 +257,21 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, t
 // maxExits is how many tunnels are kept open at once.
 const maxExits = 3
 
+// PattNG refuses a scan that shares a live session's WARP identity. Strict
+// WARP modes likewise scan one profile at a time and keep its verified winner,
+// rather than probing/replenishing variants with the same device keys beside it.
+func (m *warpManager) probeWorkers() int {
+	if m.o.mode == ModeAether || m.o.mode == ModeWindscribeAether {
+		return 1
+	}
+	if m.o.mode == ModeBalanced {
+		return 3
+	}
+	return 2
+}
+
 func (m *warpManager) capacity() int {
-	if m.o.mode == ModeBalanced || m.o.mode == ModeFast {
+	if m.o.mode == ModeBalanced || m.o.mode == ModeFast || m.o.mode == ModeAether || m.o.mode == ModeWindscribeAether {
 		return 1
 	}
 	return maxExits
@@ -400,6 +447,9 @@ func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) 
 	if len(indices) == 0 {
 		return nil // nil means the entire inventory to compare, not zero candidates.
 	}
+	if m.o.mode == ModeAether || m.o.mode == ModeWindscribeAether {
+		indices = indices[:1] // the next variant gets a fresh wave after this core stops
+	}
 	if len(active) == 0 && len(indices) > 0 {
 		first := m.profs[indices[0]]
 		if r, ok := history.Results[first.ID()]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
@@ -465,6 +515,7 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 		return false, nil, "local SOCKS port occupied"
 	}
 	logs := &tailBuffer{max: 8192}
+	progress := &aetherProgress{show: func(stage string) { m.t.Note("%s: %s", p.Label, stage) }}
 	logPath := filepath.Join(warpDir(), fmt.Sprintf("aether-%d.log", i+1))
 	var sinks []io.Writer
 	var logFile *os.File
@@ -485,7 +536,19 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 	cctx, cancel := context.WithCancel(processCtx)
 	rc := &runningCore{cancel: cancel, done: make(chan struct{})}
 	args := aetherRunArgs(i, p, port)
-	if p.LocalCarrier() {
+	if preset := p.ExitNode(); preset != "" {
+		address, err := m.exitNode(ctx, preset)
+		if err == nil {
+			args, err = aether.BindLocalCarrier(args, address)
+		}
+		if err != nil {
+			cancel()
+			if logFile != nil {
+				logFile.Close()
+			}
+			return false, nil, "PattNG exit-node unavailable"
+		}
+	} else if p.LocalCarrier() {
 		address, err := m.localCarrier(ctx)
 		if err != nil {
 			cancel()
@@ -520,7 +583,7 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 		if logFile != nil {
 			defer logFile.Close()
 		}
-		rc.err = aether.Run(cctx, aetherBinary(m.o.base), args, logs)
+		rc.err = aether.Run(cctx, aetherBinary(m.o.base), args, io.MultiWriter(logs, progress))
 	}()
 	// Once the VPN is back, unfinished discovery attempts must stop. Do not
 	// cancel a transport that has already passed try() and is carrying the VPN.
@@ -550,7 +613,7 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 	if ready && exitCarries(ctx, rc.done, port, time.Until(deadline)) {
 		return true, rc, ""
 	}
-	reason := "SOCKS listener did not open"
+	reason := "gateway scan/startup budget expired before SOCKS readiness; discovery incomplete"
 	switch {
 	case ctx.Err() != nil:
 		reason = "attempt cancelled or timed out"
@@ -565,6 +628,9 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 	}
 	rc.cancel()
 	rc.stop()
+	if stage := progress.stage(); stage != "" {
+		reason += "; last stage: " + stage
+	}
 	if ctx.Err() == nil {
 		m.t.Note("%s: %s (local core log: %s)", p.Label, reason, logPath)
 	}
@@ -670,6 +736,13 @@ func (m *warpManager) prepareIdentityFile(ctx context.Context, protocol, path st
 			proxyAddr = m.o.listen
 		}
 		m.enrollRoutes = enrollmentRoutes(ctx, m.o.base, proxyAddr, m.ech, m.echIP)
+		if m.o.mode == ModeFast || m.o.mode == ModeBalanced || m.o.mode == ModeAether {
+			// PattNG sends the WARP API registration through the same
+			// exit-node as the tunnel: plain HTTPS with its ClientHello mask.
+			if node, err := m.exitNode(ctx, aether.ExitNodePreset("masque-h2")); err == nil {
+				m.enrollRoutes = append([]enrollmentRoute{{"PattNG exit-node", []string{"--upstream", "socks5://" + node}}}, m.enrollRoutes...)
+			}
+		}
 		if m.o.mode == ModeFast {
 			m.enrollRoutes = fastEnrollmentRoutes(m.enrollRoutes)
 		}

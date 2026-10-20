@@ -29,6 +29,8 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 		method := p.Method()
 		if p.LocalCarrier() {
 			method += "/local"
+		} else if p.ExitNode() != "" {
+			method += "/exit-node"
 		}
 		if seen[method] {
 			variants = append(variants, p)

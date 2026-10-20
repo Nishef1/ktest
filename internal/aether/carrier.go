@@ -49,6 +49,69 @@ func WithLocalCarriers(profiles []Profile) []Profile {
 	return out
 }
 
+// exitNodePrefix starts the placeholder of PattNG's exit-node: the session
+// owner starts an exitnode server with the named finalMask preset and binds
+// its loopback address, exactly like the local carrier.
+const exitNodePrefix = "socks5://{EXIT:"
+
+// ExitNodeURL is the placeholder upstream for an exit-node preset.
+func ExitNodeURL(preset string) string { return exitNodePrefix + preset + "}" }
+
+// ExitNode is the exit-node preset this profile runs through, or "".
+func (p Profile) ExitNode() string {
+	preset, ok := strings.CutPrefix(p.Value("--upstream"), exitNodePrefix)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSuffix(preset, "}")
+}
+
+// OwnedUpstream reports whether the profile's upstream is one KTest starts.
+func (p Profile) OwnedUpstream() bool { return p.LocalCarrier() || p.ExitNode() != "" }
+
+// ExitNodePreset is PattNG's finalMask preset for a WARP method: a TCP
+// ClientHello mask for the HTTP/2 MASQUE families and UDP noise for every
+// UDP transport. Psiphon, Tor and unknown methods get none.
+func ExitNodePreset(method string) string {
+	switch method {
+	case "masque-h2", "gool-h2", "mim-h2":
+		return "tlshello-0-len"
+	case "masque-h3", "gool-h3", "mim-h3", "wireguard", "wiw":
+		return "udp-noise"
+	}
+	return ""
+}
+
+// WithExitNodes adds, after each direct WARP profile, PattNG's way of running
+// it: the same flags with --upstream through a loopback exit-node whose
+// outgoing TCP/UDP carry PattNG's finalMask preset. The direct profile stays.
+// Aether's own --fragment is dropped: in PattNG it is off unless asked for,
+// and the exit-node shapes the complete first flight itself.
+func WithExitNodes(profiles []Profile) []Profile {
+	var out []Profile
+	remaining := 64 - len(profiles)
+	for _, p := range profiles {
+		out = append(out, p)
+		preset := ExitNodePreset(p.Method())
+		if preset == "" || remaining <= 0 || p.Has("--upstream") || p.Psiphon() || p.Has("--tor-only") ||
+			p.Has("--tor") || p.Has("--tor-reverse") || p.Has("--psiphon") || p.Has("--psiphon-reverse") {
+			continue
+		}
+		node := Profile{Label: p.Label + " through PattNG exit-node (" + preset + ")"}
+		for _, arg := range p.Args {
+			if arg != "--fragment" {
+				node.Args = append(node.Args, arg)
+			}
+		}
+		node.Args = append(node.Args, "--upstream", ExitNodeURL(preset))
+		out = append(out, node)
+		remaining--
+	}
+	return out
+}
+
+// BindLocalCarrier replaces the profile's owned upstream placeholder (local
+// carrier or exit-node) with the loopback SOCKS address its owner started.
 func BindLocalCarrier(args []string, address string) ([]string, error) {
 	host, port, err := net.SplitHostPort(address)
 	ip := net.ParseIP(host)
@@ -58,11 +121,13 @@ func BindLocalCarrier(args []string, address string) ([]string, error) {
 	}
 	out := append([]string(nil), args...)
 	for i, arg := range out {
-		if arg == LocalCarrierURL {
-			out[i] = "socks5://" + address
-		}
-		if strings.HasPrefix(arg, "--upstream="+LocalCarrierURL) {
-			out[i] = "--upstream=socks5://" + address
+		value, inline := strings.CutPrefix(arg, "--upstream=")
+		if value == LocalCarrierURL || (strings.HasPrefix(value, exitNodePrefix) && strings.HasSuffix(value, "}")) {
+			if inline {
+				out[i] = "--upstream=socks5://" + address
+			} else {
+				out[i] = "socks5://" + address
+			}
 		}
 	}
 	return out, nil

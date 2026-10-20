@@ -209,7 +209,7 @@ func ProfilesForMode(profiles []Profile, mode string) []Profile {
 		case "windscribe":
 			continue
 		case "aether", "windscribe-aether", "fast":
-			if psiphon || tor || otherHelpers || (p.Has("--upstream") && !p.LocalCarrier()) {
+			if psiphon || tor || otherHelpers || (p.Has("--upstream") && !p.OwnedUpstream()) {
 				continue
 			}
 			// Raw WARP carrier profiles are valid only when KTest owns their
@@ -351,13 +351,17 @@ func RunArgs(p Profile, port int, stateDir string) []string {
 			args = append(args, "--startup-secs", "45")
 		}
 		if !has("--quick-reconnect", "--no-quick-reconnect") {
-			// Keep conservative fresh gateway scanning until the packaged-core upgrade is verified.
-			// Explicit profile quick-reconnect settings still take precedence.
-			args = append(args, "--no-quick-reconnect")
+			// As in PattNG, revalidate the core's remembered endpoints first.
+			// Failed cached peers fall back to scanning; they never prove an exit.
+			args = append(args, "--quick-reconnect")
 		}
 	}
+	if !has("--log-level", "--verbose") {
+		// Scan/selection milestones are INFO in the pinned core. WARN alone
+		// leaves a healthy but unfinished scan with an empty diagnostic log.
+		args = append(args, "--log-level", "info")
+	}
 	return append(args,
-		"--log-level", "warn",
 		"--bind", fmt.Sprintf("127.0.0.1:%d", port),
 		"--config", filepath.Join(stateDir, "run-"+p.ID()+".toml"),
 		"--masque-config", filepath.Join(stateDir, "masque.toml"),
@@ -365,7 +369,9 @@ func RunArgs(p Profile, port int, stateDir string) []string {
 	)
 }
 
-// AttemptTimeout includes the native startup limit and a readiness margin.
+// AttemptTimeout includes one complete native gateway scan, subsequent tunnel
+// startup and a readiness margin. --startup-secs only starts AFTER selection.
+// Native retries may continue beyond this bound; timeout is not proof of blocking.
 func AttemptTimeout(p Profile) time.Duration {
 	if p.Has("--tor-only") {
 		return 7 * time.Minute
@@ -376,10 +382,49 @@ func AttemptTimeout(p Profile) time.Duration {
 		return 200 * time.Second
 	}
 	startup := 45 * time.Second
-	if duration, err := time.ParseDuration(p.Value("--startup-secs") + "s"); err == nil && duration >= 0 && duration <= time.Duration(1<<63-1)-20*time.Second {
+	if duration, err := time.ParseDuration(p.Value("--startup-secs") + "s"); err == nil && duration >= 0 && duration <= time.Duration(1<<63-1)-10*time.Minute {
 		startup = duration
 	}
-	return startup + 20*time.Second
+	return scanTimeout(p) + startup + 20*time.Second
+}
+
+// These scan deadlines come from v2.3.1 prober.rs / wg_prober.rs, the core
+// pinned by PattNG and KTest. Forced peers skip discovery in that core.
+func scanTimeout(p Profile) time.Duration {
+	wg := p.Method() == "wireguard" || p.Method() == "wiw"
+	if p.Has("--peer") || (wg && p.Has("--wg-peer")) {
+		return 0
+	}
+	mode := p.Value("--scan")
+	if mode == "" {
+		for _, flag := range []string{"turbo", "balanced", "thorough", "verified", "ironclad"} {
+			if p.Has("--" + flag) {
+				mode = flag
+				break
+			}
+		}
+	}
+	switch mode {
+	case "turbo", "fast":
+		if wg {
+			return 30 * time.Second
+		}
+		return 45 * time.Second
+	case "thorough", "deep", "pro":
+		if wg {
+			return 250 * time.Second
+		}
+		return 300 * time.Second
+	case "verified", "proven", "stealth", "quiet":
+		return 60 * time.Second
+	case "ironclad", "real", "verify", "guaranteed":
+		return 180 * time.Second
+	default:
+		if wg {
+			return 80 * time.Second
+		}
+		return 120 * time.Second
+	}
 }
 
 // adaptProfileFlags keeps the shipped and user-defined profile catalog usable

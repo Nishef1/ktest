@@ -33,11 +33,51 @@ QUIC is the Aether helper's outer transport. It does not add application UDP sup
 
 Each candidate must carry verified HTTPS to a neutral exit-location endpoint. Strict exit-only Connect modes defer representative site checks entirely until at least one live foreign exit is verified; an unavailable exit is not reported as five failed websites. It then checks YouTube, Google, Wikipedia, Telegram and Discord using the existing lightweight startup probes. These requests contain no user cookies, credentials or AI-service requests; redirects are not followed. No website list or browsing history is saved.
 
-Comparison uses two profile workers. Each attempt's deadline includes the Aether core's configured startup time and additional exit verification. First-use nested identities may require up to 225 seconds for outer tunnel, enrollment, and inner tunnel, subject to the overall comparison budget; incomplete attempts are not proof of blocking. Optional transfer sampling downloads at most 128 KiB per working profile, with at most 16 samples (2 MiB of payload total). TLS, tunnel scans and initial identity registration add protocol/network overhead. The result is a **small-transfer observation**, not sustained bandwidth. Cancellation stops temporary cores; unfinished candidates remain untested, rather than being declared blocked.
+Strict Aether comparison uses one profile worker, matching PattNG's rule against scanning with a live session's shared WARP keys. Each attempt's deadline includes one native gateway scan, the subsequent Aether tunnel startup time and additional exit verification. First-use nested identities receive at least 225 seconds for outer tunnel, enrollment, and inner tunnel, subject to the overall comparison budget; incomplete attempts are not proof of blocking. Optional transfer sampling downloads at most 128 KiB per working profile, with at most 16 samples (2 MiB of payload total). TLS, tunnel scans and initial identity registration add protocol/network overhead. The result is a **small-transfer observation**, not sustained bandwidth. Cancellation stops temporary cores; unfinished candidates remain untested, rather than being declared blocked.
 
 Measurements live in the per-user WARP directory's `network-measurements.json`. A locally hashed interface/network signature and core SHA-256 isolate networks and core versions. Raw network names, gateways and DNS inventories are not stored. Measurements expire after 24 hours; at most 16 network entries are retained. Corrupt caches are reported and preserved. The cache orders attempts and recommends methods; it cannot authorize a connection or replace live location verification.
 
-Fast weighs latency and any optional transfer sample more strongly. Balanced and strict Aether weigh sample failures more heavily. Automatic discovery starts with a 40-second sweep; forced or isolated slow profiles get a deadline based on configured startup, capped at 250 seconds, rather than being cancelled before the core can finish. Up to three measured exits are retained. A suitable cached foreign winner (or a working carrier in Windscribe-through-Aether) uses a single probe worker first. A failed winner yields to other candidates; recent failed attempts are deprioritized for ten minutes. If no exit is retained, discovery retries with a 30-second, 1-minute, then 2-minute backoff without repeatedly registering the same missing identity in that session. Cancelled Gool outer bootstrap does not mark its inner enrollment attempted. Aether v2.3.1 includes upstream PR #147, which changes selection and retirement of failing gateways. KTest still chooses fresh gateway scans by default, unless a profile explicitly requests quick reconnect; that conservative setting can be revisited with live measurements. H2/ECH profiles no longer disable TLS fragmentation.
+Fast weighs latency and any optional transfer sample more strongly. Balanced and strict Aether weigh sample failures more heavily. Automatic discovery budgets each wave for its initial workers' scan plus startup and verification, capped at eight minutes. Later deep-scan variants do not inflate the current wave. Strict Aether and Windscribe-through-Aether retain one verified WARP winner and stop scanning while it is healthy; other policies retain their existing capacity. A suitable cached foreign winner (or a working carrier in Windscribe-through-Aether) uses a single probe worker first. A failed winner yields to other candidates; recent failed attempts are deprioritized for ten minutes. If no exit is retained, discovery retries with a 30-second, 1-minute, then 2-minute backoff without repeatedly registering the same missing identity in that session. Cancelled Gool outer bootstrap does not mark its inner enrollment attempted. Aether v2.3.1 includes upstream PR #147, which changes selection and retirement of failing gateways. Like PattNG, KTest now requests quick reconnect: the native core revalidates remembered peers and scans afresh when they fail. An explicit `--no-quick-reconnect` still forces a fresh scan. H2/ECH profiles no longer disable TLS fragmentation.
+
+### Gateway discovery and startup deadlines (2026-10-20)
+
+The pinned core's `--startup-secs` begins **after gateway selection**. Its balanced
+MASQUE scan can take 120 seconds; the first balanced WireGuard scan can take 80
+seconds, then try other obfuscation profiles. Previously KTest's 65-second
+listener timeout, or its 40-second automatic wave, could terminate the core
+before even that first scan ended. Shared readiness budgets now include the
+scan; they still bound retries and do not promise that every candidate was tried.
+
+Following [PattNG's scanner](https://github.com/patterniha/PattNG/blob/my-releases/V2rayNG/app/src/main/java/com/v2ray/ang/core/AetherScanner.kt),
+managed runtime logging uses INFO to observe native scan/selection milestones.
+An inherited `RUST_LOG=warn` no longer overrides the managed CLI log setting.
+The CLI displays the native candidate inventory/budget and validated endpoint
+selection, while withholding arbitrary INFO messages from the terminal. A selected
+endpoint still needs separate HTTPS/foreign-exit verification. Full native logs
+remain local; identities and shell settings are preserved.
+
+Live samples on the current system route loaded the existing identities and
+completed the first 120-second MASQUE and 80-second WireGuard scans without a
+usable endpoint. Forced H2 samples with fresh ECH did not establish a validated
+tunnel; a sampled alternate TCP port refused connection. These are bounded
+observations, not proof that every endpoint or ISP is blocked. The subsequent
+KTest comparison refused to run while Windscribe reported Connecting; no VPN
+or system route was changed to bypass that check. A bare-ISP comparison and a
+successful end-to-end foreign exit remain unverified.
+
+The reference inspected was PattNG `89c760c`, whose Aether submodule is
+`cfc27c5` (the same v2.3.1 core pinned here). `AetherScanner.kt` launches that
+core and parses `selected MASQUE gateway` / `selected WireGuard endpoint`;
+`ServerAetherActivity.applyScanResult` stores the discovered host/port, and
+`AetherCoreManager.buildArguments` supplies `--peer` on later connections.
+The native `prober.rs` / `wg_prober.rs` own the seed/range inventory, sampling,
+port order, protocol/data-plane checks and RTT selection. KTest reuses this
+native discovery and its validated last-connection cache; it does not maintain
+a second IP scanner. PattNG's `AetherSession.disturbedByScanOf` refuses a scan
+sharing the active session's identity. Strict KTest WARP modes now likewise
+probe serially and keep one healthy winner. This removes concurrent use of
+the shared keys as a possible interference source; it was not established as
+the cause of the sampled network failures.
 
 For active sessions, small neutral health checks run every three minutes only when proxy activity has advanced. Two failed checks retire a core. Discovery resumes when all retained exits have ended. Checks pause while Windscribe reports Connected so an independent probe cannot tear down its working carrier. Protected AI routes remain pinned and fail closed after their selected exit disappears; reconnect to select a new protected identity. Ordinary mixed-mode destinations keep their existing per-host adaptive fallback policy.
 
@@ -56,6 +96,34 @@ Standalone comparisons skip an already Connected/Connecting Windscribe session o
 Initial registration may be filtered even when gateways work. A strict-mode proxy listener without a live verified exit is never used as its own registration upstream; prepared identities are allowed to bypass the global enrollment lock so independently runnable profiles are not starved. Existing offline-valid keys are reused; damaged files are kept for explicit repair. Inner identities are prepared only for methods that need them: `wg-secondary.toml` for classic WARP-in-WARP, `masque-secondary.toml` for MASQUE-in-MASQUE, and `masque-gool.toml` for Gool. Gool's inner WireGuard registration travels through a temporary outer MASQUE tunnel. Staged registration validates the exact expected file and publishes without replacing an existing identity. Runtime cores run with automatic reprovisioning disabled. A successful ECH enrollment saves an identity only: it never establishes that a data-plane MASQUE or WireGuard tunnel is reachable. An unreachable exit-location probe is recorded as unverified, not as proof that its country is rejected. In strict Aether/Psiphon/Tor modes installing a local fronting CA is not a relevant recovery action; CA trust is reserved for explicit website-fronting in mixed modes.
 
 See [connection policies](CONNECTION_MODES.md), [Windscribe tests](WINDSCRIBE_BOOTSTRAP.md), and the pinned [Aether CLI](https://github.com/patterniha/Aether/blob/v2.3.1/aether/src/cli.rs) / [runtime](https://github.com/patterniha/Aether/blob/v2.3.1/aether/src/lib.rs).
+
+## PattNG exit-node (2026-10-20)
+
+PattNG (`89c760c`) never lets the Aether core dial the internet itself. Every
+core runs with `--upstream socks5://127.0.0.1:<port>`, a loopback inbound of
+its Xray whose `exit-node` outbound is a plain `freedom` outbound carrying the
+profile's `finalMask` (`AetherCore.through`, `CoreOutboundBuilder.toOutboundAetherExit`).
+The WARP API registration, ECH lookup, gateway scan and the tunnel itself all
+leave through that mask; Aether 2.3.1 carries UDP over SOCKS5 UDP ASSOCIATE.
+
+KTest has no Xray, so `internal/exitnode` reproduces that outbound: a loopback
+SOCKS5 server (CONNECT and UDP ASSOCIATE) whose sockets carry PattNG's shipped
+presets, parsed from the same JSON and ported from patterniha/xray-core
+v26.10.19 `finalmask/{fragment,noise}`:
+
+| Preset | Used for | On the wire |
+| --- | --- | --- |
+| `tlshello-0-len` | `masque-h2`, `gool-h2`, `mim-h2`, WARP API registration | first write split into a 114-byte TCP segment, then 1-byte segments 1 ms apart (11 writes at most) |
+| `udp-noise` | `masque-h3`, `gool-h3`, `mim-h3`, `wireguard`, `wiw` | 24 random 1200-1230 byte datagrams, 10 ms apart, before the first datagram to each endpoint and again after 28 s idle |
+
+Xray stacks masks with the first one innermost, so in PattNG's TCP presets the
+`tlshello` record-splitting stage receives a 114-byte piece shorter than the
+ClientHello record and passes it unchanged; the port keeps that behaviour
+rather than "fixing" it. Fast, Balanced and Aether modes add one exit-node
+variant after each direct WARP profile (`aether.WithExitNodes`, desktop and
+Android Auto); the direct profile stays, Aether's own `--fragment` is dropped
+in the variant, and Windscribe-through-Aether remains directly carried. This is
+a reproduction of PattNG's method, not evidence that it works on a given ISP.
 
 ## Aether core and Android Auto upgrade (2026-10-20)
 

@@ -31,3 +31,41 @@ func TestLocalCarrierVariantsPreserveDirectUDPAndIndependentBackends(t *testing.
 		}
 	}
 }
+
+func TestExitNodeVariantsFollowPattNG(t *testing.T) {
+	original := []Profile{
+		{Label: "H2", Args: []string{"--masque", "--h2", "--fragment"}},
+		{Label: "H3", Args: []string{"--masque", "--h3"}},
+		{Label: "WG", Args: []string{"--wg", "--noize", "balanced"}},
+		{Label: "Psiphon", Args: []string{"--psiphon-only"}},
+		{Label: "Pinned", Args: []string{"--wg", "--upstream", "socks5://127.0.0.1:9"}},
+	}
+	variants := WithExitNodes(original)
+	if len(variants) != 8 {
+		t.Fatalf("variants = %d", len(variants))
+	}
+	want := map[int]string{1: "tlshello-0-len", 3: "udp-noise", 5: "udp-noise"}
+	for i, preset := range want {
+		if variants[i].ExitNode() != preset || !variants[i].OwnedUpstream() || variants[i].Method() != variants[i-1].Method() {
+			t.Fatalf("variant %d = %+v", i, variants[i])
+		}
+	}
+	if variants[1].Has("--fragment") || !original[0].Has("--fragment") {
+		t.Fatal("exit-node H2 kept Aether's own fragmentation, or the direct profile lost it")
+	}
+	if variants[6].ExitNode() != "" || variants[7].ExitNode() != "" {
+		t.Fatal("Psiphon or a user upstream got an exit-node")
+	}
+	args, err := BindLocalCarrier(RunArgs(variants[3], 19090, t.TempDir()), "127.0.0.1:19081")
+	joined := strings.Join(args, " ")
+	if err != nil || strings.Contains(joined, "{EXIT") || !strings.Contains(joined, "--upstream socks5://127.0.0.1:19081") {
+		t.Fatalf("unresolved exit-node: %v %v", args, err)
+	}
+	aetherOnly := ProfilesForMode(variants, "aether")
+	if len(aetherOnly) != 6 {
+		t.Fatalf("aether mode kept %d profiles", len(aetherOnly))
+	}
+	if got := ProfilesForMode(variants, "windscribe-aether"); len(got) != 3 {
+		t.Fatalf("windscribe-aether must stay directly carried, kept %d", len(got))
+	}
+}
