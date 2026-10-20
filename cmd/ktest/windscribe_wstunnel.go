@@ -386,9 +386,9 @@ func (b *wsBridge) carriersFor(host string) []wsCarrier {
 					// upstream TLS fingerprint as a separately scored retry.
 					// A ClientHello alone is not evidence of working OpenVPN.
 					for _, fp := range []struct {
-						name     string
-						random   bool
-						goTLS    bool
+						name   string
+						random bool
+						goTLS  bool
 					}{{"go-tls", false, true}, {"chrome", false, false}, {"randomized", true, false}} {
 						out = append(out, wsCarrier{name: "WStunnel sni=" + label + leg.suffix + " entry=" + endpoint.ip + " hello=" + fp.name, method: leg.method, addr: addr, source: endpoint.source, open: func(ctx context.Context, _, _ string) (net.Conn, error) {
 							return wstunnel.Dial(ctx, wstunnel.Config{Addr: addr, SNI: sni, Host: endpoint.ip, Path: b.path, VerifyPeer: windscribeServerCert, Dial: leg.dial, OfficialHello: fp.random, NativeGoTLS: fp.goTLS})
