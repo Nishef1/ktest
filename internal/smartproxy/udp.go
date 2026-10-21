@@ -106,7 +106,7 @@ func (p *Proxy) serveUDP(parent context.Context, control net.Conn, host, port st
 				continue
 			}
 			// One association event, never one event per user packet.
-			p.emit(ctx, Event{UDP: true, Port: dstPort, OK: true, Path: exit.route.Name})
+			p.emit(ctx, Event{UDP: true, Host: destination, Port: dstPort, Site: siteKey(destination), OK: true, Path: exit.route.Name})
 			current, target := exit, client
 			go func() {
 				buf := make([]byte, 65535)

@@ -15,6 +15,9 @@ func connectionCoverage(o connectOptions) string {
 	if o.mode.isWindscribe() {
 		return "Windscribe app only; configure its HTTP proxy; Windscribe owns system coverage"
 	}
+	if o.tun && o.mode.tunUDP() {
+		return "Whole PC TCP and UDP via TUN; UDP (QUIC, calls) rides the WARP exit; LAN/helpers exempt; activation is verified separately"
+	}
 	if o.tun {
 		return "Whole PC TCP requested via TUN; LAN/helpers exempt, most UDP blocked; activation is verified separately"
 	}

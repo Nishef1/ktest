@@ -94,7 +94,11 @@ func (s *connectionStatus) view(now time.Time) statusView {
 	v.lines = append(v.lines, "Status   "+status)
 	switch {
 	case tunOn:
-		v.lines = append(v.lines, "Use      "+t.Green("Whole PC")+" (TUN on) · TCP apps need no setup")
+		apps := "TCP apps need no setup"
+		if s.mode.tunUDP() {
+			apps = "TCP and UDP apps need no setup"
+		}
+		v.lines = append(v.lines, "Use      "+t.Green("Whole PC")+" (TUN on) · "+apps)
 	case s.tunWant && v.key != "connected":
 		v.lines = append(v.lines, "Use      Whole PC (TUN) starts automatically once connected")
 	default:
