@@ -19,8 +19,8 @@ func TestLocalCarrierCannotUseItsOwnForeignExitOrTriggerDiscovery(t *testing.T) 
 	if len(cfg.Upstreams) != 2 || cfg.Upstreams[0].Name != "plain" || cfg.Upstreams[1].Name != "ByeDPI" {
 		t.Fatalf("carrier included nonlocal paths: %+v", cfg.Upstreams)
 	}
-	if cfg.ExitOnly("api.cloudflareclient.com") || !cfg.ExitOnly("chatgpt.com") {
-		t.Fatal("strict app policy blocked transport bootstrap or leaked protected traffic")
+	if cfg.ExitOnly != nil {
+		t.Fatal("the local carrier refuses no destination; it has no exits to send one to")
 	}
 	carrier, _ := New(cfg)
 	if err := carrier.Add(Upstream{Name: "late foreign exit", Exit: true}); err == nil {

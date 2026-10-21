@@ -213,7 +213,7 @@ func TestAetherUDPCarrierOnlyForKnownOrdinaryDestinations(t *testing.T) {
 	}
 }
 
-// AI policy off (no protected names): the working carrier takes UDP to any
+// No exit-only names: the working carrier takes UDP to any
 // destination, addresses included; live test 2026-10-21 found it took none.
 func TestAetherUDPWithoutProtectedNamesUsesCarrier(t *testing.T) {
 	p, err := New(Config{

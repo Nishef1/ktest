@@ -25,15 +25,9 @@ func (t *terminal) chooseCoverage(in *input) bool {
 		}
 		t.ui.Println(proxy)
 		t.ui.Println(tun)
-		ai := "On  · AI and TikTok only through an exit outside Iran"
-		if t.options.noAIPolicy {
-			ai = "Off · AI and TikTok use the same routes as other sites"
-		}
-		t.ui.Println("   3  AI policy " + ai)
 		t.ui.Printf("\n")
 		t.ui.Note("TUN needs Windows Administrator; LAN and helper processes are exempt.")
 		t.ui.Note("Most UDP is blocked, except in Aether (UDP rides WARP). TUN is not a persistent VPN kill switch.")
-		t.ui.Note("3 switches the AI policy. Off may show your Iranian IP to AI services, which often refuse it.")
 		t.ui.Note("Changes are saved automatically.")
 		t.ui.menuOption("0", "Back", backHint)
 		t.ui.Printf("\n  Coverage > ")
@@ -53,18 +47,8 @@ func (t *terminal) chooseCoverage(in *input) bool {
 				continue
 			}
 			t.options.tun = true
-		case "3":
-			t.options.noAIPolicy = !t.options.noAIPolicy
-			if t.rememberConnect("no-ai-policy", strconv.FormatBool(t.options.noAIPolicy)) {
-				state := "On"
-				if t.options.noAIPolicy {
-					state = "Off"
-				}
-				t.notice, t.noticeTone = "Saved: AI policy "+state+" · applies on next connect", toneInfo
-			}
-			continue
 		default:
-			message = "Select 1, 2, 3, or 0"
+			message = "Select 1, 2, or 0"
 			continue
 		}
 		if t.rememberConnect("tun", strconv.FormatBool(t.options.tun)) {

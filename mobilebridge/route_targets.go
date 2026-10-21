@@ -22,7 +22,6 @@ import (
 
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/quickcheck"
-	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
 const routeTargetsFile = "route-targets.json"
@@ -235,8 +234,7 @@ func routeTargetsRevision(targets []routeTarget) string {
 // refuses the CA only loses fronting for that host; other routes take over.
 func routeFrontingAllowed(targets []routeTarget, host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	protected, _ := smartproxy.NewAIDomainRules("")
-	if protected.Match(host) || front.Lookup(front.DefaultFamilies(), host) == nil {
+	if front.Lookup(front.DefaultFamilies(), host) == nil {
 		return false
 	}
 	for _, target := range targets {
@@ -294,7 +292,6 @@ func RouteTargets(privateDir string) (string, error) {
 func routeTargetsJSON(dir string, targets []routeTarget) (string, error) {
 	cert := routeTargetsPublicCA(dir)
 	infos := make([]routeTargetInfo, 0, len(targets))
-	protected, _ := smartproxy.NewAIDomainRules("")
 	for _, target := range targets {
 		u, _ := targetURL(target.URL)
 		info := routeTargetInfo{routeTarget: target, Note: "Fronting off excludes this exact hostname; the path is used only for diagnostics. CA trust and target reachability are not verified."}
@@ -303,10 +300,7 @@ func routeTargetsJSON(dir string, targets []routeTarget) (string, error) {
 			info.Supported = u.Port() == "" || u.Port() == "443"
 		}
 		info.CACovered = publicCAPermits(cert, u.Hostname())
-		if protected.Match(u.Hostname()) {
-			info.Supported = false
-			info.Note = "Protected service: strict verified-exit policy still applies; target settings cannot enable local fronting."
-		} else if !info.Supported {
+		if !info.Supported {
 			info.Note = "Unsupported fronting family or port. Ordinary HTTPS route diagnostics remain available; an arbitrary URL does not establish shared-edge support."
 		} else if !info.CACovered {
 			info.Note += " The current public CA certificate does not cover this host; it was not replaced."

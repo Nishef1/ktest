@@ -2,7 +2,6 @@ package quickcheck
 
 import (
 	"context"
-	"github.com/Nishef1/ktest/internal/smartproxy"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -43,10 +42,10 @@ func TestClosedProxyFailsRatherThanClaimingAccess(t *testing.T) {
 }
 
 func TestStartupTargetsNeverContactAIOrFollowAccountRedirects(t *testing.T) {
-	rules, _ := smartproxy.NewAIDomainRules("")
 	for _, target := range Targets() {
 		u, err := url.Parse(target.URL)
-		if err != nil || u.Scheme != "https" || rules.Match(u.Hostname()) {
+		host := u.Hostname()
+		if err != nil || u.Scheme != "https" || strings.Contains(host, "openai") || strings.Contains(host, "chatgpt") || strings.Contains(host, "claude") || strings.Contains(host, "gemini") {
 			t.Fatalf("unsafe direct-control target: %+v", target)
 		}
 		if target.Method != http.MethodHead && target.Want != 204 {

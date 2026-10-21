@@ -1,5 +1,9 @@
 package smartproxy
 
+// A host list for tests of the generic exit-only machinery (ExitOnly,
+// pinning, fail-closed), which Psiphon and Tor modes still use for every
+// site. No mode singles out these hosts any more.
+
 import (
 	"fmt"
 	"net"

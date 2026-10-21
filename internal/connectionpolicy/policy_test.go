@@ -26,20 +26,23 @@ func TestModeCatalogIsUniqueAndFaithfulToCLI(t *testing.T) {
 	}
 }
 
+// No site is singled out in any mode: AI and TikTok route like the rest.
+// Psiphon and Tor send everything through their exit; Aether carries
+// everything on any working exit.
 func TestConfigureMatchesCLIForAllModes(t *testing.T) {
-	protected := func(h string) bool { return h == "chatgpt.com" }
 	for _, id := range []string{"balanced", "fast", "windscribe", "windscribe-aether", "aether", "psiphon", "tor"} {
 		var cfg smartproxy.Config
-		Configure(id, &cfg, protected)
-		if cfg.ExitOnly == nil || !cfg.ExitOnly("chatgpt.com") {
-			t.Fatalf("mode %s disabled protected exit rule", id)
+		Configure(id, &cfg)
+		exitOnly := id == "psiphon" || id == "tor"
+		if (cfg.ExitOnly != nil) != exitOnly {
+			t.Fatalf("mode %s: ExitOnly set=%v", id, cfg.ExitOnly != nil)
 		}
-		isForeignOnly := id == "psiphon" || id == "tor"
-		if cfg.ExitOnly("example.com") != isForeignOnly {
-			t.Fatalf("mode %s changed foreign-only behavior", id)
+		for _, host := range []string{"chatgpt.com", "www.tiktok.com", "example.com"} {
+			if exitOnly && !cfg.ExitOnly(host) {
+				t.Fatalf("mode %s let %s off its exit", id, host)
+			}
 		}
-		// Aether keeps every site on an exit, of any location (PattNG).
-		if required := cfg.ExitRequired != nil && cfg.ExitRequired("example.com"); required != (id == "aether") {
+		if required := cfg.ExitRequired != nil && cfg.ExitRequired("chatgpt.com"); required != (id == "aether") {
 			t.Fatalf("mode %s: ExitRequired=%v", id, required)
 		}
 		if id == "fast" && cfg.Stagger != 125*time.Millisecond {
@@ -47,23 +50,6 @@ func TestConfigureMatchesCLIForAllModes(t *testing.T) {
 		}
 		if id == "windscribe" && (!cfg.LocalOnly || !cfg.RejectExits) {
 			t.Fatal("Windscribe direct-only policy changed")
-		}
-	}
-}
-
-func TestMixedModesKeepTikTokAPIsAndMediaOnAVerifiedExit(t *testing.T) {
-	for _, mode := range []string{"balanced", "fast"} {
-		var cfg smartproxy.Config
-		Configure(mode, &cfg, func(host string) bool { return host == "chatgpt.com" })
-		for _, host := range []string{"www.tiktok.com", "v16-webapp-prime.tiktok.com", "api16.tiktokv.com", "mon16.tiktokv.eu", "location.tiktokw.eu", "sf.tiktokcdn.com", "p16.tiktokcdn-eu.com", "lf16.tiktokcdn-us.com", "sf16.ttwstatic.com", "WWW.TIKTOK.COM.", "chatgpt.com"} {
-			if !cfg.ExitOnly(host) {
-				t.Fatalf("%s allowed region-sensitive API/media on the ISP route: %s", mode, host)
-			}
-		}
-		for _, host := range []string{"x.com", "example.com", "not-tiktok.com", "tiktok.com.evil.test", "shared-cdn.example"} {
-			if cfg.ExitOnly(host) {
-				t.Fatalf("%s unnecessarily restricted %s", mode, host)
-			}
 		}
 	}
 }

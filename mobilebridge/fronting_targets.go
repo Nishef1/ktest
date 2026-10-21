@@ -11,7 +11,6 @@ import (
 
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/front"
-	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
 type targetFrontingPreset struct {
@@ -30,11 +29,6 @@ func targetPreset(rawURL string) (targetFrontingPreset, error) {
 		return targetFrontingPreset{}, err
 	}
 	preset := targetFrontingPreset{URL: u.String(), HTTPHost: u.Host, Note: "Unsupported fronting family. Ordinary HTTPS diagnostics are available; an arbitrary URL does not establish shared-edge support."}
-	protected, _ := smartproxy.NewAIDomainRules("")
-	if protected.Match(u.Hostname()) {
-		preset.Note = "Protected service: strict verified-exit routing is required; local fronting diagnostics are not permitted."
-		return preset, nil
-	}
 	fam := front.Lookup(front.DefaultFamilies(), u.Hostname())
 	if fam == nil {
 		return preset, nil
@@ -142,11 +136,6 @@ func TestTargetFronting(privateDir, rawURL, edgeIPs string, rounds int) (string,
 	preset, err := targetPreset(rawURL)
 	if err != nil {
 		return "", err
-	}
-	u, _ := targetURL(preset.URL)
-	protected, _ := smartproxy.NewAIDomainRules("")
-	if protected.Match(u.Hostname()) {
-		return "", errors.New("protected service requires its verified-exit route; direct fronting test refused")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

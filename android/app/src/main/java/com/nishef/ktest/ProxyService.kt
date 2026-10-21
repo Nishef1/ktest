@@ -214,9 +214,6 @@ class ProxyService : Service() {
                     try {
                         mutex.withLock {
                             if (wanted) {
-                                // The Settings "AI policy" switch, read at each start.
-                                Mobilebridge.setAIPolicy(getSharedPreferences("ktest_android", MODE_PRIVATE)
-                                    .getBoolean("ai_policy", true))
                                 // The F&F and MASQUE SNI settings; a bad saved value falls back to auto.
                                 getSharedPreferences("ktest_android", MODE_PRIVATE).let { p ->
                                     runCatching {

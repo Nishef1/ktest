@@ -298,7 +298,7 @@ func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
 func TestElevationPreservesEffectivePolicyAcrossUserProfiles(t *testing.T) {
 	o := defaultConnectOptions("example-base")
 	o.mode, o.tun = ModeTor, true
-	o.aiExtra, o.exitSocks = "sensitive.example", "127.0.0.1:19001"
+	o.exitSocks = "127.0.0.1:19001"
 	o.noDirect, o.noFront, o.verbose = true, true, true
 	o.ws.sni, o.ws.direct = "python.org", false
 	o.cert = true // already performed by the parent; never replay it
@@ -307,7 +307,7 @@ func TestElevationPreservesEffectivePolicyAcrossUserProfiles(t *testing.T) {
 		t.Fatalf("child could load another user's defaults: %v", args)
 	}
 	child := defaultConnectOptions("another-admin-package")
-	child.mode, child.aiExtra = ModeFast, "other-user.example"
+	child.mode, child.strategies = ModeFast, 3
 	flags := connectFlagSet(&child)
 	if err := flags.Parse(args[2:]); err != nil {
 		t.Fatal(err)

@@ -331,14 +331,11 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	if mode != "balanced" && mode != "fast" && upstream == "" {
 		return "", errors.New("a local SOCKS5 upstream is required for this mode")
 	}
-	rules, err := smartproxy.NewAIDomainRules("")
-	if err != nil {
-		return "", err
-	}
 	var upstreams []smartproxy.Upstream
 	if mode == "balanced" || mode == "fast" {
 		upstreams = append(smartproxy.PlainUpstreams(), smartproxy.DesyncUpstreams()...)
 	}
+	var err error
 	var localCores *localCoreSet
 	var xrayError string
 	keepLocal := false
@@ -450,7 +447,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}
 		}
 	}
-	connectionpolicy.ConfigureAI(mode, &config, rules.Match, aiPolicyEnabled())
+	connectionpolicy.Configure(mode, &config)
 	// Use the same Go trusted/DoH/ECH resolver as the desktop connection.
 	// Aether never falls back to Android system DNS.
 	config.Resolve, config.Resolve6, err = connectiondns.MobileResolvers(mode, upstream)

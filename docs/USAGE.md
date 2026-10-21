@@ -23,7 +23,7 @@ On a terminal with VT support and at least 60 columns by 24 rows, menu/coverage 
 
 Preferences live in the current user's configuration directory: `%APPDATA%\ktest\settings.json` on Windows (`KTEST_SETTINGS_FILE` can select another file). The menu and `connect` use the same saved options; explicit connection flags override and update their saved values. This includes ports, path switches, timings, extra protected AI domains and Windscribe carrier settings. Mode-specific settings remain stored but apply only to compatible policies. The certificate-offer skip choice and the defaults shown in Diagnose, CDN scan and Windscribe test also survive restart. In tool prompts, Enter accepts the displayed previous value; `-` clears a saved optional CDN/target. Certificate generation/install (`-cert`), active connections, Administrator permission and credentials are never saved as repeatable actions. An unreadable or invalid preferences file is preserved and reported; that session uses defaults and reports that changes cannot be saved.
 
-Administrator relaunches receive the complete effective connection policy, including saved extra AI domains and disabled paths. They do not depend on another administrator account having the same preferences, and do not overwrite that account's settings or repeat certificate installation.
+Administrator relaunches receive the complete effective connection policy, including disabled paths. They do not depend on another administrator account having the same preferences, and do not overwrite that account's settings or repeat certificate installation.
 
 ## 1. Connect
 

@@ -87,13 +87,13 @@ func TestRouteTargetValidationAndFamilyScope(t *testing.T) {
 	if !routeFrontingAllowed(targets, "WWW.YOUTUBE.COM.") {
 		t.Fatal("exact enabled host not matched")
 	}
-	// The whole family is covered, as on Windows; AI and non-family hosts never.
+	// The whole family is covered, as on Windows; non-family hosts never.
 	for _, host := range []string{"youtube.com", "rr5---sn-u14g55-5f.googlevideo.com", "i.ytimg.com"} {
 		if !routeFrontingAllowed(targets, host) {
 			t.Errorf("family host %s not fronted", host)
 		}
 	}
-	for _, host := range []string{"www.youtube.com.evil.example", "gemini.google.com", "unlisted.example"} {
+	for _, host := range []string{"www.youtube.com.evil.example", "unlisted.example"} {
 		if routeFrontingAllowed(targets, host) {
 			t.Errorf("fronting scope widened to %s", host)
 		}

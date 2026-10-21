@@ -51,7 +51,7 @@ func (m *warpManager) watchHealth(ctx context.Context, w *warpFound) {
 			r := measurementFor(w.p)
 			r.State, r.Failure = "unhealthy", "active-route exit verification failed twice"
 			_ = saveMeasurement(m.network, m.core, r)
-			m.t.Line(toneWarn, "%s stopped passing exit checks; retiring it and trying saved alternatives. Protected AI identity remains pinned until you reconnect.", w.p.Label)
+			m.t.Line(toneWarn, "%s stopped passing exit checks; retiring it and trying saved alternatives.", w.p.Label)
 			w.rc.stop()
 			return
 		}

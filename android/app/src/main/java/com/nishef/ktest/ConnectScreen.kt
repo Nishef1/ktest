@@ -96,7 +96,7 @@ internal fun ConnectScreen(
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
-        if (activeMode.id == "fast") Note("Fast starts each site with the best route the tests confirmed and keeps adapting during use. TikTok and AI require a verified foreign exit.")
+        if (activeMode.id == "fast") Note("Fast starts each site with the best route the tests confirmed and keeps adapting during use.")
         PublicIpPanel(state == LinkState.Active)
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
@@ -132,19 +132,13 @@ private fun Hero(
         when (state) {
             LinkState.Active -> {
                 Uptime()
-                // One plain answer: what is covered, and whether AI/TikTok can
-                // connect. An Iran-located WARP carries ordinary sites only.
+                // One plain answer: what is covered.
                 val vpnMissing = coverage != "proxy" && !vpnActive
-                val aiReady = status.optBoolean("ai_exit")
                 Text(when {
                     vpnMissing -> "Apps pointed at the local proxy work, but device-wide VPN is not active. Check Settings for the packet-adapter error."
-                    aiReady -> if (coverage == "proxy") "Apps using the local proxy are connected. AI and TikTok are available."
-                               else "All apps are connected. AI and TikTok are available."
-                    mode.id == "balanced" || mode.id == "fast" ->
-                        "Sites work. AI and TikTok need an exit outside Iran; it is searched for when you open them."
-                    else -> "Sites work. AI and TikTok are blocked: they need an exit outside Iran" +
-                        (if (status.optString("exit_location").equals("IR", true)) ", and this one is in Iran." else ".")
-                }, color = if (vpnMissing || !aiReady) K.amber else K.muted,
+                    coverage == "proxy" -> "Apps using the local proxy are connected."
+                    else -> "All apps are connected."
+                }, color = if (vpnMissing) K.amber else K.muted,
                     fontSize = 12.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 22.dp))
             }
@@ -185,7 +179,6 @@ private fun Hero(
                 if (coverage != "proxy") Tag(if (vpnActive) "Packet VPN active" else "VPN inactive", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
                 status.optString("exit_location").takeIf { it.isNotBlank() }?.let { Tag("Exit · $it", K.text) }
-                if (!status.optBoolean("ai_exit")) Tag("AI blocked", K.amber)
             }
         }
     }
@@ -675,6 +668,5 @@ private fun UsagePanel() {
                 Text(step, color = K.muted, fontSize = 12.sp, lineHeight = 17.sp)
             }
         }
-        Note("Protected hostnames require a verified foreign exit. Raw IP destinations and unknown subdomains are not identity-safe.", Tone.Warn)
     }
 }

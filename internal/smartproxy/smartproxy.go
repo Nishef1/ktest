@@ -484,7 +484,7 @@ func (p *Proxy) DialWindscribeCarrier(ctx context.Context, host, port string) (n
 
 func (p *Proxy) dialLocalBypass(ctx context.Context, host, port string, report bool) (net.Conn, error) {
 	if p.exitOnly(host) {
-		return nil, errors.New("protected AI domains cannot use the local Windscribe bootstrap bridge")
+		return nil, errors.New("this destination is exit-only and cannot use the local bridge")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -568,7 +568,7 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 }
 
 // Windscribe's authenticated VPN can use a proven WARP carrier even when that
-// carrier exits in Iran. This never grants access to protected AI destinations.
+// carrier exits in Iran. It never carries an exit-only destination.
 func (p *Proxy) DialExitCarrier(ctx context.Context, host, port string) (net.Conn, error) {
 	if p.exitOnly(host) {
 		return p.DialVerifiedExit(ctx, host, port)

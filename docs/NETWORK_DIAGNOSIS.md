@@ -115,7 +115,7 @@ Windscribe-through-Aether run on 2026-10-20 reused the same plain-H2 gateway and
 reported carrier readiness in 3.8 seconds after the key-probe logging repair;
 the live panel displayed `CARRIER READY - CONNECT WINDSCRIBE NOW`. The neutral
 HTTPS measurement reported an IR carrier (8/9 samples), which is sufficient
-to carry Windscribe but does not authorize direct protected AI traffic. These
+to carry Windscribe. These
 times measure the carrier waiting stage, excluding compilation and initial
 Windscribe CLI checks. Windscribe remained Disconnected in that sample, so
 authenticated VPN connectivity and a foreign exit were not verified. Temporary
@@ -141,7 +141,7 @@ For active sessions, small neutral health checks run every three minutes only wh
 
 The neutral probe's IP/country is a sampled observation. Live events distinguish system routes, CDN routes and proxy exits without inventing the exact public IP seen by each destination. A system route may itself pass through another installed VPN. WARP does not promise a foreign country or a static IP.
 
-A working WARP exit in Iran can carry the authenticated Windscribe tunnel in explicit `windscribe-aether` mode. It cannot carry protected ChatGPT/OpenAI, Gemini or Claude requests directly. Strict Aether/Psiphon/Tor require a separately verified non-IR/non-RU exit. Fast/Balanced may use a local-country carrier for ordinary destinations but never as AI fallback. Verification uses a neutral endpoint; no AI request is used to discover whether an untrusted route works.
+A working WARP exit in Iran can carry the authenticated Windscribe tunnel in explicit `windscribe-aether` mode, and in Aether, Fast and Balanced it carries any site (no AI rule since 2026-10-21). Psiphon and Tor require a separately verified non-IR/non-RU exit. Verification uses a neutral endpoint; no AI request is used to discover whether an untrusted route works.
 
 The normal `windscribe` mode remains local-only. The separate `windscribe-aether` mode excludes Psiphon, Tor, unknown upstream chains, direct routes, fragment routes and website fronting. It forwards raw OpenVPN TCP through a verified WARP carrier; Windscribe owns authentication and final VPN IP. Set Windscribe's HTTP proxy to `127.0.0.1:10801`, select OpenVPN TCP, keep ktest/Aether running, and ensure Windscribe's split-tunnel rules exclude the ktest/Aether helper transport to prevent recursive routing. This mode requires a readable Windscribe CLI state and refuses ktest TUN. A carrier-ready message does not prove a working VPN; use the separate connected-data check.
 
@@ -174,8 +174,7 @@ Measured on a filtered Iranian fixed line with no VPN; MASQUE H2 now connects.
   It is now the first built-in profile.
 * **WARP exits in Iran.** Plain MASQUE and Gool both showed `loc=IR` via FRA.
   Like PattNG, Aether mode now accepts such a working exit for ordinary sites
-  (`ExitRequired`); AI and TikTok still need a non-Iran exit (`ExitOnly`),
-  and the status panel says so.
+  (`ExitRequired`), every site alike.
 
 End to end through ktest's SOCKS: YouTube, Google, Instagram, X, Telegram
 Web and Wikipedia returned 200 (exit `104.28.214.161`, `colo=FRA`, `loc=IR`).

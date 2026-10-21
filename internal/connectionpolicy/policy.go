@@ -3,7 +3,6 @@
 package connectionpolicy
 
 import (
-	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/smartproxy"
@@ -22,11 +21,11 @@ type Mode struct {
 func allModes() []Mode {
 	return []Mode{
 		{"balanced", "Balanced", "Local routes first; automatic Aether / Psiphon / Tor fallback", true,
-			"Zapret2 is Windows-only. Protected services require a verified foreign exit."},
+			"Zapret2 is Windows-only."},
 		{"fast", "Fast", "Every local method, fronting and learned priors; native exits on demand", true,
-			"No Psiphon, Tor or unidentified external SOCKS. Protected services still require a verified foreign exit."},
+			"No Psiphon, Tor or unidentified external SOCKS."},
 		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
-			"Aether handles enrollment, scans and reconnect. AI and TikTok need an exit outside Iran."},
+			"Aether handles enrollment, scans and reconnect."},
 		{"tor", "Aether to Tor", "Tor alone (no WARP), dialing through Fast's local anti-DPI", true,
 			"Requires a verified Tor circuit and foreign exit. First connection can take several minutes."},
 		{"windscribe", "Windscribe", "Local-only anti-DPI bridge", false,
@@ -62,33 +61,14 @@ func Title(id string) string {
 	return "Unknown"
 }
 
-// ConfigureAI is Configure with the AI/TikTok policy switchable. With
-// aiPolicy false, AI and TikTok names are routed like any other site: no
-// verified-foreign-exit requirement and no fail-closed block. Mode rules that
-// are not about AI (Psiphon/Tor exit-only, Aether's exit-only carriage,
-// Windscribe's local-only paths) stay as they are.
-func ConfigureAI(id string, cfg *smartproxy.Config, protected func(string) bool, aiPolicy bool) {
-	Configure(id, cfg, protected)
-	if aiPolicy {
-		return
-	}
-	switch id {
-	case "balanced", "fast", "aether", "windscribe", "windscribe-aether":
-		cfg.ExitOnly = nil
-	}
-}
-
 // Configure applies the exact CLI routing policies to a Go smart proxy.
 // Transport launch, availability and Windscribe-specific validation are
 // separate from this policy function.
-func Configure(id string, cfg *smartproxy.Config, protected func(string) bool) {
+func Configure(id string, cfg *smartproxy.Config) {
 	switch id {
 	case "balanced", "fast":
 		cfg.MaxParallel = 6
 		cfg.RecoverPinnedExit = true
-		cfg.ExitOnly = func(host string) bool {
-			return tiktokRequiresForeignExit(host) || (protected != nil && protected(host))
-		}
 		// A short head start: the learned or tested first choice usually
 		// answers at once, and otherwise the next methods are already racing.
 		if cfg.Stagger == 0 || cfg.Stagger > 200*time.Millisecond {
@@ -98,35 +78,14 @@ func Configure(id string, cfg *smartproxy.Config, protected func(string) bool) {
 			cfg.Stagger = 125 * time.Millisecond
 		}
 	case "windscribe":
-		cfg.ExitOnly = protected
 		cfg.PreferVerifiedExit = false
 		cfg.RejectExits = true
 		cfg.LocalOnly = true
-	case "windscribe-aether":
-		cfg.ExitOnly = protected
 	case "aether":
-		// Like PattNG: a working WARP carries every destination even when
-		// its IP geolocates to Iran; AI and TikTok still need a non-Iran exit.
-		cfg.ExitOnly = func(host string) bool {
-			return tiktokRequiresForeignExit(host) || (protected != nil && protected(host))
-		}
+		// Like PattNG: a working WARP carries every destination, wherever
+		// its IP geolocates. No site is singled out; the user decides.
 		cfg.ExitRequired = func(string) bool { return true }
 	case "psiphon", "tor":
 		cfg.ExitOnly = func(string) bool { return true }
 	}
-}
-
-// These dedicated TikTok API, static and media domains were observed together
-// in the working foreign-exit browser flow. Local DPI bypass preserves the ISP
-// exit and can win a TLS race while the service refuses or stalls its content.
-// Keep the entire service on the session's verified foreign path. Shared CDN
-// providers and unrelated ByteDance services are intentionally not matched.
-func tiktokRequiresForeignExit(host string) bool {
-	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	for _, domain := range []string{"tiktok.com", "tiktokv.com", "tiktokv.eu", "tiktokw.eu", "tiktokcdn.com", "tiktokcdn-us.com", "tiktokcdn-eu.com", "ttwstatic.com"} {
-		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return true
-		}
-	}
-	return false
 }

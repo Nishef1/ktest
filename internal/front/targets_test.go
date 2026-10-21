@@ -38,7 +38,7 @@ func TestFixedFrontUpstreamsNeverReraceStrategies(t *testing.T) {
 			t.Fatalf("duplicate method %s", up.Name)
 		}
 		seen[up.Name] = true
-		if up.Match("gemini.google.com") || up.Match("x.com") || up.Match("youtube.com.evil.test") {
+		if up.Match("x.com") || up.Match("youtube.com.evil.test") {
 			t.Fatalf("method exceeds family/CA/policy: %s", up.Name)
 		}
 	}

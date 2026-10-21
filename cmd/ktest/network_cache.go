@@ -233,7 +233,7 @@ func (r aetherMeasurement) detail() string {
 	}
 	s := fmt.Sprintf("%.0fms · %d/%d samples · observed %s (%s)", r.LatencyMS, r.Successes, r.Attempts, r.ExitIP, r.Country)
 	if r.State == "carrier" {
-		s += " · AI blocked on this carrier"
+		s += " · exit located in Iran"
 	}
 	if r.BytesPerSecond > 0 {
 		s += fmt.Sprintf(" · %.0f KiB/s small-transfer sample", r.BytesPerSecond/1024)

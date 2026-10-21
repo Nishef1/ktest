@@ -99,8 +99,6 @@ type connectOptions struct {
 	noHTTP              bool
 	httpListen          string
 	exitSocks           string
-	aiExtra             string
-	noAIPolicy          bool
 	windscribeCLI       string
 	windscribeReconnect bool
 	ws                  wsOptions
@@ -141,7 +139,7 @@ func defaultConnectOptions(base string) connectOptions {
 func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
-	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced (AI protected), fast, windscribe, windscribe-aether, aether, psiphon, tor")
+	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced, fast, windscribe, windscribe-aether, aether, psiphon, tor")
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", o.windscribeCLI, "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "opt in to reconnecting Windscribe after confirmed disconnect (off by default; Windscribe normally manages its own retries)")
 	fs.BoolVar(&o.ws.direct, "windscribe-wstunnel", o.ws.direct, "Windscribe mode: race WStunnel and Stealth straight to the Windscribe node with chosen SNIs")
@@ -167,8 +165,6 @@ func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs.BoolVar(&o.noHTTP, "no-http", o.noHTTP, "disable the local HTTP proxy for Windscribe")
 	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
 	fs.StringVar(&o.exitSocks, "exit-socks", o.exitSocks, "optional loopback SOCKS5 exit (Tor, Psiphon or authorized Worker), TCP only")
-	fs.StringVar(&o.aiExtra, "ai-extra", o.aiExtra, "additional AI hostnames, comma-separated; matched names require verified foreign exit")
-	fs.BoolVar(&o.noAIPolicy, "no-ai-policy", o.noAIPolicy, "route AI and TikTok like any other site (no foreign-exit requirement, no policy block)")
 	fs.BoolVar(&o.tun, "tun", o.tun, "route the whole system through ktest (Windows; asks for Administrator)")
 	fs.BoolVar(&o.cert, "cert", o.cert, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", o.forceFront, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
@@ -609,12 +605,6 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			return 0
 		}
 	}
-	aiRules, aiErr := smartproxy.NewAIDomainRules(o.aiExtra)
-	if aiErr != nil {
-		t.Line(toneFail, "%v", aiErr)
-		return 2
-	}
-
 	// 1. The network, before any core starts.
 	step := t.Progress("Checking the network", 2)
 	ip, poisoned, derr := systemDNS(ctx, "www.youtube.com")
@@ -870,7 +860,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		if checked == nil {
 			t.Note("External SOCKS exit verified outside Iran: %s (%s)", ip, country)
 		} else {
-			t.Note("External SOCKS exit is not permitted for protected AI sites: %v", checked)
+			t.Note("External SOCKS exit not verified outside Iran: %v", checked)
 		}
 		ups = append(ups, smartproxy.Upstream{
 			Name: "External SOCKS exit", Addr: o.exitSocks, Exit: true, AIEligible: checked == nil, Late: !o.mode.exitOnly(), Rank: 3,
@@ -930,7 +920,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			cfg.EnsureExit = nil
 		}
 	}
-	o.mode.configure(&cfg, aiRules, !o.noAIPolicy)
+	o.mode.configure(&cfg)
 	if o.mode == ModeWindscribe {
 		cfg.RejectExits = true // guard both initial and dynamically added routes
 		cfg.LocalOnly = true   // also reject plain/unknown relays and takeovers
@@ -1252,17 +1242,6 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		field("Exit", t.Dim(warpNote))
 	}
 	field("Policy", string(o.mode))
-	if o.noAIPolicy {
-		field("AI", "AI policy off: AI and TikTok use the same routes as other sites")
-	} else if !o.mode.isWindscribe() {
-		field("AI", "AI and TikTok only through an exit verified outside Iran; blocked otherwise")
-	} else {
-		if o.mode == ModeWindscribeAether {
-			field("AI", "SOCKS AI traffic requires verified foreign WARP; normal apps use Windscribe's VPN")
-		} else {
-			field("AI", "AI requests rejected by this bridge; Windscribe owns application traffic")
-		}
-	}
 	switch {
 	case o.mode == ModeWindscribeAether:
 		field("Result", "Live status below says when to connect Windscribe or keep waiting")
@@ -1307,7 +1286,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	defer tick.Stop()
 	if liveStatus {
 		now := time.Now()
-		status = &connectionStatus{t: t, mode: o.mode, aiOff: o.noAIPolicy, proxy: proxy, exit: currentExitStatus, socks: l.Addr().String(), http: httpAddr,
+		status = &connectionStatus{t: t, mode: o.mode, proxy: proxy, exit: currentExitStatus, socks: l.Addr().String(), http: httpAddr,
 			stop: o.stopHint, tunWant: o.tun, tunOn: func() bool { return tn != nil }, feed: feed, started: sessionStarted, since: sessionStarted, windscribe: monitor}
 		if warpNote != "" && currentExitStatus == nil {
 			status.exit = func() string { return warpNote }
@@ -1390,7 +1369,7 @@ func summarize(t *term, feed *siteEvents, fronter *front.Fronter) {
 		t.Line(toneWarn, "%d application %s; another route preferred on retry", n, plural(int(n), "refusal", "refusals"))
 	}
 	if n := feed.blocked.Load(); n > 0 {
-		t.Note("%d %s blocked by policy (AI/TikTok need an exit outside Iran); not network failures", n, plural(int(n), "connection", "connections"))
+		t.Note("%d %s held back until a permitted exit was ready; not network failures", n, plural(int(n), "connection", "connections"))
 	}
 	if n := feed.earlyClosed.Load(); n > 0 {
 		t.Note("%d connections closed or stalled before post-hello response data", n)
@@ -1565,7 +1544,7 @@ func exitReadyNote(mode ConnectionMode, p *smartproxy.Proxy) string {
 		return "exit outside Iran available"
 	}
 	if mode == ModeAether {
-		return "WARP exit available (located in Iran: AI and TikTok stay blocked)"
+		return "WARP exit available (located in Iran)"
 	}
 	if mode == ModeWindscribeAether {
 		return "WARP carrier ready; connect Windscribe now"

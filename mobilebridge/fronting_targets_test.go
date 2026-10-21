@@ -37,7 +37,7 @@ func TestFrontingPresetUsesRealFamilyStrategies(t *testing.T) {
 			t.Fatalf("incorrect family strategy: %s", raw)
 		}
 	}
-	for _, rawURL := range []string{"https://outside.example/test", "https://gemini.google.com/", "https://www.youtube.com:8443/"} {
+	for _, rawURL := range []string{"https://outside.example/test", "https://www.youtube.com:8443/"} {
 		raw, err := FrontingPreset(rawURL)
 		if err != nil {
 			t.Fatal(err)
@@ -64,9 +64,6 @@ func TestTargetFrontingValidatesBeforeNetworkAndRejectsActiveWork(t *testing.T) 
 		if _, err := TestTargetFronting(dir, "https://youtube.com/", "8.8.8.8", rounds); err == nil {
 			t.Errorf("accepted rounds %d", rounds)
 		}
-	}
-	if _, err := TestTargetFronting(dir, "https://gemini.google.com/", "8.8.8.8", 1); err == nil {
-		t.Fatal("protected service probed directly")
 	}
 	raw, err := TestTargetFronting(dir, "https://outside.example/path", "8.8.8.8", 1)
 	var unsupported struct {

@@ -42,7 +42,7 @@ func TestConnectionStatusStates(t *testing.T) {
 	}
 
 	fast := &connectionStatus{t: plainTerm(&bytes.Buffer{}), mode: ModeFast, proxy: p, socks: "127.0.0.1:10800", started: start, since: start}
-	if v := fast.view(start); v.key != "connected" || !strings.Contains(strings.Join(v.lines, "\n"), "Foreign exit for AI/TikTok: ready") {
+	if v := fast.view(start); v.key != "connected" || !strings.Contains(strings.Join(v.lines, "\n"), "Foreign exit: ready") {
 		t.Fatalf("fast = %+v", v)
 	}
 }

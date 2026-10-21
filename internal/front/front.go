@@ -152,7 +152,6 @@ func MethodName(family string, fr Front) string {
 func (f *Fronter) Upstreams() []smartproxy.Upstream {
 	var out []smartproxy.Upstream
 	seen := map[string]bool{}
-	protected, _ := smartproxy.NewAIDomainRules("")
 	for _, family := range f.cfg.Families {
 		fam := family
 		for _, front := range fam.Fronts {
@@ -164,7 +163,7 @@ func (f *Fronter) Upstreams() []smartproxy.Upstream {
 			seen[method] = true
 			allowed := func(host string) bool {
 				return f.cfg.CA != nil && f.cfg.CA.ValidAt(time.Now()) && f.cfg.CA.Permits(host) && fam.Match(host) &&
-					!protected.Match(host) && !(fr.Dial != "" && fam.noStandIn(host)) && f.Disabled() == ""
+					!(fr.Dial != "" && fam.noStandIn(host)) && f.Disabled() == ""
 			}
 			out = append(out, smartproxy.Upstream{
 				Name: method, Rank: 1, Match: allowed,

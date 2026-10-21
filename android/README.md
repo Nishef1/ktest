@@ -188,8 +188,7 @@ parser live in `internal/byedpi` and are shared with the CLI. Go starts private
 loopback SOCKS listeners, races these paths alongside direct routes, removes
 exited children and reaps all owned processes on disconnect. No executable is
 downloaded or copied to writable app storage at runtime. ByeDPI is a local
-anti-DPI transport, so protected AI domains still require a separately verified
-foreign exit; it does not change the public exit IP.
+anti-DPI transport; it does not change the public exit IP.
 
 Balanced/Fast now request a packaged foreign exit automatically when real
 traffic exhausts or stalls the local routes, or immediately for protected

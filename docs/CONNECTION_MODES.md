@@ -1,12 +1,12 @@
 # ktest connection modes
 
-`ktest connect` defaults to **balanced**: fastest practical ordinary-site route, but the built-in AI-domain list requires a separately verified non-Iran, non-Russia exit and fails closed if none is available.
+`ktest connect` defaults to **balanced**: the fastest practical route for every site. No site is singled out: since 2026-10-21 there is no AI/TikTok rule in any mode. You decide where you need a foreign exit, by choosing the mode (for example Psiphon, Tor or Windscribe).
 
 The menu separates **policy** (1-6) from **coverage** (7). Policies 1-4 and 6 use the selected proxy-app or Whole PC TCP coverage. Option 5 is the Windscribe bridge and always leaves coverage to Windscribe. Select coverage first, then the policy; choosing Whole PC does not launch a second routing policy or silently reset the selected policy to Balanced.
 
 The first Windows launch defaults to TUN; subsequent launches restore the user's saved coverage and connection settings. Other platforms initially use Proxy. Changes are saved when selected, and the last chosen policy is marked without connecting automatically. `connect -tun=false` uses Proxy coverage for that run only; add `-save` to keep a run's flags as the defaults. Windscribe does not overwrite the saved TUN/Proxy choice of other policies.
 
-Use Balanced or Fast for adaptive ordinary-site access with known AI domains and dedicated TikTok domains requiring verified foreign exits in both, Aether when all managed traffic must use a verified foreign WARP/Psiphon exit, Aether to Psiphon for Psiphon profiles only, and Aether to Tor for a verified Tor-only route. Fast gives ordinary-site alternatives a shorter head start; it does not disable AI protection. Menu 5 separates the local-only Windscribe bridge from explicit **Windscribe through Aether**. Setup prepares capabilities; it does not silently enable another mode. See [network diagnosis and method selection](NETWORK_DIAGNOSIS.md).
+Use Balanced or Fast for adaptive access, Aether when all managed traffic must use a verified foreign WARP/Psiphon exit, Aether to Psiphon for Psiphon profiles only, and Aether to Tor for a verified Tor-only route. Fast gives alternatives a shorter head start. Menu 5 separates the local-only Windscribe bridge from explicit **Windscribe through Aether**. Setup prepares capabilities; it does not silently enable another mode. See [network diagnosis and method selection](NETWORK_DIAGNOSIS.md).
 
 Balanced and Fast connect without a representative website sweep or periodic website probes. Android does not calibrate or freeze targets on Connect. Both begin with Go, ByeDPI, Xray and consented fronting methods and request a shared exit search after local failure or a three-second stall; protected sites request one immediately. Balanced can fall back to Aether, Psiphon/CDN and Tor. Fast permits native Aether exit transports and excludes Psiphon, Tor and unidentified external SOCKS. Balanced gives WARP, Psiphon/CDN and Tor independent bootstrap slots, without truncating the standalone backends to WARP's short first sweep. Both keep per-network, per-mode route ranking hints for 24 hours and reuse them across reconnects. Both platforms keep one verified automatic exit and stop discovery while it is healthy; no capability promises universal service access.
 
@@ -41,8 +41,8 @@ request errors and never cause a key to be set aside.
 
 | Option | Scope | IP policy | Failure policy |
 | --- | --- | --- | --- |
-| `-mode balanced` | normal mixed access, **AI sites protected** | Ordinary sites may use own IP; AI via verified foreign exit | AI domains stop if foreign exit absent |
-| `-mode fast` | local methods first, **AI sites protected** | Direct/ByeDPI/Go/Xray/fronting and Windows Zapret2; native Aether foreign exits | No Psiphon/Tor/unidentified external SOCKS; protected sites fail closed without a verified foreign exit |
+| `-mode balanced` | normal mixed access | Sites may use your own IP or an exit, whichever works | Exits are searched for on demand |
+| `-mode fast` | local methods first | Direct/ByeDPI/Go/Xray/fronting and Windows Zapret2; native Aether exits | No Psiphon/Tor/unidentified external SOCKS |
 | `-mode windscribe` | **strict local-only anti-DPI** HTTP/SOCKS bootstrap for installed Windscribe | OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI; optional own Cloudflare hostname whose origin is a Windscribe server) + local Xray TCP fragmentation + ByeDPI; no Psiphon/Aether/WARP/Tor, foreign/unknown Xray exit or Plain; only Windscribe changes public VPN IP | No foreign fallback. HTTP CONNECT may be acknowledged before the carrier race; a later failure closes that stream. Windscribe Firewall controls other apps |
 | `-mode windscribe-aether` | **explicit WARP carrier** for installed Windscribe OpenVPN TCP | Measured Aether MASQUE/WireGuard/nested WARP; no Psiphon/Tor/direct fallback. Carrier may exit in Iran; Windscribe owns the final VPN IP | Requires a live verified carrier and readable Windscribe CLI; keep Aether running and exclude its transport from Windscribe routing. Direct AI requests still require a separate foreign verification |
 | `-mode aether` | all traffic **sent through ktest's SOCKS/HTTP listeners** | One verified foreign SOCKS path is pinned after its first success in this session | Fail closed; never switch to direct/fragment/fronting |
@@ -55,7 +55,7 @@ request errors and never cause a key to be set aside.
 # Quick access (original behavior for ordinary sites)
 go run ./cmd/ktest connect -mode fast
 
-# Balanced, AI fail-closed, other websites adaptive (default)
+# Balanced, adaptive (default)
 go run ./cmd/ktest connect -mode balanced
 
 # Windscribe's LAN HTTP proxy in its Preferences: 127.0.0.1 / 10801
@@ -84,11 +84,11 @@ For modes other than Fast, Windscribe and Aether to Psiphon, an **already runnin
 
 ## IP stability and limitations
 
-In the `aether` profile, the first verified foreign exit route that succeeds for a managed connection is pinned for the remainder of the session; other exits are no longer chosen automatically. Fast and Balanced keep healthy protected exits pinned, but can select another verified exit after removal of a dead core. `-ai-direct` is no longer accepted. The local-only Windscribe bootstrap bridge rejects direct requests to those AI hosts, while Windscribe controls application VPN coverage. A **pinned route does not guarantee a pinned public IP**: Psiphon may rotate servers and Tor changes circuit exits. The country/IP check has a five-minute lease and is refreshed via a neutral HTTPS endpoint before further protected traffic; a failed refresh blocks that traffic. It is not continuous per-destination geolocation or a cryptographic guarantee. Do not claim an identity is fixed based on this.
+In the `aether` profile, the first verified foreign exit route that succeeds for a managed connection is pinned for the remainder of the session; other exits are no longer chosen automatically. Windscribe controls application VPN coverage in its modes. A **pinned route does not guarantee a pinned public IP**: Psiphon may rotate servers and Tor changes circuit exits. The country/IP check has a five-minute lease and is refreshed via a neutral HTTPS endpoint before further protected traffic; a failed refresh blocks that traffic. It is not continuous per-destination geolocation or a cryptographic guarantee. Do not claim an identity is fixed based on this.
 
 When a truly stable login/location is necessary (AI sites may trigger extra checks on exit-IP changes), use a fixed Windscribe location, or consider Windscribe's optional Static IP offering. Use Windscribe Firewall when the VPN is active. Tor is designed for anonymity properties, *not* for fixed identity across websites; some services also block Tor exits.
 
-**AI policy switch.** On by default: AI and TikTok names use only an exit verified outside Iran and are blocked without one. It can be switched off (desktop: menu 7 → 3, or `-no-ai-policy`; Android: Settings → AI policy). Off routes AI and TikTok like any other site in Balanced, Fast, Aether and Windscribe modes; the services may then see an Iranian address and refuse. Psiphon/Tor exit-only routing and Aether's exit-only carriage are not affected.
+**No AI rule (since 2026-10-21).** The former AI/TikTok policy, together with its switch, `-no-ai-policy` and `-ai-extra`, was removed: it refused AI sites whenever the exit was located in Iran (WARP usually is), which broke Codex and ChatGPT even where they worked. Every site now takes whichever route works in the chosen mode. Whether a service accepts the resulting IP is the user's choice of mode. Psiphon and Tor still send every site through their exit, and Aether still carries every site on a WARP exit.
 
 Hostname routing in Fast and Balanced cannot protect what it cannot identify (for example, some opaque IP-only, non-proxied, or UDP connections). An address-only TLS connection that offers Encrypted Client Hello (its outer SNI is only the provider's public name, e.g. `cloudflare-ech.com`) is routed by the names ktest's own DNS recently resolved to that address: protected if any of them is protected (shared CDN addresses included), and protected by default when no name is known (fail closed onto the foreign exit; in local-only Windscribe it keeps its local route). Applications that resolve through their own DoH therefore send ECH connections to the foreign exit. This is a source-level policy with unit and SOCKS-level tests; it has not been validated end to end with a real ECH browser through the Android TUN. For sensitive applications, use a verified foreign-only route with their traffic explicitly through ktest, or a system-wide VPN with a real firewall.
 

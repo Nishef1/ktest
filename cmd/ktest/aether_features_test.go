@@ -137,14 +137,13 @@ unknown | --masque --upstream socks5://127.0.0.1:9999
 	if err != nil || len(profiles) != 1 || profiles[0].Label != "good" {
 		t.Fatal("foreign carrier policy bypass", profiles, err)
 	}
-	rules, _ := smartproxy.NewAIDomainRules("")
 	for _, mode := range []ConnectionMode{ModeWindscribe, ModeWindscribeAether} {
 		cfg := smartproxy.Config{}
-		mode.configure(&cfg, rules, true)
+		mode.configure(&cfg)
 		if mode == ModeWindscribe && (!cfg.LocalOnly || !cfg.RejectExits) {
 			t.Fatal("local mode weakened")
 		}
-		if mode == ModeWindscribeAether && (cfg.LocalOnly || cfg.RejectExits || !cfg.ExitOnly("chatgpt.com") || cfg.ExitOnly("windscribe.com")) {
+		if mode == ModeWindscribeAether && (cfg.LocalOnly || cfg.RejectExits || cfg.ExitOnly != nil) {
 			t.Fatal("carrier confused with AI identity")
 		}
 	}

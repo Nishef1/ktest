@@ -68,7 +68,7 @@ func ParseForeignTrace(body string) (ip, country string, err error) {
 		return ip, country, err
 	}
 	if country == "IR" || country == "RU" {
-		return ip, country, fmt.Errorf("egress location %q is blocked under the AI exit policy", country)
+		return ip, country, fmt.Errorf("egress location %q is not outside Iran", country)
 	}
 	return ip, country, nil
 }

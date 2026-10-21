@@ -34,15 +34,11 @@ func startFastCarrier(ctx context.Context, nativeDir, privateDir string) (_ *fas
 			cores.stop()
 		}
 	}()
-	rules, err := smartproxy.NewAIDomainRules("")
-	if err != nil {
-		return nil, err
-	}
 	config := smartproxy.Config{
 		Upstreams:        append(append(smartproxy.PlainUpstreams(), smartproxy.DesyncUpstreams()...), cores.upstreams...),
 		RecoverIPHostSNI: true,
 	}
-	connectionpolicy.Configure("fast", &config, rules.Match)
+	connectionpolicy.Configure("fast", &config)
 	if config.Resolve, config.Resolve6, err = connectiondns.MobileResolvers("fast", ""); err != nil {
 		return nil, err
 	}

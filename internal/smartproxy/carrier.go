@@ -6,8 +6,7 @@ package smartproxy
 func (p *Proxy) LocalCarrierConfig() Config {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	rules, _ := NewAIDomainRules("")
-	cfg := Config{Stagger: p.cfg.Stagger, MaxParallel: 3, ExitOnly: rules.Match, RejectExits: true, RecoverIPHostSNI: true,
+	cfg := Config{Stagger: p.cfg.Stagger, MaxParallel: 3, RejectExits: true, RecoverIPHostSNI: true,
 		ConnectTimeout: p.cfg.ConnectTimeout, FirstByteTimeout: p.cfg.FirstByteTimeout, MemoryTTL: p.cfg.MemoryTTL, Logf: p.cfg.Logf}
 	for _, u := range p.ups {
 		if !u.Exit && u.Takeover == nil && (u.LocalBypass || (u.Addr == "" && u.Dial == nil)) {

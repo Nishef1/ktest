@@ -150,7 +150,7 @@ func (p *Proxy) udpCarrierAllowed(host string) bool {
 	if !p.exitRequired(host) || p.exitOnly(host) {
 		return false
 	}
-	// Without protected names (AI policy off) every destination is ordinary.
+	// Without exit-only names every destination is ordinary.
 	if p.cfg.ExitOnly == nil || net.ParseIP(host) == nil {
 		return true
 	}
