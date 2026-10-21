@@ -214,6 +214,9 @@ class ProxyService : Service() {
                     try {
                         mutex.withLock {
                             if (wanted) {
+                                // The Settings "AI policy" switch, read at each start.
+                                Mobilebridge.setAIPolicy(getSharedPreferences("ktest_android", MODE_PRIVATE)
+                                    .getBoolean("ai_policy", true))
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {
                                     // Psiphon and Tor need no WARP: by default they dial out

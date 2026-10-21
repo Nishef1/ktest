@@ -45,7 +45,7 @@ func TestConnectionModes(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfg := &smartproxy.Config{}
-		mode.configure(cfg, r)
+		mode.configure(cfg, r, true)
 		ai := cfg.ExitOnly != nil && cfg.ExitOnly("chatgpt.com")
 		ordinary := cfg.ExitOnly != nil && cfg.ExitOnly("example.org")
 		if ai != c.ai || ordinary != c.ordinary || cfg.PreferVerifiedExit != c.prefer {
@@ -69,7 +69,7 @@ func TestConnectionModes(t *testing.T) {
 func TestFastAIHasNoDirectOrFrontingFallback(t *testing.T) {
 	r, _ := smartproxy.NewAIDomainRules("")
 	cfg := smartproxy.Config{Upstreams: []smartproxy.Upstream{{Name: "plain"}}}
-	ModeFast.configure(&cfg, r)
+	ModeFast.configure(&cfg, r, true)
 	p, err := smartproxy.New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +137,38 @@ func TestWindscribeModesRequireHTTPProxy(t *testing.T) {
 		o.mode, o.tun, o.noHTTP = mode, false, true
 		if err := validateConnectOptions(o); err == nil || !strings.Contains(err.Error(), "HTTP CONNECT") {
 			t.Fatalf("%s accepted unusable -no-http configuration: %v", mode, err)
+		}
+	}
+}
+
+// The AI policy switch: off routes AI/TikTok like other sites in the mixed and
+// Aether modes, but never lifts Psiphon/Tor's exit-only rule.
+func TestAIPolicySwitch(t *testing.T) {
+	r, err := smartproxy.NewAIDomainRules("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []ConnectionMode{ModeBalanced, ModeFast, ModeAether, ModeWindscribe} {
+		on, off := &smartproxy.Config{}, &smartproxy.Config{}
+		mode.configure(on, r, true)
+		mode.configure(off, r, false)
+		if on.ExitOnly == nil || !on.ExitOnly("chatgpt.com") {
+			t.Fatalf("%s: AI policy on does not protect chatgpt.com", mode)
+		}
+		if off.ExitOnly != nil && (off.ExitOnly("chatgpt.com") || off.ExitOnly("www.tiktok.com")) {
+			t.Fatalf("%s: AI policy off still protects AI/TikTok", mode)
+		}
+	}
+	aether := &smartproxy.Config{}
+	ModeAether.configure(aether, r, false)
+	if aether.ExitRequired == nil || !aether.ExitRequired("chatgpt.com") {
+		t.Fatal("Aether lost exit-only carriage with the AI policy off")
+	}
+	for _, mode := range []ConnectionMode{ModePsiphon, ModeTor} {
+		cfg := &smartproxy.Config{}
+		mode.configure(cfg, r, false)
+		if cfg.ExitOnly == nil || !cfg.ExitOnly("example.org") {
+			t.Fatalf("%s: exit-only rule lifted by the AI switch", mode)
 		}
 	}
 }

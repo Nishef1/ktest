@@ -450,7 +450,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}
 		}
 	}
-	connectionpolicy.Configure(mode, &config, rules.Match)
+	connectionpolicy.ConfigureAI(mode, &config, rules.Match, aiPolicyEnabled())
 	// Use the same Go trusted/DoH/ECH resolver as the desktop connection.
 	// Aether never falls back to Android system DNS.
 	config.Resolve, config.Resolve6, err = connectiondns.MobileResolvers(mode, upstream)

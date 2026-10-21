@@ -59,8 +59,8 @@ func (m ConnectionMode) tunUDP() bool { return m == ModeAether }
 
 func (m ConnectionMode) isWindscribe() bool { return m == ModeWindscribe || m == ModeWindscribeAether }
 
-func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.DomainRules) {
-	connectionpolicy.Configure(string(m), cfg, rules.Match)
+func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.DomainRules, aiPolicy bool) {
+	connectionpolicy.ConfigureAI(string(m), cfg, rules.Match, aiPolicy)
 }
 
 func (m ConnectionMode) message() string {

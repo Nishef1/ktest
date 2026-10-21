@@ -340,6 +340,24 @@ internal fun SettingsScreen(
                 "Remove the user CA manually from Android's trusted credentials too.")
         }
 
+        Panel {
+            SectionLabel("AI policy")
+            var aiPolicy by remember { mutableStateOf(preferences.getBoolean("ai_policy", true)) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Keep AI and TikTok on a foreign exit", color = K.text, fontSize = 14.sp)
+                    Text(if (aiPolicy) "On: AI and TikTok use only an exit outside Iran and are blocked without one."
+                        else "Off: AI and TikTok use the same routes as other sites. Services may see an Iranian IP and refuse.",
+                        color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+                androidx.compose.material3.Switch(aiPolicy, {
+                    aiPolicy = it
+                    preferences.edit().putBoolean("ai_policy", it).apply()
+                })
+            }
+            Note("Applies on the next connection.")
+        }
+
         AetherIdentityBackupPanel(scope, privateDir, nativeLibraryDir, targetsEditable && !manualTesting)
 
         RouteTargetsPanel(routeTargets, scope, privateDir, targetsEditable,

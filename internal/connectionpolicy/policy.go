@@ -62,6 +62,22 @@ func Title(id string) string {
 	return "Unknown"
 }
 
+// ConfigureAI is Configure with the AI/TikTok policy switchable. With
+// aiPolicy false, AI and TikTok names are routed like any other site: no
+// verified-foreign-exit requirement and no fail-closed block. Mode rules that
+// are not about AI (Psiphon/Tor exit-only, Aether's exit-only carriage,
+// Windscribe's local-only paths) stay as they are.
+func ConfigureAI(id string, cfg *smartproxy.Config, protected func(string) bool, aiPolicy bool) {
+	Configure(id, cfg, protected)
+	if aiPolicy {
+		return
+	}
+	switch id {
+	case "balanced", "fast", "aether", "windscribe", "windscribe-aether":
+		cfg.ExitOnly = nil
+	}
+}
+
 // Configure applies the exact CLI routing policies to a Go smart proxy.
 // Transport launch, availability and Windscribe-specific validation are
 // separate from this policy function.

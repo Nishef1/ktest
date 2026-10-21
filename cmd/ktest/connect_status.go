@@ -15,6 +15,7 @@ import (
 type connectionStatus struct {
 	t          *term
 	mode       ConnectionMode
+	aiOff      bool // AI policy switched off: no AI/TikTok exit line
 	proxy      *smartproxy.Proxy
 	exit       func() string // managed exit status; may be nil
 	socks      string
@@ -62,6 +63,9 @@ func (s *connectionStatus) view(now time.Time) statusView {
 		v.key, v.tone, v.title = "connected", toneOK, "CONNECTED"
 		status = t.Green("Connected through WARP") + " · " + plainDuration(now.Sub(s.since))
 		exitLine = "AI/TikTok: " + t.Yellow("blocked") + " · WARP IP located in Iran; use Balanced or Psiphon for AI"
+		if s.aiOff {
+			exitLine = "AI policy off: AI/TikTok use WARP like other sites"
+		}
 	case s.mode.exitOnly() && now.Sub(s.started) >= notConnectedAfter:
 		v.key, v.tone, v.title = "failing", toneFail, "NOT CONNECTED"
 		status = t.Red("No working exit yet") + " · still searching for " + plainDuration(now.Sub(s.started)) + "; traffic is blocked"
@@ -87,6 +91,9 @@ func (s *connectionStatus) view(now time.Time) statusView {
 			exitLine = "not ready"
 		}
 		exitLine = "Foreign exit for AI/TikTok: " + exitLine
+		if s.aiOff {
+			exitLine = "AI policy off: AI/TikTok use the same routes as other sites"
+		}
 	}
 	if t.unicode {
 		v.title = map[tone]string{toneOK: "● ", toneWarn: "◌ ", toneFail: "✕ "}[v.tone] + v.title

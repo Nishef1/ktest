@@ -100,6 +100,7 @@ type connectOptions struct {
 	httpListen          string
 	exitSocks           string
 	aiExtra             string
+	noAIPolicy          bool
 	windscribeCLI       string
 	windscribeReconnect bool
 	ws                  wsOptions
@@ -161,6 +162,7 @@ func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
 	fs.StringVar(&o.exitSocks, "exit-socks", o.exitSocks, "optional loopback SOCKS5 exit (Tor, Psiphon or authorized Worker), TCP only")
 	fs.StringVar(&o.aiExtra, "ai-extra", o.aiExtra, "additional AI hostnames, comma-separated; matched names require verified foreign exit")
+	fs.BoolVar(&o.noAIPolicy, "no-ai-policy", o.noAIPolicy, "route AI and TikTok like any other site (no foreign-exit requirement, no policy block)")
 	fs.BoolVar(&o.tun, "tun", o.tun, "route the whole system through ktest (Windows; asks for Administrator)")
 	fs.BoolVar(&o.cert, "cert", o.cert, "set up or renew the local certificate for domain fronting first (Windows asks you to confirm)")
 	fs.BoolVar(&o.forceFront, "front", o.forceFront, "use domain fronting even when the system does not report the ktest CA as trusted (Firefox with its own store)")
@@ -919,7 +921,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			cfg.EnsureExit = nil
 		}
 	}
-	o.mode.configure(&cfg, aiRules)
+	o.mode.configure(&cfg, aiRules, !o.noAIPolicy)
 	if o.mode == ModeWindscribe {
 		cfg.RejectExits = true // guard both initial and dynamically added routes
 		cfg.LocalOnly = true   // also reject plain/unknown relays and takeovers
@@ -1241,7 +1243,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		field("Exit", t.Dim(warpNote))
 	}
 	field("Policy", string(o.mode))
-	if !o.mode.isWindscribe() {
+	if o.noAIPolicy {
+		field("AI", "AI policy off: AI and TikTok use the same routes as other sites")
+	} else if !o.mode.isWindscribe() {
 		field("AI", "AI and TikTok only through an exit verified outside Iran; blocked otherwise")
 	} else {
 		if o.mode == ModeWindscribeAether {
@@ -1294,7 +1298,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	defer tick.Stop()
 	if liveStatus {
 		now := time.Now()
-		status = &connectionStatus{t: t, mode: o.mode, proxy: proxy, exit: currentExitStatus, socks: l.Addr().String(), http: httpAddr,
+		status = &connectionStatus{t: t, mode: o.mode, aiOff: o.noAIPolicy, proxy: proxy, exit: currentExitStatus, socks: l.Addr().String(), http: httpAddr,
 			stop: o.stopHint, tunWant: o.tun, tunOn: func() bool { return tn != nil }, feed: feed, started: sessionStarted, since: sessionStarted, windscribe: monitor}
 		if warpNote != "" && currentExitStatus == nil {
 			status.exit = func() string { return warpNote }

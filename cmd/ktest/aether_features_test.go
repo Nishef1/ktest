@@ -140,7 +140,7 @@ unknown | --masque --upstream socks5://127.0.0.1:9999
 	rules, _ := smartproxy.NewAIDomainRules("")
 	for _, mode := range []ConnectionMode{ModeWindscribe, ModeWindscribeAether} {
 		cfg := smartproxy.Config{}
-		mode.configure(&cfg, rules)
+		mode.configure(&cfg, rules, true)
 		if mode == ModeWindscribe && (!cfg.LocalOnly || !cfg.RejectExits) {
 			t.Fatal("local mode weakened")
 		}
