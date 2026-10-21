@@ -28,7 +28,7 @@ func TestModeCatalogIsUniqueAndFaithfulToCLI(t *testing.T) {
 
 // No site is singled out in any mode: AI and TikTok route like the rest.
 // Psiphon and Tor send everything through their exit; Aether carries
-// everything on any working exit.
+// everything on any working exit, and so does Windscribe through Aether.
 func TestConfigureMatchesCLIForAllModes(t *testing.T) {
 	for _, id := range []string{"balanced", "fast", "windscribe", "windscribe-aether", "aether", "psiphon", "tor"} {
 		var cfg smartproxy.Config
@@ -42,7 +42,7 @@ func TestConfigureMatchesCLIForAllModes(t *testing.T) {
 				t.Fatalf("mode %s let %s off its exit", id, host)
 			}
 		}
-		if required := cfg.ExitRequired != nil && cfg.ExitRequired("chatgpt.com"); required != (id == "aether") {
+		if required := cfg.ExitRequired != nil && cfg.ExitRequired("chatgpt.com"); required != (id == "aether" || id == "windscribe-aether") {
 			t.Fatalf("mode %s: ExitRequired=%v", id, required)
 		}
 		if id == "fast" && cfg.Stagger != 125*time.Millisecond {
@@ -50,6 +50,18 @@ func TestConfigureMatchesCLIForAllModes(t *testing.T) {
 		}
 		if id == "windscribe" && (!cfg.LocalOnly || !cfg.RejectExits) {
 			t.Fatal("Windscribe direct-only policy changed")
+		}
+	}
+}
+
+// Exit modes start with no upstream: their exits (WARP, Psiphon, Tor) join
+// once found. Each must still build a proxy, or connect stops at once.
+func TestExitModesStartWithoutUpstreams(t *testing.T) {
+	for _, id := range []string{"aether", "windscribe-aether", "psiphon", "tor"} {
+		var cfg smartproxy.Config
+		Configure(id, &cfg)
+		if _, err := smartproxy.New(cfg); err != nil {
+			t.Fatalf("mode %s: %v", id, err)
 		}
 	}
 }

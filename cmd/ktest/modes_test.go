@@ -29,7 +29,7 @@ func TestConnectionModes(t *testing.T) {
 		exitOnly bool
 	}{
 		{"balanced", false}, {"fast", false}, {"windscribe", false}, {"windscribe-aether", false},
-		{"aether", false}, // every site rides an exit of any location, see ExitRequired
+		{"aether", false}, // these two: every site rides an exit of any location, see ExitRequired
 		{"psiphon", true}, {"tor", true},
 	} {
 		mode, err := parseConnectionMode(c.mode)
@@ -46,8 +46,8 @@ func TestConnectionModes(t *testing.T) {
 		if cfg.PreferVerifiedExit {
 			t.Errorf("%s: PreferVerifiedExit", c.mode)
 		}
-		if required := cfg.ExitRequired != nil && cfg.ExitRequired("example.org"); required != (mode == ModeAether) {
-			t.Errorf("%s: ExitRequired=%v; only Aether sends every site through an exit of any location", c.mode, required)
+		if required := cfg.ExitRequired != nil && cfg.ExitRequired("example.org"); required != (mode == ModeAether || mode == ModeWindscribeAether) {
+			t.Errorf("%s: ExitRequired=%v; only Aether and Windscribe through Aether send every site through an exit of any location", c.mode, required)
 		}
 		if cfg.RejectExits != (mode == ModeWindscribe) {
 			t.Errorf("%s: RejectExits=%v; Windscribe must reject all foreign egress", c.mode, cfg.RejectExits)

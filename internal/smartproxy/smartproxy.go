@@ -301,7 +301,8 @@ func allowedLocalOnly(u Upstream) bool {
 }
 
 func New(cfg Config) (*Proxy, error) {
-	if len(cfg.Upstreams) == 0 && cfg.ExitOnly == nil {
+	// Exit modes may start empty: their exits are added once found.
+	if len(cfg.Upstreams) == 0 && cfg.ExitOnly == nil && cfg.ExitRequired == nil {
 		return nil, errors.New("at least one upstream is required")
 	}
 	cfg.defaults()

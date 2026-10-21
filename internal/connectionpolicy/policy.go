@@ -81,9 +81,11 @@ func Configure(id string, cfg *smartproxy.Config) {
 		cfg.PreferVerifiedExit = false
 		cfg.RejectExits = true
 		cfg.LocalOnly = true
-	case "aether":
+	case "aether", "windscribe-aether":
 		// Like PattNG: a working WARP carries every destination, wherever
 		// its IP geolocates. No site is singled out; the user decides.
+		// Windscribe through Aether has no direct path at all: its OpenVPN
+		// rides the WARP carrier, which Windscribe then wraps.
 		cfg.ExitRequired = func(string) bool { return true }
 	case "psiphon", "tor":
 		cfg.ExitOnly = func(string) bool { return true }
