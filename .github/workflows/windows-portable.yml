@@ -3,6 +3,11 @@ name: windows-portable
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - ".github/workflows/windows-portable.yml"
+      - "cmd/ktest/**"
+      - "internal/aether/**"
   workflow_dispatch:
 
 permissions:
@@ -211,6 +216,12 @@ jobs:
           $menuText = $menu -join "`n"
           if ($LASTEXITCODE -ne 0 -or $menuText -notmatch "(?i)Disconnected" -or $menuText -notmatch "Connect with") {
             throw "Terminal menu did not start and exit cleanly"
+          }
+          # Offline smoke: a valid staged Aether generation needs no download,
+          # and must be selected instead of any obsolete root executable.
+          $aetherStatus = & ./portable/ktest/ktest.exe warp -upgrade -base portable/ktest 2>&1
+          if ($LASTEXITCODE -ne 0 -or (($aetherStatus -join "`n") -notmatch "already installed")) {
+            throw "New versioned Aether install not selected: $($aetherStatus -join ' ')"
           }
           $version = & ./portable/ktest/cores/xray.exe version
           if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.10\.10")) {
