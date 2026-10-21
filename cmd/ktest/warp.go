@@ -258,7 +258,13 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	if err := os.WriteFile(filepath.Join(stage, "aether-release.sha256"), []byte(strings.ToLower(sha)+"\n"), 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(stage, aetherVersionDir(base)); err != nil {
+	target := aetherVersionDir(base)
+	if _, err := os.Stat(target); err == nil && !aetherVersionReady(base) {
+		// An incomplete or differently pinned generation would otherwise block
+		// every later install; move it aside (never delete it) first.
+		_ = os.Rename(target, fmt.Sprintf("%s.incomplete-%s", target, time.Now().Format("20060102-150405")))
+	}
+	if err := os.Rename(stage, target); err != nil {
 		if aetherVersionReady(base) {
 			return nil
 		}

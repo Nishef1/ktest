@@ -53,9 +53,15 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 		exe,
 		filepath.Join(coreDir, "xray.exe"),
 		filepath.Join(coreDir, "ciadpi.exe"),
-		filepath.Join(coreDir, "aether.exe"),
-		filepath.Join(coreDir, "pt", "psiphon-tunnel-core.exe"),
-		filepath.Join(coreDir, "pt", "lyrebird.exe"),
+	}
+	// Both the legacy core and the versioned Aether generation may run
+	// (KTEST_AETHER_USE_LEGACY selects the old one); each must bypass the TUN
+	// or its own WARP traffic would loop back into it.
+	for _, dir := range []string{coreDir, filepath.Join(coreDir, "aether-versions", aetherVersion)} {
+		direct = append(direct,
+			filepath.Join(dir, "aether.exe"),
+			filepath.Join(dir, "pt", "psiphon-tunnel-core.exe"),
+			filepath.Join(dir, "pt", "lyrebird.exe"))
 	}
 	logs := &tailBuffer{max: 4096}
 	if verbose {

@@ -453,3 +453,30 @@ func TestDesktopAetherAndTorModesCannotCrossNativeBackends(t *testing.T) {
 		}
 	}
 }
+
+// A half-written generation (e.g. power loss, or an older pin of the same
+// version) must not block every later install; it is moved aside, not deleted.
+func TestAetherInstallReplacesIncompleteGenerationWithoutDeletingIt(t *testing.T) {
+	base := t.TempDir()
+	stale := filepath.Join(aetherVersionDir(base), aetherName())
+	if err := os.MkdirAll(filepath.Dir(stale), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("half-written"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	archive := zipOf(t, map[string]string{aetherName(): "complete-core", "pt/" + psiphonName(): "p", "pt/" + lyrebirdName(): "l"})
+	hash := sha256.Sum256(archive)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) }))
+	defer server.Close()
+	if err := fetchAether(context.Background(), server.URL, hex.EncodeToString(hash[:]), base); err != nil {
+		t.Fatalf("incomplete generation blocked the install: %v", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(aetherVersionDir(base), aetherName())); string(data) != "complete-core" {
+		t.Fatalf("new generation not published: %q", data)
+	}
+	kept, _ := filepath.Glob(aetherVersionDir(base) + ".incomplete-*")
+	if len(kept) != 1 {
+		t.Fatalf("previous generation was not kept aside: %v", kept)
+	}
+}
