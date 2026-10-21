@@ -231,7 +231,9 @@ func (a *automaticExit) profiles() []aether.Profile {
 		profiles = append(profiles, aether.Profile{Label: "Tor-only", Args: []string{"--tor-only"}})
 	}
 	shape, measured := mobileTLSShape(a.ctx, a.options.privateDir, a.mode != "psiphon" && a.mode != "tor")
-	profiles = aether.WithLocalCarriers(aether.WithExitNodes(shapeProfiles(profiles, shape, measured)))
+	profiles = aether.WithLocalCarriers(aether.WithExitNodesOptions(
+		shapeProfiles(profiles, shape, measured), shape.Fragment == "off",
+	))
 	profiles = tlsshape.Order(profiles, measured)
 	var hint nativeHint
 	if raw, err := os.ReadFile(a.hintFile()); err == nil && len(raw) < 4096 && json.Unmarshal(raw, &hint) == nil && hint.Key == a.historyKey && hint.Key != "" && time.Since(hint.Checked) < 24*time.Hour && time.Until(hint.Checked) < time.Minute {

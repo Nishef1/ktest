@@ -97,8 +97,8 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
         if (!canMeasure) Note("Disconnect to measure: it must see this network, not the tunnel.", Tone.Warn)
         if (message.isNotBlank()) Note(message, Tone.Good)
         if (error.isNotBlank()) Note(error, Tone.Danger)
-        Note("Off disables Aether's own TLS fragmentation. On desktop, KTest also excludes TCP TLS-hello exit-node masks; " +
-            "independent local anti-DPI carrier strategies may still shape the outer connection. Auto uses a saved MASQUE " +
+        Note("Off disables Aether's own TLS fragmentation and KTest's TCP TLS-hello exit-node masks. " +
+            "Independent local anti-DPI carrier strategies may still shape the outer connection. Auto uses a saved MASQUE " +
             "measurement when available; use Measure this network now to refresh it.")
     }
 }
