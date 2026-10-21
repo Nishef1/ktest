@@ -31,7 +31,7 @@ go build -o ktest.exe ./cmd/ktest
 
 ## Current verification status (2026-10-21)
 
-The latest reviewed source snapshot is [`978e0ab`](https://github.com/Nishef1/ktest/commit/978e0ab487e086ed5da61478f313db60bf272365). Its then-current CI passed Go tests/race/formatting, Android source checks, the Android APK build and the Windows portable package. These checks do **not** establish physical-phone reliability, current ISP reachability, end-to-end service access, or CPU/RAM/battery efficiency. See the [current audit and open issues](docs/CURRENT_AUDIT_2026-10-21.md).
+The reviewed baseline [`978e0ab`](https://github.com/Nishef1/ktest/commit/978e0ab487e086ed5da61478f313db60bf272365) passed its then-current Go/race/formatting, Android source, APK and Windows portable CI jobs. The follow-up [`1215c1c`](https://github.com/Nishef1/ktest/commit/1215c1c9d2dda97978504a6d63dfecf34f3de78b) aligned mode contracts and current docs. The current ECH follow-up adds pinned-IP AliDNS RFC 8484 wire DoH endpoints for HTTPS/SVCB records (including ECHConfig); CI and target-network acceptance are pending for this change. None of these CI checks alone establishes physical-phone reliability, current ISP reachability, end-to-end service access, or CPU/RAM/battery efficiency. See the [current audit and open issues](docs/CURRENT_AUDIT_2026-10-21.md).
 
 ## Documentation
 

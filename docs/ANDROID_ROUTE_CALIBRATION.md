@@ -1,6 +1,6 @@
 # Android adaptive routing and optional manual diagnostics
 
-**Updated 2026-10-21:** Balanced and Fast do not run a preconnection website sweep, target calibration, cached-profile prerequisite or frozen target selection. Existing website diagnostics never prevent connecting or lock a live route. This does **not** mean every subsystem is calibration-free: on-demand Aether MASQUE exit discovery can run a separate TLS-shape/F&F calibration when its network cache is missing or stale (up to 15 seconds). There is no AI/TikTok-specific route rule; these destinations follow the selected mode like other hosts.
+**Updated 2026-10-21:** Balanced and Fast do not run a preconnection website sweep, target calibration, cached-profile prerequisite or frozen target selection. Existing website diagnostics never prevent connecting or lock a live route. This does **not** mean every subsystem is calibration-free: on-demand Aether MASQUE exit discovery can run a separate TLS-shape/F&F calibration when its network cache is missing or stale (up to 15 seconds). There is no AI/TikTok-specific route rule; these destinations follow the selected mode like other hosts. Packet DNS also has pinned-IP AliDNS RFC 8484 candidates for HTTPS/SVCB records used by ECH; this is a resolver fallback, not proof that the resulting ECH handshake or tunnel works on a given ISP.
 
 ## Connection behavior
 

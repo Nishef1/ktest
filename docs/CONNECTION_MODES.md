@@ -33,10 +33,24 @@ carry data and pass independent HTTPS/foreign-exit verification. The sampled
 2026-10-19 network reached ECH-capable gateways but also returned CONNECT-IP
 400 responses, certificate rejection or timeout; that test did not establish
 a usable native WARP exit. These failures are not promoted as working routes.
-Recent reports say `cloudflare-ech.com` is blocked on the networks observed by Patterniha (not independently verified for every Iranian operator);
-ECH registration and ECH-dependent profiles are skipped once the shared
-bootstrap fails (rechecked every five minutes), and a first key is obtained
-through another app's local proxy or another VPN (see USAGE.md).
+Reports posted on 2026-10-21 describe filtering UDP DNS queries for HTTPS
+records (type 65) used to obtain ECH configurations on at least one Iranian
+network; the same report says AliDNS DoH worked there. This is not a nationwide
+measurement and does not establish that the ECH TLS handshake or the public SNI
+`cloudflare-ech.com` is blocked.
+
+KTest's ECH bootstrap is DNS-independent: it dials built-in Cloudflare IP hints
+over TCP/443 with a deliberately unusable ECH configuration, then uses the
+current retry configuration returned by the edge. Do not hardcode a copied key:
+the live HTTPS record observed through Google Public DNS differs from Cloudflare's
+older blog example. Packet DNS also offers RFC 8484 DoH at
+`https://dns.alidns.com/dns-query`, pinned to `223.5.5.5` and `223.6.6.6`
+while validating the certificate for `dns.alidns.com`. This is an alternate
+resolver path, not proof of access on every ISP.
+
+ECH registration and ECH-dependent profiles are skipped when the direct
+bootstrap itself fails (rechecked every five minutes); use another app's local
+proxy or another VPN if that specific path fails (see USAGE.md).
 The saved-key check treats only credential-specific refusals (a TLS
 access-denied/certificate alert after the handshake, or CONNECT-IP 401/403)
 from two gateways as a refused key; CONNECT-IP 400 and 5xx are gateway or

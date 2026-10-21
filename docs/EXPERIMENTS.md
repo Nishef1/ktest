@@ -12,6 +12,10 @@ The reviewed source snapshot was [`978e0ab`](https://github.com/Nishef1/ktest/co
 
 These are code/build checks, not field experiments. The current commit has not been comprehensively accepted on a physical Android phone or every target ISP. CPU, RAM, battery, cold/warm startup P50/P95, 20-cycle reconnect and sustained data-plane benchmarks are **not measured**. Historical emulator/ISP observations elsewhere in this repository must retain their original date and scope.
 
+### ECH DNS update (2026-10-21)
+
+A user report says UDP DNS queries for HTTPS records used to obtain Cloudflare ECHConfig were filtered on one network, while AliDNS DoH worked. This does not establish a nationwide ECH block. KTest already has a DNS-independent TCP/443 ECH retry-config bootstrap; a permanent hardcoded ECH key is not used. The packet DNS resolver now includes RFC 8484 AliDNS endpoints pinned to `223.5.5.5` and `223.6.6.6`, validating the certificate for `dns.alidns.com`. Unit coverage checks the endpoint configuration only. Physical-device tests must still confirm HTTPS/SVCB record resolution, TLS reachability, current ECH acceptance and the full application data path.
+
 ### Known implementation issues for the next code change
 
 - `cmd/ktest/tls_shape.go`: the automatic MASQUE/F&F calibration is bounded to 15 seconds but the guard does not exclude an explicitly selected `wireguard` method; an uncached network can therefore pay for irrelevant MASQUE measurements.

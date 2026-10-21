@@ -91,6 +91,9 @@ func MobilePacketDNS(mode, exitSOCKS string) (func(context.Context, []byte) ([]b
 
 // PacketEndpoints is the wire-DNS endpoint policy shared by both clients.
 // A direct ECH dial is opt-in and must never bypass a strict exit-only mode.
+// AliDNS is an additional RFC 8484 resolver for HTTPS/SVCB records (including
+// ECHConfigList). Pin its documented IPs to avoid needing DNS to find the
+// resolver, while verifying the TLS certificate for dns.alidns.com.
 func PacketEndpoints(directECH bool) []smartproxy.DoHEndpoint {
 	var endpoints []smartproxy.DoHEndpoint
 	if directECH {
@@ -105,5 +108,17 @@ func PacketEndpoints(directECH bool) []smartproxy.DoHEndpoint {
 		}
 		endpoints = append(endpoints, ep)
 	}
+	endpoints = append(endpoints,
+		smartproxy.DoHEndpoint{
+			URL:        "https://dns.alidns.com/dns-query",
+			Addr:       "223.5.5.5:443",
+			ServerName: "dns.alidns.com",
+		},
+		smartproxy.DoHEndpoint{
+			URL:        "https://dns.alidns.com/dns-query",
+			Addr:       "223.6.6.6:443",
+			ServerName: "dns.alidns.com",
+		},
+	)
 	return endpoints
 }

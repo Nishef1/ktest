@@ -8,6 +8,8 @@ The latest reviewed source snapshot is [`978e0ab`](https://github.com/Nishef1/kt
 
 Current mode contract: Balanced/Fast have no AI/TikTok-specific route rule; Aether requires a working WARP carrier for all managed traffic but that IP may geolocate to Iran; only Psiphon/Tor require a verified non-Iran/non-Russia exit. Android does not expose the desktop Windscribe modes.
 
+**ECH/DNS update (2026-10-21):** packet DNS now includes RFC 8484 DoH to `dns.alidns.com` pinned to `223.5.5.5` and `223.6.6.6` with TLS certificate verification. This can resolve HTTPS records (including ECHConfig) when UDP DNS is filtered, if the DoH endpoint is reachable. KTest's separate ECH retry-config bootstrap uses Cloudflare IP literals over TCP/443 and does not require a DNS query. Neither path has been validated across every target ISP.
+
 Keep Go for required KTest policy, lifecycle, shared diagnostics and existing mixed-mode routing. Prefer the selected core's native SOCKS/HTTP and packet capabilities where they satisfy the mode contract; an additional Go proxy is not a universal requirement. Any simplified path must preserve verified-exit checks, expiry and fail-closed routing.
 
 ## Single-source architecture

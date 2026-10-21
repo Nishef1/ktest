@@ -1,7 +1,7 @@
 # Current source, CI and performance audit — 2026-10-21
 
 **Reviewed source:** [`978e0ab`](https://github.com/Nishef1/ktest/commit/978e0ab487e086ed5da61478f313db60bf272365) on `main`.
-**Scope:** source/documentation review and CI status inspection. This document does not claim a physical-device run, a fresh ISP field test, or a code fix. The documentation changes in the follow-up commit do not change runtime behavior.
+**Scope:** source/documentation review, CI status inspection and the 2026-10-21 ECH DNS follow-up. The earlier documentation-only commit did not change runtime behavior. The latest follow-up adds two pinned-IP AliDNS RFC 8484 candidates to packet DNS and a configuration test; this is not yet a physical-device or ISP field test.
 
 ## Verified CI at the reviewed source snapshot
 
@@ -25,6 +25,12 @@ These results do **not** prove end-to-end Android TUN traffic, current reachabil
 | Windscribe | Desktop local-only anti-DPI/bootstrap bridge | Does not itself provide a foreign exit; Android does not expose this mode. |
 | Windscribe through Aether | Explicit WARP carrier for Windscribe OpenVPN TCP; Windscribe owns final VPN IP | Carrier may be Iran-geolocated; a ready carrier or HTTP CONNECT 200 is not authenticated VPN success. Android mode unavailable. |
 
+## ECH DNS follow-up (2026-10-21)
+
+A report described filtering UDP DNS queries for HTTPS records (type 65) used to obtain ECH configurations, while AliDNS DoH worked on that reporter's network. This is not evidence of a nationwide block and is not the same as blocking ECH handshakes. KTest's direct ECH bootstrap already uses Cloudflare IP literals over TCP/443 with a dummy ECHConfig and accepts the current retry configuration returned by the edge; it does not require DNS and does not hardcode a permanent ECH key.
+
+The packet-DNS endpoint list now includes RFC 8484 DoH at `https://dns.alidns.com/dns-query`, pinned to `223.5.5.5:443` and `223.6.6.6:443`, with TLS certificate validation for `dns.alidns.com`. This can carry HTTPS/SVCB queries through HTTPS if the endpoint is reachable. A unit test verifies endpoint configuration, but real network acceptance and TLS/record-type compatibility on target ISPs remain open.
+
 ## Performance architecture observed in source
 
 - Balanced/Fast Go SmartProxy uses a maximum of six simultaneous route attempts. The initial preferred-path head start is 200 ms for Balanced and 125 ms for Fast; these are policy constants, not measured end-to-end latency.
@@ -43,7 +49,7 @@ These results do **not** prove end-to-end Android TUN traffic, current reachabil
 | P1 | `fragment=off` does not suppress exit-node final masks | Decide whether `off` disables all F&F/exit-node masks or only Aether's built-in fragment flag; make CLI, Android setting labels, profile generation and tests agree. |
 | P2 | No quantitative performance evidence | Benchmark cold/warm startup P50/P95, first HTTPS, verified exit, CPU/RAM, thermal behavior and 30–60 minute battery drain on representative physical Android devices; compare with previous release on the same device/network. |
 | P2 | Readiness can be mistaken for Internet availability | Add/retain distinct states for proxy listener, TUN adapter, verified carrier/foreign exit and destination HTTPS. Do not label a listener or `tun_running_unverified` as Internet verified. |
-| P2 | Current-commit live network acceptance incomplete | Test 20 disconnect/reconnect cycles, Wi-Fi↔cellular handover, DNS, UDP/IPv6, ECH, TUN failover, DNS/IPv6 leaks, and authenticated page/API/media flows on a physical phone. Record commit, network, method and exact result. |
+| P2 | Current-commit live network acceptance incomplete | Test 20 disconnect/reconnect cycles, Wi-Fi↔cellular handover, DNS including HTTPS RR/ECHConfig over AliDNS DoH, UDP/IPv6, ECH, TUN failover, DNS/IPv6 leaks, and authenticated page/API/media flows on a physical phone. Record commit, network, method and exact result. |
 | P3 | Historical docs can look like current guarantees | Keep dated observations explicitly historical; update the living contract in `USAGE.md`, `CONNECTION_MODES.md`, `NETWORK_DIAGNOSIS.md` and `android/README.md`. |
 
 ## Acceptance checklist
@@ -52,7 +58,7 @@ These results do **not** prove end-to-end Android TUN traffic, current reachabil
 - [ ] Physical Android test on at least one ARM64 device and Android 10+; include Android 16 KiB page-size device if available.
 - [ ] Confirm local readiness and end-to-end HTTPS are reported separately.
 - [ ] Run the same benchmark on the previous release and current candidate with the same network and device.
-- [ ] Validate DNS, UDP/443, IPv6, TUN fallback, app-UID exclusion, leaks and network handover.
+- [ ] Validate DNS including HTTPS RR/ECHConfig retrieval over each AliDNS pinned DoH endpoint, UDP/443, IPv6, TUN fallback, app-UID exclusion, leaks and network handover.
 - [ ] Validate Aether Auto, explicit WireGuard, MASQUE H2/H3, Psiphon and Tor separately; distinguish carrier ready from authenticated/verified exit.
 - [ ] Validate Windscribe only through its own authenticated VPN data plane; never infer success from a bootstrap response.
 

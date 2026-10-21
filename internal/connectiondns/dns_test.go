@@ -41,3 +41,25 @@ func TestMobileResolversForBalancedAndFast(t *testing.T) {
 		}
 	}
 }
+
+func TestPacketEndpointsIncludePinnedAliDNSWireDoH(t *testing.T) {
+	for _, directECH := range []bool{false, true} {
+		endpoints := PacketEndpoints(directECH)
+		found := map[string]bool{}
+		for _, ep := range endpoints {
+			if ep.URL != "https://dns.alidns.com/dns-query" {
+				continue
+			}
+			if ep.ServerName != "dns.alidns.com" || ep.FrontSNI != "" || ep.DialTLS != nil {
+				t.Fatalf("AliDNS endpoint does not use ordinary verified TLS: %+v", ep)
+			}
+			if ep.Addr != "223.5.5.5:443" && ep.Addr != "223.6.6.6:443" {
+				t.Fatalf("AliDNS endpoint must use a documented pinned IP, got %+v", ep)
+			}
+			found[ep.Addr] = true
+		}
+		if len(found) != 2 || !found["223.5.5.5:443"] || !found["223.6.6.6:443"] {
+			t.Fatalf("AliDNS wire DoH fallback missing for directECH=%v: %v", directECH, found)
+		}
+	}
+}

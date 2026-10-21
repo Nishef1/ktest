@@ -157,11 +157,12 @@ func shuffled(s []string) []string {
 	return out
 }
 
-// The bootstrap result is shared by every automatic caller for a while. Since
-// 2026-10-21 cloudflare-ech.com is reported blocked on all Iranian networks
-// (Patterniha); a refused bootstrap must not cost every connection attempt
-// another round of handshakes. Only definite answers are kept: a caller's own
-// deadline expiring says nothing about the network.
+// The bootstrap result is shared by every automatic caller for a while.
+// Reports from 2026-10-21 describe filtering of UDP DNS HTTPS-record queries
+// used to obtain ECHConfig on at least one network. That is distinct from this
+// DNS-independent TCP/443 ECH retry-config bootstrap. Cache definite outcomes
+// so a failed direct bootstrap does not cost every connection another handshake;
+// a caller's own deadline expiring says nothing about the network.
 const (
 	echBootstrapOK   = 10 * time.Minute
 	echBootstrapFail = 5 * time.Minute
@@ -182,8 +183,8 @@ const echBootstrapBudget = 16 * time.Second
 
 // SharedCloudflareECH is FetchCloudflareECH with the shared result above. The
 // fetch runs on its own deadline and stores its answer even when this caller
-// stops waiting: a blackholed cloudflare-ech.com (timeouts, observed
-// 2026-10-21) otherwise outlasts every short caller and is never remembered.
+// stops waiting: a direct Cloudflare ECH retry-config bootstrap that times out
+// otherwise outlasts every short caller and is never remembered.
 // Explicit diagnostics call FetchCloudflareECH to measure afresh.
 func SharedCloudflareECH(ctx context.Context) ([]byte, string, error) {
 	echBootstrap.Lock()

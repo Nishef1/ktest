@@ -160,6 +160,10 @@ Initial registration may be filtered even when gateways work. A strict-mode prox
 
 See [connection policies](CONNECTION_MODES.md), [Windscribe tests](WINDSCRIBE_BOOTSTRAP.md), and the pinned [Aether CLI](https://github.com/patterniha/Aether/blob/v2.3.2/aether/src/cli.rs) / [runtime](https://github.com/patterniha/Aether/blob/v2.3.2/aether/src/lib.rs).
 
+## ECH DNS follow-up (2026-10-21)
+
+A later report distinguishes blocking DNS-over-UDP queries for HTTPS records (type 65) from blocking the ECH handshake itself. The report says AliDNS DoH worked on that network; it is a single-network observation, not a nationwide result. KTest's own Cloudflare ECH bootstrap obtains a current retry configuration over TCP/443 without DNS, using a dummy ECHConfig and the edge's authenticated rejection. For intercepted packet DNS, RFC 8484 AliDNS endpoints are now available at `dns.alidns.com/dns-query`, pinned to `223.5.5.5` and `223.6.6.6` with normal TLS certificate verification. Do not treat a hardcoded ECHConfig as permanently valid; current DNS records can change. See [USAGE.md](USAGE.md) and [the current audit](CURRENT_AUDIT_2026-10-21.md).
+
 ## Bare-ISP Aether connection (2026-10-20)
 
 Measured on a filtered Iranian fixed line with no VPN; MASQUE H2 now connects.
