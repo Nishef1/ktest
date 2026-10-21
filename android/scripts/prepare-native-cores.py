@@ -116,7 +116,8 @@ def prepare(manifest, cache, destination, abis, verify_only):
         archive_name = abi["archive"]
         if Path(archive_name).name != archive_name:
             raise ValueError("native archive must be a single filename")
-        archive = cache / archive_name
+        archive = cache / manifest["repository"].rsplit("/", 1)[-1] / manifest["version"] / archive_name
+        archive.parent.mkdir(parents=True, exist_ok=True)
         if not archive.exists():
             url = f'{manifest["repository"]}/releases/download/{manifest["version"]}/{archive_name}'
             # A task-owned temporary file prevents interrupted downloads being adopted.
