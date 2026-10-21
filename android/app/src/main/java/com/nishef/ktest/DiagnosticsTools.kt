@@ -50,6 +50,13 @@ internal class ToolsState {
     var diagReport by mutableStateOf<JSONObject?>(null)
     var diagError by mutableStateOf<String?>(null)
 
+    var dnsInput by mutableStateOf("1.1.1.1\n8.8.8.8\n9.9.9.9\n223.5.5.5")
+    var dnsBusy by mutableStateOf(false)
+    var dnsReport by mutableStateOf<JSONObject?>(null)
+    var dnsError by mutableStateOf<String?>(null)
+    var dnsSelected by mutableStateOf("")
+    var dnsMessage by mutableStateOf<String?>(null)
+
     var cdnProvider by mutableStateOf("cloudflare")
     var cdnBudget by mutableFloatStateOf(120f)
     var cdnStarting by mutableStateOf(false)
@@ -106,6 +113,9 @@ internal fun ToolsScreen(s: ToolsState, scope: CoroutineScope, onCopy: (String) 
         Spacer(Modifier.height(4.dp))
         ToolCard(s, "diagnose", KIcons.Globe, "Network diagnosis", "DNS, TCP and TLS checked separately") {
             DiagnoseTool(s, scope)
+        }
+        ToolCard(s, "dns", KIcons.Globe, "DNS resolver test", "Compare DNS servers and verify HTTPS") {
+            DNSResolverTool(s, scope)
         }
         ToolCard(s, "cdn", KIcons.Search, "CDN scan", "Find responsive provider edges") {
             CDNScanTool(s, scope, onCopy, scanAllowed)
@@ -204,6 +214,126 @@ private fun DiagnoseTool(s: ToolsState, scope: CoroutineScope) {
         KeyValue("Total", "${r.optLong("total_duration_ms")} ms", mono = true)
     }
     Note("Uses Android's default network, not the proxy. Success does not prove a VPN connection.")
+}
+
+@Composable
+private fun DNSResolverTool(s: ToolsState, scope: CoroutineScope) {
+    val context = LocalContext.current
+    val preferences = remember(context) {
+        context.getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
+    }
+    LaunchedEffect(Unit) {
+        s.dnsSelected = preferences.getString("dns_override", "").orEmpty()
+    }
+    KField(
+        s.dnsInput,
+        { s.dnsInput = it; s.dnsError = null },
+        "DNS server IPs",
+        singleLine = false,
+        minLines = 4,
+        keyboardType = KeyboardType.Ascii,
+        mono = true,
+        enabled = !s.dnsBusy,
+        supporting = "One IP per line; optional :port (default 53). Up to 12 entries."
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PrimaryButton(
+            if (s.dnsBusy) "Testing…" else "Test DNS servers",
+            {
+                s.dnsReport = null
+                s.dnsMessage = null
+                scope.runTool(
+                    { s.dnsBusy = it },
+                    { s.dnsError = it },
+                    "DNS scan failed",
+                    { Mobilebridge.scanDNS(s.dnsInput.trim()) }
+                ) { s.dnsReport = it }
+            },
+            Modifier.weight(1f),
+            enabled = s.dnsInput.isNotBlank(),
+            busy = s.dnsBusy
+        )
+        SecondaryButton(
+            "Automatic",
+            {
+                preferences.edit().remove("dns_override").apply()
+                s.dnsSelected = ""
+                s.dnsMessage = "Automatic encrypted DNS will be used on the next connection."
+            },
+            Modifier.weight(1f),
+            enabled = !s.dnsBusy && s.dnsSelected.isNotBlank()
+        )
+    }
+    if (s.dnsSelected.isNotBlank()) {
+        Note("Selected for the next connection: ${s.dnsSelected}", Tone.Good)
+    } else {
+        Note("Automatic DNS is selected. KTest will use its built-in adaptive resolver list.")
+    }
+    val results = s.dnsReport?.optJSONArray("results")?.let { array ->
+        (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    }.orEmpty()
+    val recommended = s.dnsReport?.optString("recommended").orEmpty()
+    if (recommended.isNotBlank()) {
+        Note("Best verified result: $recommended. DNS and an HTTPS/TLS handshake both succeeded.", Tone.Good)
+        SecondaryButton(
+            "Use best verified DNS",
+            {
+                preferences.edit().putString("dns_override", recommended).apply()
+                s.dnsSelected = recommended
+                s.dnsMessage = "DNS saved for the next connection."
+            },
+            Modifier.fillMaxWidth(),
+            enabled = !s.dnsBusy
+        )
+    } else if (results.isNotEmpty()) {
+        Note("No resolver completed both a usable DNS answer and an HTTPS/TLS check. You can still select a DNS-only result, but Internet access is not verified.", Tone.Warn)
+    }
+    results.forEach { result ->
+        val server = result.optString("server")
+        val dnsOK = result.optBoolean("dns")
+        val internetOK = result.optBoolean("internet")
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(K.bg)
+                .border(1.dp, K.stroke, RoundedCornerShape(14.dp)).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Text(server, color = K.text, fontFamily = K.mono, fontSize = 14.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Tag(if (result.optBoolean("udp")) "UDP OK" else "UDP failed", if (result.optBoolean("udp")) K.mint else K.amber)
+                Tag(if (result.optBoolean("tcp")) "TCP OK" else "TCP failed", if (result.optBoolean("tcp")) K.mint else K.amber)
+                Tag(if (internetOK) "Internet verified" else if (dnsOK) "DNS only" else "No DNS", if (internetOK) K.mint else K.amber)
+            }
+            Text(
+                "DNS: ${result.optLong("dns_latency_ms")} ms · HTTPS/TLS: " +
+                    (if (internetOK) "${result.optLong("https_latency_ms")} ms via ${result.optString("https_host")}" else "not verified"),
+                color = K.muted, fontSize = 12.sp, lineHeight = 17.sp
+            )
+            val addresses = result.optJSONArray("addresses")
+            if (addresses != null && addresses.length() > 0) {
+                Text("Returned IPs: " + (0 until minOf(3, addresses.length())).joinToString(", ") { addresses.optString(it) },
+                    color = K.faint, fontSize = 11.sp, fontFamily = K.mono)
+            }
+            result.optString("error").takeIf { it.isNotBlank() }?.let {
+                Text(it, color = K.amber, fontSize = 11.sp, lineHeight = 15.sp)
+            }
+            SecondaryButton(
+                if (s.dnsSelected == server) "Selected for next connection" else "Use this DNS",
+                {
+                    preferences.edit().putString("dns_override", server).apply()
+                    s.dnsSelected = server
+                    s.dnsMessage = if (internetOK) "Verified DNS saved for the next connection."
+                        else "DNS responder saved for the next connection; Internet access was not verified."
+                },
+                Modifier.fillMaxWidth(),
+                enabled = dnsOK && s.dnsSelected != server && !s.dnsBusy
+            )
+        }
+    }
+    s.dnsError?.let { Note(it, Tone.Danger) }
+    s.dnsMessage?.let { Note(it, if (s.dnsSelected.isNotBlank()) Tone.Good else Tone.Info) }
+    Note(
+        "The test uses this phone's underlying network, not the active KTest tunnel. IP-based DNS queries are unencrypted. A selected resolver is used on the next Balanced/Fast connection and by the optional local anti-DPI carrier. Protected Aether/Psiphon/Tor packet DNS stays on the verified exit to avoid leaks."
+    )
 }
 
 @Composable

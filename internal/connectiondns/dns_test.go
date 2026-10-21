@@ -42,6 +42,21 @@ func TestMobileResolversForBalancedAndFast(t *testing.T) {
 	}
 }
 
+func TestCustomDNSCannotBypassStrictExitOnlyPolicy(t *testing.T) {
+	if _, _, err := MobileResolversWithCustom("aether", "", "1.1.1.1"); err == nil {
+		t.Fatal("custom plain DNS bypassed Aether's verified-exit requirement")
+	}
+	if _, _, err := MobilePacketDNSWithCustom("psiphon", "", "1.1.1.1"); err == nil {
+		t.Fatal("custom plain DNS bypassed Psiphon's verified-exit requirement")
+	}
+	if _, _, err := MobileResolversWithCustom("balanced", "", "dns.google"); err == nil {
+		t.Fatal("accepted a hostname as a custom DNS IP")
+	}
+	if _, _, err := MobilePacketDNSWithCustom("balanced", "", "dns.google"); err == nil {
+		t.Fatal("accepted a hostname for custom packet DNS")
+	}
+}
+
 func TestPacketEndpointsIncludePinnedAliDNSWireDoH(t *testing.T) {
 	for _, directECH := range []bool{false, true} {
 		endpoints := PacketEndpoints(directECH)

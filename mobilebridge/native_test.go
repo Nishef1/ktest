@@ -173,12 +173,13 @@ func TestNativeVerificationPromotesHealthyProcess(t *testing.T) {
 
 func TestAetherThroughFastOnlyUsesTCPMethods(t *testing.T) {
 	p, err := nativeProfile("aether", "auto", true)
-	if err != nil || !p.Has("--h2") || p.Has("--wg") || p.Psiphon() {
-		t.Fatalf("automatic Fast-carried profile is not an H2 method: %v %v", p.Args, err)
+	if err != nil || !p.Has("--h2") || !p.LocalCarrier() || p.Has("--wg") || p.Psiphon() {
+		t.Fatalf("automatic Fast-carried profile is not an owned H2 carrier variant: %v %v", p.Args, err)
 	}
 	for _, method := range []string{"masque-h2", "gool-h2", "mim-h2"} {
-		if _, err := nativeProfile("aether", method, true); err != nil {
-			t.Fatalf("%s should be carried by Fast: %v", method, err)
+		profile, err := nativeProfile("aether", method, true)
+		if err != nil || !profile.LocalCarrier() {
+			t.Fatalf("%s should have an explicit local-carrier profile: %+v %v", method, profile, err)
 		}
 	}
 	for _, method := range []string{"masque-h3", "wireguard", "psiphon", "psiphon-cdn"} {
@@ -209,10 +210,28 @@ func TestAndroidAutoTriesIndependentWarpTransportsOnly(t *testing.T) {
 	if err != nil || len(carried) == 0 {
 		t.Fatalf("Auto over Fast lost TCP candidates: %v", err)
 	}
+	var directH3, directWG, carriedH2 bool
 	for _, profile := range carried {
-		if !profile.Has("--h2") || profile.Has("--wg") || profile.Psiphon() || profile.Has("--tor-only") {
-			t.Fatalf("TCP-only Fast carrier selected unsupported method %v", profile.Args)
+		if profile.Psiphon() || profile.Has("--tor-only") {
+			t.Fatalf("Aether Auto crossed into a different backend: %v", profile.Args)
 		}
+		if profile.LocalCarrier() {
+			if profile.Method() != "masque-h2" && profile.Method() != "gool-h2" && profile.Method() != "mim-h2" {
+				t.Fatalf("local carrier was attached to unsupported method %s", profile.Method())
+			}
+			carriedH2 = true
+			continue
+		}
+		if profile.Method() == "masque-h3" || profile.Method() == "wireguard" {
+			if profile.OwnedUpstream() {
+				t.Fatalf("direct UDP method was accidentally given a TCP carrier: %v", profile.Args)
+			}
+			if profile.Method() == "masque-h3" { directH3 = true }
+			if profile.Method() == "wireguard" { directWG = true }
+		}
+	}
+	if !carriedH2 || !directH3 || !directWG {
+		t.Fatalf("Auto must keep direct UDP methods and add compatible H2 carrier variants: carrier=%v h3=%v wg=%v", carriedH2, directH3, directWG)
 	}
 }
 
@@ -260,9 +279,26 @@ func TestAndroidAutoECHProfilesKeepDirectFallbackAndTransportIsolation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	var h2Carrier, h3Direct, wgDirect bool
 	for _, p := range carried {
-		if !aether.CanCarryLocally(p) {
-			t.Fatalf("TCP-only Fast carrier was given UDP method %s", p.Method())
+		if p.Psiphon() || p.Has("--tor-only") {
+			t.Fatalf("Aether Auto crossed into a different backend: %v", p.Args)
 		}
+		if p.LocalCarrier() {
+			if p.Method() != "masque-h2" && p.Method() != "gool-h2" && p.Method() != "mim-h2" {
+				t.Fatalf("local carrier was given unsupported method %s", p.Method())
+			}
+			h2Carrier = true
+			continue
+		}
+		if p.Method() == "masque-h3" {
+			h3Direct = !p.OwnedUpstream()
+		}
+		if p.Method() == "wireguard" {
+			wgDirect = !p.OwnedUpstream()
+		}
+	}
+	if !h2Carrier || !h3Direct || !wgDirect {
+		t.Fatalf("Auto must retain direct UDP/H3 and WireGuard and add H2 carrier variants: H2=%v H3=%v WG=%v", h2Carrier, h3Direct, wgDirect)
 	}
 }

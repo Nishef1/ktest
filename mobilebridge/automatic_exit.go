@@ -171,7 +171,7 @@ func (a *automaticExit) localCarrier() (string, error) {
 	defer a.carrierMu.Unlock()
 	if a.carrier == nil {
 		var err error
-		a.carrier, err = connectionsession.StartLocalCarrier(a.ctx, a.proxy)
+		a.carrier, err = connectionsession.StartLocalCarrierWithDNS(a.ctx, a.proxy, currentDNSOverride())
 		if err != nil {
 			return "", err
 		}

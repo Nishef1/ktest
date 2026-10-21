@@ -39,7 +39,7 @@ func startFastCarrier(ctx context.Context, nativeDir, privateDir string) (_ *fas
 		RecoverIPHostSNI: true,
 	}
 	connectionpolicy.Configure("fast", &config)
-	if config.Resolve, config.Resolve6, err = connectiondns.MobileResolvers("fast", ""); err != nil {
+	if config.Resolve, config.Resolve6, err = connectiondns.MobileResolversWithCustom("fast", "", currentDNSOverride()); err != nil {
 		return nil, err
 	}
 	proxy, err := smartproxy.New(config)

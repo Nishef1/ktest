@@ -30,6 +30,13 @@ func ECHEndpoint() smartproxy.DoHEndpoint {
 // lookups must avoid Android's system resolver. Balanced/Fast can use the
 // normal desktop system-first fallback policy for nonprotected destinations.
 func MobileResolvers(mode, exitSOCKS string) (smartproxy.Resolver, smartproxy.Resolver, error) {
+	return MobileResolversWithCustom(mode, exitSOCKS, "")
+}
+
+// MobileResolversWithCustom adds an explicitly selected DNS IP for Balanced/Fast.
+// Strict exit-only modes intentionally ignore it so a user setting cannot leak
+// protected DNS outside the verified exit.
+func MobileResolversWithCustom(mode, exitSOCKS, customDNS string) (smartproxy.Resolver, smartproxy.Resolver, error) {
 	strict := mode == "aether" || mode == "psiphon" || mode == "tor"
 	exitSOCKS = strings.TrimSpace(exitSOCKS)
 	if strict && exitSOCKS == "" {
@@ -56,6 +63,14 @@ func MobileResolvers(mode, exitSOCKS string) (smartproxy.Resolver, smartproxy.Re
 		system = func(context.Context, string, string) ([]net.IP, error) {
 			return nil, errors.New("system DNS disabled in foreign-exit-only mode")
 		}
+	} else if strings.TrimSpace(customDNS) != "" {
+		resolver, err := resolverForServer(customDNS, "", dial)
+		if err != nil {
+			return nil, nil, err
+		}
+		system = func(ctx context.Context, network, host string) ([]net.IP, error) {
+			return resolver.LookupIP(ctx, network, host)
+		}
 	}
 	options := smartproxy.TrustedOptions{
 		System: system,
@@ -71,6 +86,14 @@ func MobileResolvers(mode, exitSOCKS string) (smartproxy.Resolver, smartproxy.Re
 // MobilePacketDNS adds full wire DNS for SOCKS UDP/TUN without sending any
 // plaintext query to Android's resolver. Strict modes stay inside their exit.
 func MobilePacketDNS(mode, exitSOCKS string) (func(context.Context, []byte) ([]byte, error), func(), error) {
+	return MobilePacketDNSWithCustom(mode, exitSOCKS, "")
+}
+
+// MobilePacketDNSWithCustom tries an explicitly selected DNS IP first for
+// Balanced/Fast, then retains the existing encrypted DoH fallback. A SOCKS
+// upstream forces custom DNS over TCP through that exit. Strict modes never
+// use the plaintext override.
+func MobilePacketDNSWithCustom(mode, exitSOCKS, customDNS string) (func(context.Context, []byte) ([]byte, error), func(), error) {
 	strict := mode == "aether" || mode == "psiphon" || mode == "tor"
 	if strict && exitSOCKS == "" {
 		return nil, nil, errors.New("strict packet DNS requires a verified exit")
@@ -86,7 +109,26 @@ func MobilePacketDNS(mode, exitSOCKS string) (func(context.Context, []byte) ([]b
 		}
 	}
 	exchange, closeIdle := smartproxy.NewWireDoH(PacketEndpoints(!strict && exitSOCKS == ""), dial, nil)
-	return exchange, closeIdle, nil
+	if strict || strings.TrimSpace(customDNS) == "" {
+		return exchange, closeIdle, nil
+	}
+	customExchange, err := NewCustomWireDNS(customDNS, dial)
+	if err != nil {
+		closeIdle()
+		return nil, nil, err
+	}
+	return func(ctx context.Context, query []byte) ([]byte, error) {
+		customCtx, cancel := context.WithTimeout(ctx, 2600*time.Millisecond)
+		response, customErr := customExchange(customCtx, query)
+		cancel()
+		if customErr == nil {
+			return response, nil
+		}
+		// An unreachable custom server must not disable the existing encrypted
+		// resolver inventory; no plaintext fallback is added beyond the user's
+		// explicit choice above.
+		return exchange(ctx, query)
+	}, closeIdle, nil
 }
 
 // PacketEndpoints is the wire-DNS endpoint policy shared by both clients.

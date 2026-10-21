@@ -96,7 +96,8 @@ internal fun ConnectScreen(
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
-        if (activeMode.id == "fast") Note("Fast starts each site with the best route the tests confirmed and keeps adapting during use.")
+        if (activeMode.id == "balanced") Note("Recommended for first setup: Balanced starts independent WARP, Psiphon and Tor discovery in parallel. Psiphon/Tor do not wait for a WARP key, and only a verified working exit is promoted.")
+        if (activeMode.id == "fast") Note("Fast prioritizes quick local routes and WARP; it does not warm Psiphon/Tor fallback on startup. Choose Balanced for automatic cross-backend fallback.")
         PublicIpPanel(state == LinkState.Active)
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
@@ -498,8 +499,8 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
             var viaFast by remember { mutableStateOf(prefs.getBoolean("aether_via_fast", false)) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Through Fast", color = K.text, fontSize = 14.sp)
-                    Text("Carry Aether (and WARP registration) through Fast's anti-DPI race. TCP/HTTP2 methods only.",
+                    Text("Try local anti-DPI carrier", color = K.text, fontSize = 14.sp)
+                    Text("Auto keeps every Aether transport eligible. TCP/HTTP2 may use the local carrier; UDP/HTTP3 and WireGuard are still tried directly.",
                         color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
                 }
                 Switch(viaFast, { viaFast = it; prefs.edit().putBoolean("aether_via_fast", it).apply() }, enabled = enabled,
@@ -507,7 +508,7 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                         uncheckedThumbColor = K.muted, uncheckedTrackColor = K.surfaceHigh, uncheckedBorderColor = K.strokeStrong))
             }
             if (viaFast && method != "auto" && method !in setOf("masque-h2", "gool-h2", "mim-h2"))
-                Note("This method uses UDP or its own helper and cannot go through Fast. Choose Default or an HTTP/2 method.", Tone.Warn)
+                Note("This explicitly selected method cannot use the TCP carrier. Turn the carrier off to use it directly, or choose Auto to try all compatible transports.", Tone.Warn)
         }
         var coreLog by remember { mutableStateOf("") }
         LaunchedEffect(Unit) {
@@ -525,7 +526,7 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
             }
         }
-        Note(if (mode == "aether") "Auto tries other WARP transports when one fails. An exit located in Iran works for sites but not for AI or TikTok. A working SOCKS listener alone is not an Internet connection. First-time setup can take several minutes."
+        Note(if (mode == "aether") "Auto retries independent WARP transports; with the local carrier enabled, H2 carrier variants are added without removing direct H3/WireGuard attempts. This Aether-only mode does not silently switch to Psiphon/Tor. An exit located in Iran works for sites but not for AI or TikTok. First-time setup can take several minutes."
              else if (mode == "psiphon") "Psiphon-only avoids WARP. Use the separate CDN method if the direct Psiphon path is filtered."
              else "Tor-only does not use WARP. Circuit bootstrap and independently verified foreign exit may take several minutes.")
     }

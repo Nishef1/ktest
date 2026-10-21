@@ -254,6 +254,11 @@ class ProxyService : Service() {
                             if (wanted) {
                                 // The F&F and MASQUE SNI settings; a bad saved value falls back to auto.
                                 getSharedPreferences("ktest_android", MODE_PRIVATE).let { p ->
+                                    runCatching { Mobilebridge.setDNSOverride(p.getString("dns_override", "").orEmpty()) }
+                                        .onFailure {
+                                            p.edit().remove("dns_override").apply()
+                                            runCatching { Mobilebridge.setDNSOverride("") }
+                                        }
                                     runCatching {
                                         Mobilebridge.setAetherTLS(p.getString("aether_fingerprint", "auto"),
                                             p.getString("masque_sni", "auto"), p.getString("aether_fragment", "auto"))

@@ -39,6 +39,16 @@ Unexpected loss of an already-active Go proxy or Android packet adapter now uses
 
 These changes are code-level corrections, not a claim that the original field failure has been reproduced or fully diagnosed. The Android APK/Go CI must pass, then a physical phone should be tested for rapid taps, connect/cancel during startup, 20 connect-disconnect cycles, Wi-Fi↔cellular handover, background/resume, VPN permission revocation and sustained traffic. Record the device, Android version, mode, network and logs for any remaining drops.
 
+## Android DNS resolver testing and adaptive fallback (2026-10-21)
+
+The Android Tools screen now has a DNS resolver test that accepts up to 12 IP-literal DNS servers (optional port), queries A records over UDP and TCP without using system DNS for the probe, and tests TLS against the returned public addresses. A resolver is recommended only if it returns a usable public DNS answer and at least one verified HTTPS/TLS handshake succeeds. A DNS reply alone is not reported as Internet access.
+
+A selected IP resolver is stored in app preferences and applied on the next connection for Balanced/Fast and the optional local anti-DPI carrier. Custom DNS is an explicit plaintext opt-in; if it fails, the existing encrypted DoH endpoint set remains available. Aether/Psiphon/Tor protected packet DNS continues to require the verified exit and ignores the plaintext override, preventing a user preference from bypassing strict DNS isolation. Automatic DNS restores the built-in adaptive encrypted resolver policy.
+
+Aether Auto with the local anti-DPI carrier now retains direct H3/WireGuard attempts while adding separate H2 carrier variants. Only compatible TCP/H2 profiles are carried; UDP/H3 profiles are not silently forced through TCP SOCKS. The dedicated Aether mode remains WARP-only. Balanced is the recommended first-run policy: it warms independent WARP, Psiphon and Tor discovery in parallel, so Psiphon/Tor bootstrap does not wait for a WARP identity/key. Fast intentionally remains the lower-latency WARP/local-route policy and does not warm Psiphon/Tor on startup.
+
+The Go/Android CI build and physical-device acceptance for these changes remain pending. Device checks should cover resolver scans with blocked/working UDP and TCP, automatic resolver reset, selected DNS on the next Balanced/Fast connection, strict-mode DNS isolation, first-run with missing WARP identity, and Auto with H2 blocked but H3/WireGuard available.
+
 ## Performance architecture observed in source
 
 - Balanced/Fast Go SmartProxy uses a maximum of six simultaneous route attempts. The initial preferred-path head start is 200 ms for Balanced and 125 ms for Fast; these are policy constants, not measured end-to-end latency.

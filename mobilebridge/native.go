@@ -67,7 +67,7 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 	if viaFast && mode == "aether" {
 		profiles = tcpCarriedProfiles(profiles)
 		if len(profiles) == 0 {
-			return aether.Profile{}, errors.New("through Fast only TCP methods work (MASQUE, Gool or MASQUE-in-MASQUE over HTTP/2); choose one of those")
+			return aether.Profile{}, errors.New("no compatible TCP/HTTP2 profile can use the local anti-DPI carrier")
 		}
 	}
 	if len(profiles) == 0 {
@@ -78,9 +78,9 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 	return profiles[0], nil
 }
 
-// nativeAutoCandidates are distinct WARP transports, not Psiphon/Tor
-// substitutes. Android Auto must try another protocol after a failed native
-// exit rather than calling the first profile "automatic".
+// nativeAutoCandidates keeps independent WARP transports eligible, not just
+// Psiphon/Tor substitutes. When a local carrier is available it adds separate
+// H2 variants while retaining direct H3/WireGuard profiles.
 func nativeAutoCandidates(viaCarrier bool) ([]aether.Profile, error) {
 	return nativeAutoCandidatesWithECH(viaCarrier, "", "")
 }
@@ -93,7 +93,9 @@ func nativeAutoCandidatesWithECH(viaCarrier bool, ech, ip string) ([]aether.Prof
 	shape, _ := mobileTLSShape(context.Background(), "", false)
 	profiles = aether.ProfilesForMode(shapeProfiles(profiles, shape, nil), "aether")
 	if viaCarrier {
-		profiles = tcpCarriedProfiles(profiles)
+		// Auto must keep direct H3/WireGuard profiles eligible and add
+		// separate local-carrier variants only for compatible TCP/H2 methods.
+		profiles = aether.WithLocalCarriers(profiles)
 	}
 	var candidates []aether.Profile
 	for _, p := range profiles {
@@ -144,10 +146,10 @@ func nativeAutoAttemptProfiles(profiles []aether.Profile) []aether.Profile {
 	return append(quick, profiles...)
 }
 
-// launchVerifiedNativeAuto reuses the upstream Aether's own gateway scan
-// within each transport. Only independent protocol/profile attempts happen
-// here. The first actual HTTPS-verified WARP carrier wins; failed processes
-// are stopped before the next candidate starts.
+// launchVerifiedNativeAuto reuses Aether's own gateway scan within each
+// transport. Direct H3/WireGuard and local-carried H2 profiles remain separate.
+// The first HTTPS-verified WARP transport wins; failed processes are stopped
+// before the next candidate starts.
 func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore, observedExit, error) {
 	// Discover ECH only once per automatic startup. Blocked ECH lookup must
 	// not suppress ordinary MASQUE H2/H3 or WireGuard profiles.
@@ -249,7 +251,10 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 		if err != nil {
 			return nil, err
 		}
-	} else if o.carrier != "" {
+	} else if o.carrier != "" && mode != "aether" {
+		// Dedicated Psiphon/Tor carrier mode sends their own traffic through
+		// Fast. Aether Auto only binds profiles carrying our explicit placeholder;
+		// its UDP/H3/WireGuard candidates must stay direct.
 		args = append(args, "--upstream", "socks5://"+o.carrier)
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -371,12 +376,12 @@ func waitNativeWithProbe(ctx context.Context, mode string, n *nativeCore, probe 
 	}
 }
 
-// This explicit WARP carrier selector is TCP-only. Balanced separately keeps
-// both direct and carried Psiphon/Tor profiles, including native UDP options.
+// tcpCarriedProfiles returns explicit local-carrier variants for methods that
+// support TCP/H2. It never substitutes the carrier for direct UDP/H3 profiles.
 func tcpCarriedProfiles(profiles []aether.Profile) []aether.Profile {
 	var out []aether.Profile
-	for _, p := range profiles {
-		if aether.CanCarryLocally(p) {
+	for _, p := range aether.WithLocalCarriers(profiles) {
+		if p.LocalCarrier() {
 			out = append(out, p)
 		}
 	}
