@@ -6,8 +6,8 @@ import struct
 import urllib.request
 import zipfile
 
-URL = "https://github.com/XTLS/Xray-core/releases/download/v26.10.10/Xray-android-arm64-v8a.zip"
-EXPECTED = "cbd594a6dfd4bef98283788e10fb2c299cb3c8af61b5b3ffdb1be4e96da955ef"
+URL = "https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-android-arm64-v8a.zip"
+EXPECTED = "d81604f35a56c98ea6091142c1c744f4895c7384bc2e1c85cd910612c70794e9"
 with urllib.request.urlopen(URL, timeout=120) as src:
     raw = src.read(48 << 20)
 if hashlib.sha256(raw).hexdigest() != EXPECTED:

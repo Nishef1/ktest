@@ -22,11 +22,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $zip = Join-Path $env:RUNNER_TEMP "xray-windows-26.10.10.zip"
-          $dest = Join-Path $env:RUNNER_TEMP "xray-windows-26.10.10"
-          Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/download/v26.10.10/Xray-windows-64.zip" -OutFile $zip
+          $zip = Join-Path $env:RUNNER_TEMP "xray-windows-26.10.21.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "xray-windows-26.10.21"
+          Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-windows-64.zip" -OutFile $zip
           $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
-          if ($actual -ne "bfefce8e9804e53b7d75b7c49d958b34e89890d9d5e672329089d1b3111647af") {
+          if ($actual -ne "fc58c39ee2f2717b4c54d28d374362389e5319b20ae44aea76ea45a5243ec827") {
             throw "Official Xray archive SHA-256 mismatch"
           }
           Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force

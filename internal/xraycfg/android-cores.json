@@ -1,11 +1,11 @@
 {
   "repository": "https://github.com/XTLS/Xray-core",
-  "version": "v26.10.10",
+  "version": "v26.10.21",
   "optional_abis": true,
   "abis": {
     "arm64-v8a": {
       "archive": "Xray-android-arm64-v8a.zip",
-      "sha256": "cbd594a6dfd4bef98283788e10fb2c299cb3c8af61b5b3ffdb1be4e96da955ef",
+      "sha256": "d81604f35a56c98ea6091142c1c744f4895c7384bc2e1c85cd910612c70794e9",
       "bits": 64,
       "machine": 183,
       "min_load_alignment": 16384,
@@ -13,7 +13,7 @@
         {
           "source": "xray",
           "name": "libxray.so",
-          "sha256": "3f410bc6ef823f12a54bee24428026ff8c429b9820e1adb6f90f9f635a554264"
+          "sha256": "c50408346deb5e38dbacb31e37aa09c64b7dd6eaf3c050c8cbac47e816464143"
         }
       ]
     }

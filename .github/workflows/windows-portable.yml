@@ -39,7 +39,7 @@ jobs:
             $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
             if ($actual -ne $sha256) { throw "SHA-256 mismatch for $path" }
           }
-          DownloadVerified "https://github.com/XTLS/Xray-core/releases/download/v26.10.10/Xray-windows-64.zip" "build/xray.zip" "bfefce8e9804e53b7d75b7c49d958b34e89890d9d5e672329089d1b3111647af"
+          DownloadVerified "https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-windows-64.zip" "build/xray.zip" "fc58c39ee2f2717b4c54d28d374362389e5319b20ae44aea76ea45a5243ec827"
           Expand-Archive -LiteralPath build/xray.zip -DestinationPath build/xray -Force
           $xray = Get-ChildItem -Path build/xray -Filter xray.exe -File -Recurse | Select-Object -First 1
           if ($null -eq $xray) { throw "Official Xray zip did not contain xray.exe" }
@@ -189,7 +189,7 @@ jobs:
           }
           & ./portable/ktest/ktest.exe strategies -write
           if ($LASTEXITCODE -ne 0) { throw "Could not write the editable ByeDPI strategy list" }
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/XTLS/Xray-core/v26.10.10/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Xray-MPL-2.0.txt
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/XTLS/Xray-core/v26.10.21/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Xray-MPL-2.0.txt
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/hufrea/byedpi/v0.17.3/LICENSE" -OutFile portable/ktest/THIRD_PARTY/ByeDPI-MIT.txt
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/patterniha/Serverless-for-Iran/$rev/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Serverless-GPL-3.0.txt
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-box/v1.14.3/LICENSE" -OutFile portable/ktest/THIRD_PARTY/sing-box-GPL-3.0.txt
@@ -224,7 +224,7 @@ jobs:
             throw "New versioned Aether install not selected: $($aetherStatus -join ' ')"
           }
           $version = & ./portable/ktest/cores/xray.exe version
-          if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.10\.10")) {
+          if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.10\.21")) {
             throw "Bundled Xray did not start or returned unexpected version"
           }
           $sb = & ./portable/ktest/cores/sing-box.exe version

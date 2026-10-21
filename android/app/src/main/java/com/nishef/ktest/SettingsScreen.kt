@@ -50,8 +50,8 @@ private data class Notice(val name: String, val detail: String, val license: Str
 private val notices = listOf(
     Notice("ByeDPI v0.17.3", "hufrea · local anti-DPI strategies shared with desktop", "MIT",
         "https://github.com/hufrea/byedpi/tree/v0.17.3"),
-    Notice("Xray v26.10.10", "XTLS · official ARMv8 native TLS fragmentation core", "MPL-2.0",
-        "https://github.com/XTLS/Xray-core/releases/tag/v26.10.10"),
+    Notice("Xray v26.10.21", "XTLS · official ARMv8 native TLS fragmentation core", "MPL-2.0",
+        "https://github.com/XTLS/Xray-core/releases/tag/v26.10.21"),
     Notice("Aether v2.3.1", "patterniha release · MASQUE / WireGuard / Tor / Psiphon core", "AGPL-3.0",
         "https://github.com/patterniha/Aether/releases/tag/v2.3.1"),
     Notice("psiphon-tunnel-core", "CluvexStudio fork, shirokhorshid @ 83aa73b", "GPL-3.0",
