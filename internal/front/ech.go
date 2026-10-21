@@ -169,14 +169,22 @@ const (
 
 var echBootstrap struct {
 	sync.Mutex
-	config []byte
-	edge   string
-	err    error
-	at     time.Time
+	config   []byte
+	edge     string
+	err      error
+	at       time.Time
+	inflight chan struct{} // closed when the running fetch has stored its result
+	fetch    func(context.Context) ([]byte, string, error)
 }
 
-// SharedCloudflareECH is FetchCloudflareECH with the shared result above. Explicit
-// diagnostics call FetchCloudflareECH to measure the network afresh.
+// echBootstrapBudget bounds the shared fetch itself: three edges, 5s each.
+const echBootstrapBudget = 16 * time.Second
+
+// SharedCloudflareECH is FetchCloudflareECH with the shared result above. The
+// fetch runs on its own deadline and stores its answer even when this caller
+// stops waiting: a blackholed cloudflare-ech.com (timeouts, observed
+// 2026-10-21) otherwise outlasts every short caller and is never remembered.
+// Explicit diagnostics call FetchCloudflareECH to measure afresh.
 func SharedCloudflareECH(ctx context.Context) ([]byte, string, error) {
 	echBootstrap.Lock()
 	age := time.Since(echBootstrap.at)
@@ -188,15 +196,37 @@ func SharedCloudflareECH(ctx context.Context) ([]byte, string, error) {
 		defer echBootstrap.Unlock()
 		return nil, "", fmt.Errorf("ECH bootstrap failed %s ago (not retried yet): %w", age.Round(time.Second), echBootstrap.err)
 	}
+	if echBootstrap.inflight == nil {
+		done := make(chan struct{})
+		echBootstrap.inflight = done
+		fetch := echBootstrap.fetch
+		if fetch == nil {
+			fetch = FetchCloudflareECH
+		}
+		go func() {
+			fctx, cancel := context.WithTimeout(context.Background(), echBootstrapBudget)
+			config, edge, err := fetch(fctx)
+			cancel()
+			echBootstrap.Lock()
+			echBootstrap.config, echBootstrap.edge, echBootstrap.err, echBootstrap.at = config, edge, err, time.Now()
+			echBootstrap.inflight = nil
+			echBootstrap.Unlock()
+			close(done)
+		}()
+	}
+	done := echBootstrap.inflight
 	echBootstrap.Unlock()
-	config, edge, err := FetchCloudflareECH(ctx)
-	if err != nil && ctx.Err() != nil {
-		return nil, "", err
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
 	}
 	echBootstrap.Lock()
-	echBootstrap.config, echBootstrap.edge, echBootstrap.err, echBootstrap.at = config, edge, err, time.Now()
-	echBootstrap.Unlock()
-	return config, edge, err
+	defer echBootstrap.Unlock()
+	if echBootstrap.config != nil {
+		return echBootstrap.config, echBootstrap.edge, nil
+	}
+	return nil, "", echBootstrap.err
 }
 
 // FetchCloudflareECH asks a Cloudflare edge address for the current ECH

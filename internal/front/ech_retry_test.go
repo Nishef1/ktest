@@ -141,3 +141,44 @@ func TestSharedECHBootstrapRemembersDefiniteResults(t *testing.T) {
 		t.Fatalf("shared success = %v %q %v", cfg, edge, err)
 	}
 }
+
+// A blackholed bootstrap outlasts a short caller; its result must still be
+// stored so the next attempt does not wait again.
+func TestSharedECHBootstrapStoresResultAfterCallerGivesUp(t *testing.T) {
+	release := make(chan struct{})
+	echBootstrap.Lock()
+	echBootstrap.config, echBootstrap.err, echBootstrap.at = nil, nil, time.Time{}
+	echBootstrap.fetch = func(context.Context) ([]byte, string, error) {
+		<-release
+		return nil, "", errors.New("i/o timeout")
+	}
+	echBootstrap.Unlock()
+	t.Cleanup(func() {
+		echBootstrap.Lock()
+		echBootstrap.config, echBootstrap.edge, echBootstrap.err, echBootstrap.at, echBootstrap.fetch = nil, "", nil, time.Time{}, nil
+		echBootstrap.Unlock()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, _, err := SharedCloudflareECH(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("short caller = %v", err)
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		echBootstrap.Lock()
+		stored := echBootstrap.err != nil
+		echBootstrap.Unlock()
+		if stored {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background result was never stored")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	began := time.Now()
+	if _, _, err := SharedCloudflareECH(context.Background()); err == nil || time.Since(began) > 100*time.Millisecond {
+		t.Fatalf("stored failure not reused: %v after %s", err, time.Since(began))
+	}
+}
