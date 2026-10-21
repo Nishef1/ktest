@@ -198,3 +198,30 @@ func TestBalancedUDPUsesVerifiedExitInsteadOfFrozenLocalTCPMethod(t *testing.T) 
 		t.Fatalf("protected UDP escaped empty frozen exit pin: %+v", got)
 	}
 }
+
+// Aether mode: a working WARP carrier that geolocates to Iran relays UDP
+// (QUIC, calls) for ordinary names, end to end through SOCKS5 UDP ASSOCIATE,
+// while protected names never reach it.
+func TestAetherUDPRidesWorkingCarrierEndToEnd(t *testing.T) {
+	_, upstream, _ := packetProxy(t, Config{Upstreams: PlainUpstreams(),
+		ExchangeDNS: func(_ context.Context, b []byte) ([]byte, error) { return b, nil },
+	})
+	_, address, _ := packetProxy(t, Config{
+		Upstreams:     []Upstream{{Name: "carrier", Addr: upstream, Exit: true}},
+		ExitOnly:      func(host string) bool { return host == "chatgpt.com" },
+		ExitRequired:  func(string) bool { return true },
+		VerifyCarrier: func(context.Context, Upstream) error { return nil },
+	})
+	e := associate(t, address)
+	ordinary, _ := udpPacket("www.youtube.com", "53", []byte("QUIC-like payload"))
+	_, _ = e.socket.Write(ordinary)
+	receiveUDP(t, e, ordinary)
+
+	protected := associate(t, address)
+	packet, _ := udpPacket("chatgpt.com", "53", []byte("AI payload"))
+	_, _ = protected.socket.Write(packet)
+	_ = protected.socket.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, err := protected.socket.Read(make([]byte, 2048)); err == nil {
+		t.Fatal("protected UDP rode an Iran-located carrier")
+	}
+}

@@ -30,7 +30,8 @@ type tunnel struct {
 // startTunnel brings the tunnel up in front of the proxy on socksPort and
 // verifies it with a real system-routed request. If nothing gets through it
 // stops again at once, so a failed attempt never leaves the PC without network.
-func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, t *term) *tunnel {
+// udp carries non-DNS UDP into the proxy (see systemtun.Options.UDP).
+func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, udp bool, t *term) *tunnel {
 	if !systemtun.IsAdmin() {
 		t.Line(toneWarn, "The system-wide tunnel needs Administrator; it was not started.")
 		t.Note("Choose Whole PC coverage in menu 7, then a policy (1-4, 6), or run `ktest connect -mode <policy> -tun` as Administrator.")
@@ -78,7 +79,7 @@ func startTunnel(ctx context.Context, base string, socksPort int, verbose bool, 
 		// Restore the original Go resolver as soon as the tunnel exits.
 		defer tn.restoreDNS()
 		err := systemtun.StartSystem(tctx, filepath.Join(base, "cores"), systemtun.Options{
-			SocksPort: socksPort, PhysicalNIC: nic, DirectProcessPaths: direct,
+			SocksPort: socksPort, PhysicalNIC: nic, DirectProcessPaths: direct, UDP: udp,
 		}, logs)
 		if err != nil && tctx.Err() == nil {
 			logs.Write([]byte(err.Error() + "\n"))

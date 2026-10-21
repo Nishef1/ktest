@@ -62,6 +62,12 @@ type Options struct {
 	// DirectProcessPaths matches the exact executables launched by ktest.
 	// This avoids exempting unrelated programs that share a helper's filename.
 	DirectProcessPaths []string
+	// UDP sends non-DNS UDP (QUIC, games, calls) to the proxy's SOCKS5 UDP
+	// ASSOCIATE instead of rejecting it. Only for modes whose every
+	// destination rides an exit that relays UDP (Aether: verified 2026-10-21,
+	// v2.3.2 carries UDP over MASQUE H2); elsewhere a rejection lets
+	// applications fall back to TCP at once instead of timing out.
+	UDP bool
 	// BlockPageCIDRs are private ranges that a poisoning resolver answers with
 	// (Iran: 10.10.34.0/24). They are not the LAN; they go to the proxy, which
 	// recovers the real name from the TLS SNI.
@@ -75,8 +81,8 @@ var DefaultBlockPage = []string{"10.10.34.0/24"}
 // tunnel. Names are answered with fake addresses from a private pool and mapped
 // back when the connection arrives, so the proxy always receives the real host
 // name and the (poisoned or filtered) DNS is never consulted by applications.
-// TCP only: UDP other than DNS is rejected with ICMP port unreachable so that
-// applications can fall back to TCP without waiting for a silent timeout.
+// Unless o.UDP, UDP other than DNS is rejected with ICMP port unreachable so
+// that applications can fall back to TCP without waiting for a silent timeout.
 func BuildSystemConfig(o Options) ([]byte, error) {
 	if o.SocksPort < 1 || o.SocksPort > 65535 {
 		return nil, errors.New("invalid local SOCKS port")
@@ -107,10 +113,15 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 	if len(block) > 0 {
 		rules = append(rules, map[string]any{"ip_cidr": block, "action": "route", "outbound": "ktest"})
 	}
-	rules = append(rules,
-		map[string]any{"ip_is_private": true, "action": "route", "outbound": "physical"},
-		map[string]any{"network": "udp", "action": "reject", "method": "default", "no_drop": true},
-	)
+	rules = append(rules, map[string]any{"ip_is_private": true, "action": "route", "outbound": "physical"})
+	ktest := map[string]any{"type": "socks", "tag": "ktest", "server": "127.0.0.1", "server_port": o.SocksPort, "version": "5", "network": "tcp"}
+	if o.UDP {
+		// Both networks: UDP reaches the proxy as SOCKS5 UDP ASSOCIATE,
+		// whose policy decides per destination (never a direct UDP socket).
+		delete(ktest, "network")
+	} else {
+		rules = append(rules, map[string]any{"network": "udp", "action": "reject", "method": "default", "no_drop": true})
+	}
 	root := map[string]any{
 		"log": map[string]any{"level": "warn"},
 		"dns": map[string]any{
@@ -132,7 +143,7 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 			"auto_route": true, "strict_route": false, "stack": "gvisor",
 		}},
 		"outbounds": []any{
-			map[string]any{"type": "socks", "tag": "ktest", "server": "127.0.0.1", "server_port": o.SocksPort, "version": "5", "network": "tcp"},
+			ktest,
 			map[string]any{"type": "direct", "tag": "physical", "bind_interface": o.PhysicalNIC},
 		},
 		"route": map[string]any{"rules": rules, "final": "ktest", "auto_detect_interface": true, "default_domain_resolver": "local"},

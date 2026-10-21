@@ -1151,13 +1151,16 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	if o.tun {
 		coverage = "TUN inactive · local proxy listener only"
 		if verdict != toneFail {
-			tn = startTunnel(ctx, o.base, lport, o.verbose, t)
+			tn = startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t)
 			defer tn.stop(t)
 			if ctx.Err() != nil {
 				return 0
 			}
 			if tn != nil {
 				coverage = "TUN active · TCP path verified; helper/LAN traffic exempt, most UDP rejected; Windows DNS may leak"
+				if o.mode.tunUDP() {
+					coverage = "TUN active · TCP path verified; UDP (QUIC, calls) through the WARP exit; helper/LAN traffic exempt; Windows DNS may leak"
+				}
 				verdict = toneOK
 			} else {
 				verdict = toneWarn
@@ -1308,7 +1311,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			if tunPending && exitReady(o.mode, proxy) {
 				tunPending = false
 				t.ClearPinnedBox()
-				if tn = startTunnel(ctx, o.base, lport, o.verbose, t); tn != nil {
+				if tn = startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t); tn != nil {
 					defer tn.stop(t)
 				}
 				if ctx.Err() != nil {

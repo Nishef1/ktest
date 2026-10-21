@@ -49,6 +49,11 @@ func (m ConnectionMode) allowsXray() bool {
 	return !m.exitOnly()
 }
 
+// tunUDP: in Aether every destination rides an exit, and Aether relays SOCKS5
+// UDP ASSOCIATE through the tunnel, so the system tunnel sends UDP there
+// instead of rejecting it. Other modes have no guaranteed UDP-capable exit.
+func (m ConnectionMode) tunUDP() bool { return m == ModeAether }
+
 func (m ConnectionMode) isWindscribe() bool { return m == ModeWindscribe || m == ModeWindscribeAether }
 
 func (m ConnectionMode) configure(cfg *smartproxy.Config, rules *smartproxy.DomainRules) {

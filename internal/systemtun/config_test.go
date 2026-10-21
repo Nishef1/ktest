@@ -161,3 +161,29 @@ func TestSystemConfigExactProcessPathExemptions(t *testing.T) {
 		t.Fatalf("loop/DNS rules must follow process exemptions: %s", buf)
 	}
 }
+
+func TestSystemConfigCarriesUDPOnlyWhenAsked(t *testing.T) {
+	for _, udp := range []bool{false, true} {
+		buf, err := BuildSystemConfig(Options{SocksPort: 10800, PhysicalNIC: "Ethernet", DirectProcesses: []string{"ktest.exe"}, UDP: udp})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root struct {
+			Outbounds []map[string]any `json:"outbounds"`
+			Route     struct {
+				Rules []map[string]any `json:"rules"`
+			} `json:"route"`
+		}
+		if err := json.Unmarshal(buf, &root); err != nil {
+			t.Fatal(err)
+		}
+		rejects := false
+		for _, r := range root.Route.Rules {
+			rejects = rejects || (r["network"] == "udp" && r["action"] == "reject")
+		}
+		_, tcpOnly := root.Outbounds[0]["network"]
+		if rejects == udp || tcpOnly == udp {
+			t.Fatalf("UDP=%v: reject rule=%v, TCP-only SOCKS outbound=%v\n%s", udp, rejects, tcpOnly, buf)
+		}
+	}
+}
