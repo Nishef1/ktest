@@ -29,11 +29,19 @@ func TestDefaultProfilesIncludeNonECHIPv6Fallbacks(t *testing.T) {
 	for _, p := range profiles {
 		switch p.Method() {
 		case "masque-h2":
-			if firstH2.Label == "" { firstH2 = p }
-			if p.Has("-6") && !p.Has("--ech") { h2IPv6 = true }
+			if firstH2.Label == "" {
+				firstH2 = p
+			}
+			if p.Has("-6") && !p.Has("--ech") {
+				h2IPv6 = true
+			}
 		case "wireguard":
-			if firstWireGuard.Label == "" { firstWireGuard = p }
-			if p.Has("-6") && !p.Has("--ech") { wireGuardIPv6 = true }
+			if firstWireGuard.Label == "" {
+				firstWireGuard = p
+			}
+			if p.Has("-6") && !p.Has("--ech") {
+				wireGuardIPv6 = true
+			}
 		}
 	}
 	if !h2IPv6 || !wireGuardIPv6 {

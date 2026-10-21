@@ -310,7 +310,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		if mode == "aether" && native.profile == nil {
 			var verified observedExit
 			managed, verified, err = launchVerifiedNativeProfiles(startContext, *native)
-			if err == nil { verifiedNative = &verified }
+			if err == nil {
+				verifiedNative = &verified
+			}
 		} else {
 			managed, err = launchNative(startContext, mode, *native)
 		}

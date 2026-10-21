@@ -34,12 +34,10 @@ func fastEnrollmentRoutes(routes []enrollmentRoute) []enrollmentRoute {
 
 // Registration is HTTPS for both protocols. A Psiphon carrier here carries
 // only enrollment, not subsequent WireGuard traffic. An IP override alone
-// still exposes the API's TLS name; ECH is supplied explicitly when available.
-// ECH goes first and never with --fragment: measured on an Iranian ISP
-// (2026-10-20), the API name was cut whatever the splitting (TCP segments,
-// TLS records, ByeDPI, Aether's own fragmenting), while ECH with an
-// unfiltered outer name (cloudflare-ech.com) registered at once. Each failed
-// route costs about a minute of retries before the next one runs.
+// still exposes the API's TLS name. Recent reports say the visible ECH public
+// name can be filtered, so prefer a working local proxy, the F&F exit-node and
+// fragmented registration TLS before trying ECH; keep Psiphon as a last resort.
+
 func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enrollmentRoute {
 	var routes []enrollmentRoute
 	// An explicitly supplied/working local proxy is the first choice. The

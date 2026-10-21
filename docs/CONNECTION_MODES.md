@@ -62,11 +62,14 @@ The report describes these candidates:
 
 KTest now has non-ECH IPv6 candidates for native MASQUE H2 and WireGuard, and
 both terminal and Android try IPv4/IPv6 variants within the selected protocol.
-The generic CDN/Worker recipe is **not** implemented as a KTest tunnel mode:
-CDN scanning tests provider reachability, and its current fronting feature is
-not an arbitrary Xray Worker/WS/XHTTP profile importer. Do not apply Xray's
-`unsafe` fingerprint or ALPN settings to Aether's native TLS profiles. The
-example IP is a candidate, not a permanent endpoint.
+KTest's CDN scanner is not a Worker tunnel builder. The repository has a
+separate Xray-profile path, but the field summary lacks a complete
+server-specific configuration (domain, transport/path, UUID and origin), so it
+is not enough to generate a working Worker WS/XHTTP profile. Do not apply
+Xray's `unsafe` fingerprint or ALPN settings to Aether's native TLS profiles.
+The example IP is a candidate, not a permanent endpoint.
+
+Related X thread: https://x.com/SarinaNeverDies/status/2112978692473311299
 
 ECH registration and ECH-dependent profiles are skipped when the direct
 bootstrap itself fails (rechecked every five minutes); use another app's local

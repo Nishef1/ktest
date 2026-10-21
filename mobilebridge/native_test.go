@@ -93,7 +93,9 @@ func TestNativeProfilesConsumeSavedTLSCalibration(t *testing.T) {
 
 func TestAndroidAutoGivesIPv4IPv6AndIndependentTransportsAQuickPassBeforeFullScans(t *testing.T) {
 	profiles, err := nativeAutoCandidatesWithECH(false, "ECH", "1.1.1.1")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	attempts := nativeAutoAttemptProfiles(profiles)
 	const quickCount = 5 // H2 IPv4/IPv6, H3 IPv4, WireGuard IPv4/IPv6.
 	if len(attempts) != len(profiles)+quickCount {
@@ -109,35 +111,55 @@ func TestAndroidAutoGivesIPv4IPv6AndIndependentTransportsAQuickPassBeforeFullSca
 		seen[key] = true
 	}
 	for _, want := range []string{"masque-h2", "masque-h2/ipv6", "masque-h3", "wireguard", "wireguard/ipv6"} {
-		if !seen[want] { t.Fatalf("quick pass omitted %s: %v", want, seen) }
+		if !seen[want] {
+			t.Fatalf("quick pass omitted %s: %v", want, seen)
+		}
 	}
 	for i, p := range profiles {
-		if attempts[i+quickCount].ID() != p.ID() { t.Fatal("full-scan recovery changed or dropped a profile") }
+		if attempts[i+quickCount].ID() != p.ID() {
+			t.Fatal("full-scan recovery changed or dropped a profile")
+		}
 	}
 }
 
 func TestAndroidExplicitAetherMethodScansOnlyItsIPv4IPv6Variants(t *testing.T) {
 	profiles, err := nativeAutoCandidatesWithECH(false, "ECH", "1.1.1.1")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	selected, err := nativeProfilesForSelection(profiles, "wireguard", false)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	hasIPv6 := false
 	for _, p := range selected {
-		if p.Method() != "wireguard" { t.Fatalf("explicit WireGuard selection crossed transports: %+v", p) }
+		if p.Method() != "wireguard" {
+			t.Fatalf("explicit WireGuard selection crossed transports: %+v", p)
+		}
 		hasIPv6 = hasIPv6 || p.Has("-6")
 	}
-	if len(selected) < 2 || !hasIPv6 { t.Fatalf("explicit WireGuard must retain IPv4 and IPv6 variants: %+v", selected) }
+	if len(selected) < 2 || !hasIPv6 {
+		t.Fatalf("explicit WireGuard must retain IPv4 and IPv6 variants: %+v", selected)
+	}
 
 	carrierProfiles, err := nativeAutoCandidates(true)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	carriedH2, err := nativeProfilesForSelection(carrierProfiles, "masque-h2", true)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	hasCarriedIPv6 := false
 	for _, p := range carriedH2 {
-		if p.Method() != "masque-h2" || !p.LocalCarrier() { t.Fatalf("explicit H2 through Fast selected an incompatible profile: %+v", p) }
+		if p.Method() != "masque-h2" || !p.LocalCarrier() {
+			t.Fatalf("explicit H2 through Fast selected an incompatible profile: %+v", p)
+		}
 		hasCarriedIPv6 = hasCarriedIPv6 || p.Has("-6")
 	}
-	if !hasCarriedIPv6 { t.Fatalf("explicit H2 through Fast lost its IPv6 carrier variant: %+v", carriedH2) }
+	if !hasCarriedIPv6 {
+		t.Fatalf("explicit H2 through Fast lost its IPv6 carrier variant: %+v", carriedH2)
+	}
 	if _, err := nativeProfilesForSelection(carrierProfiles, "wireguard", true); err == nil {
 		t.Fatal("WireGuard must not be silently forced through the TCP carrier")
 	}
@@ -351,21 +373,34 @@ func TestAndroidAutoTriesIndependentWarpTransportsOnly(t *testing.T) {
 
 func TestAndroidAutoCarrierQuickPassKeepsDirectAndCarriedIPv4IPv6RoutesSeparate(t *testing.T) {
 	profiles, err := nativeAutoCandidates(true)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	attempts := nativeAutoAttemptProfiles(profiles)
 	const quickCount = 7
-	if len(attempts) < quickCount { t.Fatalf("carrier Auto did not produce a complete quick pass: %v", attempts) }
+	if len(attempts) < quickCount {
+		t.Fatalf("carrier Auto did not produce a complete quick pass: %v", attempts)
+	}
 	var directH2, directH2v6, directH3, directWG, directWGv6, carriedH2, carriedH2v6 bool
 	for _, profile := range attempts[:quickCount] {
-		if profile.Value("--scan") != "turbo" { t.Fatalf("full scan was scheduled before IPv4/IPv6 quick attempts: %v", attempts[:quickCount]) }
+		if profile.Value("--scan") != "turbo" {
+			t.Fatalf("full scan was scheduled before IPv4/IPv6 quick attempts: %v", attempts[:quickCount])
+		}
 		switch {
-		case profile.LocalCarrier() && profile.Method() == "masque-h2" && profile.Has("-6"): carriedH2v6 = true
-		case profile.LocalCarrier() && profile.Method() == "masque-h2": carriedH2 = true
-		case !profile.LocalCarrier() && profile.Method() == "masque-h2" && profile.Has("-6"): directH2v6 = true
-		case !profile.LocalCarrier() && profile.Method() == "masque-h2": directH2 = true
-		case !profile.LocalCarrier() && profile.Method() == "masque-h3": directH3 = true
-		case !profile.LocalCarrier() && profile.Method() == "wireguard" && profile.Has("-6"): directWGv6 = true
-		case !profile.LocalCarrier() && profile.Method() == "wireguard": directWG = true
+		case profile.LocalCarrier() && profile.Method() == "masque-h2" && profile.Has("-6"):
+			carriedH2v6 = true
+		case profile.LocalCarrier() && profile.Method() == "masque-h2":
+			carriedH2 = true
+		case !profile.LocalCarrier() && profile.Method() == "masque-h2" && profile.Has("-6"):
+			directH2v6 = true
+		case !profile.LocalCarrier() && profile.Method() == "masque-h2":
+			directH2 = true
+		case !profile.LocalCarrier() && profile.Method() == "masque-h3":
+			directH3 = true
+		case !profile.LocalCarrier() && profile.Method() == "wireguard" && profile.Has("-6"):
+			directWGv6 = true
+		case !profile.LocalCarrier() && profile.Method() == "wireguard":
+			directWG = true
 		}
 	}
 	if !directH2 || !directH2v6 || !directH3 || !directWG || !directWGv6 || !carriedH2 || !carriedH2v6 {
@@ -402,16 +437,20 @@ func TestAndroidAutoECHProfilesKeepDirectFallbackAndTransportIsolation(t *testin
 	if ech == 0 || fallback == 0 {
 		t.Fatalf("ECH-only catalog has no connection fallback: ECH=%d direct=%d", ech, fallback)
 	}
-	firstMethods := map[string]bool{}
-	for _, p := range withECH[:min(3, len(withECH))] {
-		if p.Has("--ech") || firstMethods[p.Method()] {
+	firstFamilies := map[string]bool{}
+	for _, p := range withECH[:min(5, len(withECH))] {
+		key := p.Method()
+		if p.Has("-6") {
+			key += "/ipv6"
+		}
+		if p.Has("--ech") || firstFamilies[key] {
 			t.Fatalf("Android Auto spent its first startup attempts on duplicate/ECH variants: %v", p.Args)
 		}
-		firstMethods[p.Method()] = true
+		firstFamilies[key] = true
 	}
-	for _, method := range []string{"masque-h2", "masque-h3", "wireguard"} {
-		if !firstMethods[method] {
-			t.Fatalf("independent transport %s is starved behind slow variants", method)
+	for _, family := range []string{"masque-h2", "masque-h2/ipv6", "masque-h3", "wireguard", "wireguard/ipv6"} {
+		if !firstFamilies[family] {
+			t.Fatalf("independent IPv4/IPv6 candidate %s is starved behind slow variants", family)
 		}
 	}
 	carried, err := nativeAutoCandidatesWithECH(true, "valid-config", "162.159.197.1")

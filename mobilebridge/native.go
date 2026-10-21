@@ -146,8 +146,12 @@ func nativeAutoCandidatesWithECHAndPrivateDir(viaCarrier bool, ech, ip, privateD
 	taken := make([]bool, len(candidates))
 	for i, p := range candidates {
 		key := p.Method()
-		if p.Has("-6") { key += "/ipv6" }
-		if p.Has("--ech") || methods[key] { continue }
+		if p.Has("-6") {
+			key += "/ipv6"
+		}
+		if p.Has("--ech") || methods[key] {
+			continue
+		}
 		methods[key] = true
 		taken[i] = true
 		ordered = append(ordered, p)
@@ -169,11 +173,17 @@ func nativeProfilesForSelection(profiles []aether.Profile, method string, viaFas
 		profiles = aether.FilterMethod(profiles, method)
 		if viaFast {
 			var carried []aether.Profile
-			for _, p := range profiles { if p.LocalCarrier() { carried = append(carried, p) } }
+			for _, p := range profiles {
+				if p.LocalCarrier() {
+					carried = append(carried, p)
+				}
+			}
 			profiles = carried
 		}
 	}
-	if len(profiles) == 0 { return nil, fmt.Errorf("no compatible Aether profile for selected method %q", method) }
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("no compatible Aether profile for selected method %q", method)
+	}
 	return profiles, nil
 }
 
@@ -184,8 +194,12 @@ func nativeAutoAttemptProfiles(profiles []aether.Profile) []aether.Profile {
 		// A carried H2 profile is a distinct bootstrap route from direct H2.
 		// Give it a quick pass too, without starving direct H3/WireGuard.
 		key := p.Method()
-		if p.Has("-6") { key += "/ipv6" }
-		if p.LocalCarrier() { key += "/local-carrier" }
+		if p.Has("-6") {
+			key += "/ipv6"
+		}
+		if p.LocalCarrier() {
+			key += "/local-carrier"
+		}
 		if seen[key] {
 			continue
 		}
@@ -198,10 +212,10 @@ func nativeAutoAttemptProfiles(profiles []aether.Profile) []aether.Profile {
 	return append(quick, profiles...)
 }
 
-// launchVerifiedNativeAuto reuses Aether's own gateway scan within each
-// transport. Direct H3/WireGuard and local-carried H2 profiles remain separate.
-// The first HTTPS-verified WARP transport wins; failed processes are stopped
-// before the next candidate starts.
+// launchVerifiedNativeProfiles reuses Aether's own gateway scan for each
+// candidate. Auto can try independent WARP transports; an explicit method has
+// already been filtered to that transport. Failed processes stop before the
+// next IPv4/IPv6, ECH/non-ECH or compatible carrier candidate starts.
 func launchVerifiedNativeProfiles(ctx context.Context, o nativeOptions) (*nativeCore, observedExit, error) {
 	// Discover ECH once, but keep non-ECH IPv4/IPv6 profiles first. A failed
 	// ECH bootstrap must not suppress ordinary MASQUE H2/H3 or WireGuard routes.
@@ -212,9 +226,13 @@ func launchVerifiedNativeProfiles(ctx context.Context, o nativeOptions) (*native
 	}
 	stopDiscovery()
 	profiles, err := nativeAutoCandidatesWithECHAndPrivateDir(o.carrier != "", ech, ip, o.privateDir)
-	if err != nil { return nil, observedExit{}, err }
+	if err != nil {
+		return nil, observedExit{}, err
+	}
 	profiles, err = nativeProfilesForSelection(profiles, o.method, o.carrier != "")
-	if err != nil { return nil, observedExit{}, err }
+	if err != nil {
+		return nil, observedExit{}, err
+	}
 	var lastErr error
 	for _, profile := range nativeAutoAttemptProfiles(profiles) {
 		if err := ctx.Err(); err != nil {
@@ -240,7 +258,9 @@ func launchVerifiedNativeProfiles(ctx context.Context, o nativeOptions) (*native
 		lastErr = fmt.Errorf("%s: %w", profile.Label, err)
 	}
 	selection := o.method
-	if selection == "" || selection == "auto" { selection = "Auto" }
+	if selection == "" || selection == "auto" {
+		selection = "Auto"
+	}
 	return nil, observedExit{}, fmt.Errorf("no Aether %s profile passed HTTPS carrier verification: %w", selection, lastErr)
 }
 
