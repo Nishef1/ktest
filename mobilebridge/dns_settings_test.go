@@ -33,4 +33,3 @@ func TestScanDNSRejectsInvalidListBeforeNetworkIO(t *testing.T) {
 		t.Fatal("accepted an empty DNS scan")
 	}
 }
-

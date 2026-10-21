@@ -98,7 +98,7 @@ func resolverForServer(server, forcedNetwork string, dial smartproxy.DialFunc) (
 		return nil, err
 	}
 	return &net.Resolver{
-		PreferGo: true,
+		PreferGo:     true,
 		StrictErrors: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			if dial != nil {
@@ -232,7 +232,7 @@ func ProbeServer(parent context.Context, raw string) ProbeResult {
 				started := time.Now()
 				dialer := &tls.Dialer{
 					NetDialer: &net.Dialer{Timeout: 2200 * time.Millisecond},
-					Config: &tls.Config{ServerName: candidate.host, MinVersion: tls.VersionTLS12},
+					Config:    &tls.Config{ServerName: candidate.host, MinVersion: tls.VersionTLS12},
 				}
 				conn, dialErr := dialer.DialContext(tlsCtx, "tcp", net.JoinHostPort(candidate.ip.String(), "443"))
 				if conn != nil {

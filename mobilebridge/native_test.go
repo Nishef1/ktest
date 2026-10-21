@@ -226,8 +226,12 @@ func TestAndroidAutoTriesIndependentWarpTransportsOnly(t *testing.T) {
 			if profile.OwnedUpstream() {
 				t.Fatalf("direct UDP method was accidentally given a TCP carrier: %v", profile.Args)
 			}
-			if profile.Method() == "masque-h3" { directH3 = true }
-			if profile.Method() == "wireguard" { directWG = true }
+			if profile.Method() == "masque-h3" {
+				directH3 = true
+			}
+			if profile.Method() == "wireguard" {
+				directWG = true
+			}
 		}
 	}
 	if !carriedH2 || !directH3 || !directWG {
