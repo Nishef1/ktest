@@ -307,7 +307,7 @@ func (p *Proxy) priorLocked(kind FailureKind) *familyPrior {
 // priorsApply: frozen selections (and protected destinations) keep their
 // exact behaviour; priors only reorder an open race.
 func (p *Proxy) priorsApplyLocked(host string) bool {
-	return p.cfg.Frozen == nil && !(p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host))
+	return p.cfg.Frozen == nil && !(p.exitOnly(host))
 }
 
 // noteFailureLocked attaches a classified failure to the destination. The

@@ -12,6 +12,30 @@ import (
 type EnrollmentRoute struct {
 	Label string
 	Args  []string
+	// Timeout bounds this route alone; zero means DefaultRouteTimeout. A slow
+	// failure of one route never spends the budget of the routes after it.
+	Timeout time.Duration
+}
+
+// DefaultRouteTimeout bounds one registration route.
+const DefaultRouteTimeout = 60 * time.Second
+
+// EnrollmentBudget is the time all routes may take together, plus slack for
+// staging and validation; callers bounding the whole transaction use it so a
+// later fallback is never starved by an earlier slow route.
+func EnrollmentBudget(routes []EnrollmentRoute) time.Duration {
+	total := 5 * time.Second
+	for _, r := range routes {
+		total += r.timeout()
+	}
+	return total
+}
+
+func (r EnrollmentRoute) timeout() time.Duration {
+	if r.Timeout > 0 {
+		return r.Timeout
+	}
+	return DefaultRouteTimeout
 }
 
 // EnrollmentEvent contains progress only, never registration output or keys.
@@ -82,7 +106,7 @@ func EnrollIdentity(ctx context.Context, o EnrollmentOptions) error {
 		args := append([]string(nil), route.Args...)
 		args = append(args, "--register", o.Protocol, "--config", filepath.Join(dir, "aether.toml"),
 			"--masque-config", masquePath, "--wg-config", wgPath, "--log-level", "error")
-		actx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		actx, cancel := context.WithTimeout(ctx, route.timeout())
 		err = o.Run(actx, o.Binary, args)
 		cancel()
 		if err == nil {

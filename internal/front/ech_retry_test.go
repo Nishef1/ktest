@@ -1,0 +1,119 @@
+package front
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/tls"
+	"net"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// echEdge is a TLS server holding a real ECH key: it rejects any other
+// configuration with retry_configs, as a Cloudflare edge does.
+func echEdge(t *testing.T, public, inner string) (addr string, roots *testPublicCA, list []byte, accepted *atomic.Int32) {
+	t.Helper()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list = echConfigList(public, key.PublicKey().Bytes())
+	ca := &testPublicCA{}
+	ca.init(t)
+	cert := ca.issue(t, public, inner)
+	accepted = &atomic.Int32{}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+		NextProtos:   []string{"http/1.1"},
+		EncryptedClientHelloKeys: []tls.EncryptedClientHelloKey{{
+			Config: list[2:], PrivateKey: key.Bytes(), SendAsRetry: true,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				tc := c.(*tls.Conn)
+				if tc.Handshake() == nil && tc.ConnectionState().ECHAccepted {
+					accepted.Add(1)
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String(), ca, list, accepted
+}
+
+// The whole bootstrap: a dummy configuration is rejected, the retry list is
+// used once, the edge accepts ECH, and only then is the list cached.
+func TestECHRetryThenAcceptanceCachesOnlyTheAcceptedList(t *testing.T) {
+	addr, ca, list, accepted := echEdge(t, CloudflareECH, "x.com")
+	f := New(Config{Roots: ca.pool})
+	connect := func() (net.Conn, error) {
+		return (&net.Dialer{Timeout: 3 * time.Second}).Dial("tcp", addr)
+	}
+	c, err := f.tryECH(context.Background(), Front{ECH: CloudflareECH}, "x.com", []string{"http/1.1"}, connect)
+	if err != nil {
+		t.Fatalf("retry did not reach an accepted ECH handshake: %v", err)
+	}
+	if !c.(*tls.Conn).ConnectionState().ECHAccepted {
+		t.Fatal("connection returned without ECH")
+	}
+	c.Close()
+	if got := f.echConfig(CloudflareECH); !bytes.Equal(got, list) {
+		t.Fatal("accepted retry list was not cached")
+	}
+	// The cached list is used directly: no second rejection round.
+	c, err = f.tryECH(context.Background(), Front{ECH: CloudflareECH}, "x.com", []string{"http/1.1"}, connect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for accepted.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if accepted.Load() != 2 {
+		t.Fatalf("edge accepted ECH %d times, want 2", accepted.Load())
+	}
+	// An expired entry is relearned rather than reused indefinitely.
+	f.mu.Lock()
+	e := f.ech[CloudflareECH]
+	e.accepted = time.Now().Add(-2 * echTTL)
+	f.ech[CloudflareECH] = e
+	f.mu.Unlock()
+	if f.echConfig(CloudflareECH) != nil {
+		t.Fatal("expired ECH configuration was still served")
+	}
+}
+
+// A rotated key: the cached list is rejected, the new retry list is accepted
+// and replaces it.
+func TestECHRotatedKeyReplacesCacheAfterAcceptance(t *testing.T) {
+	addr, ca, list, _ := echEdge(t, CloudflareECH, "x.com")
+	f := New(Config{Roots: ca.pool})
+	stale := dummyECHConfig(CloudflareECH)
+	f.storeECH(CloudflareECH, stale)
+	connect := func() (net.Conn, error) {
+		return (&net.Dialer{Timeout: 3 * time.Second}).Dial("tcp", addr)
+	}
+	c, err := f.tryECH(context.Background(), Front{ECH: CloudflareECH}, "x.com", []string{"http/1.1"}, connect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	if got := f.echConfig(CloudflareECH); !bytes.Equal(got, list) {
+		t.Fatal("rotated key did not replace the stale cached list")
+	}
+}

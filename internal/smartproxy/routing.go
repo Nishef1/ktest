@@ -96,7 +96,7 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var list []*upstreamState
-	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
+	protected := p.exitOnly(host)
 	m := p.memoryLocked(host, port)
 	literal := net.ParseIP(host)
 	for _, u := range p.ups {
@@ -251,7 +251,7 @@ func (p *Proxy) recordOutcome(u *upstreamState, host, port string, kind FailureK
 	ok := kind == KindNone
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
+	protected := p.exitOnly(host)
 	if ok && protected && (!u.Exit || !u.AIEligible || (p.aiPinned != "" && p.aiPinned != u.Name)) {
 		return false
 	}
@@ -279,7 +279,7 @@ func (p *Proxy) recordOutcome(u *upstreamState, host, port string, kind FailureK
 	u.wins++
 	s.wins++
 	s.failures = 0
-	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) && u.Exit && u.AIEligible && p.aiPinned == "" {
+	if p.exitOnly(host) && u.Exit && u.AIEligible && p.aiPinned == "" {
 		p.aiPinned = u.Name
 		p.logf("Foreign exit pinned for this session: %s", u.Name)
 	}

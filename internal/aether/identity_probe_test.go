@@ -23,8 +23,19 @@ func TestClassifyIdentityLines(t *testing.T) {
 		"[-] MASQUE tunnel ended: other: [masque] tunnel failed before validation: masque: await response: [TLSV1_ALERT_ACCESS_DENIED]; reconnecting"); v != IdentityRejected {
 		t.Fatalf("refused key = %v", v)
 	}
-	if v := run("[h2] tls established; alpn=", "[h2] connect-ip status: 400"); v != IdentityRejected {
+	// 400 came from 162.159.197.x for a key 162.159.198.x accepted: a
+	// request/gateway refusal, never evidence against the key.
+	if v := run("[h2] tls established; alpn=", "[h2] connect-ip status: 400"); v != IdentityGatewayRefused {
 		t.Fatalf("400 = %v", v)
+	}
+	if v := run("[h2] tls established; alpn=", "[h2] connect-ip status: 503"); v != IdentityGatewayRefused {
+		t.Fatalf("503 = %v", v)
+	}
+	if v := run("[h2] tls established; alpn=", "[h2] connect-ip status: 403"); v != IdentityRejected {
+		t.Fatalf("403 = %v", v)
+	}
+	if v := run("[h2] tls established; alpn=", "[h2] connect-ip status: 4031"); v == IdentityRejected {
+		t.Fatalf("4031 matched 403: %v", v)
 	}
 	if v := run("[h2] tls established; alpn=", "[h2] connect-ip status: 200"); v != IdentityAccepted {
 		t.Fatalf("fresh key = %v", v)

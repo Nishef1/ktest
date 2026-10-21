@@ -322,6 +322,19 @@ func (a *automaticExit) run() {
 		a.carrierMu.Unlock()
 	}()
 	profiles := a.profiles()
+	lastWorking := ""
+	// Each recovery round rebuilds the list: the ECH key fetched at session
+	// start may have failed or been rotated, and the network may have
+	// changed. The last working transport stays first.
+	refresh := func() {
+		if a.ctx.Err() != nil {
+			return
+		}
+		profiles = a.profiles()
+		if lastWorking != "" {
+			sort.SliceStable(profiles, func(i, j int) bool { return profiles[i].ID() == lastWorking && profiles[j].ID() != lastWorking })
+		}
+	}
 	for a.ctx.Err() == nil {
 		r := a.discover(profiles)
 		if r == nil {
@@ -331,6 +344,7 @@ func (a *automaticExit) run() {
 			case <-timer.C:
 			}
 			timer.Stop()
+			refresh()
 			continue
 		}
 		name := "Exit: " + r.profile.Label
@@ -354,7 +368,8 @@ func (a *automaticExit) run() {
 		a.mu.Unlock()
 		r.core.stop()
 		// Retry the last working transport first, then every other method.
-		sort.SliceStable(profiles, func(i, j int) bool { return profiles[i].ID() == r.profile.ID() && profiles[j].ID() != r.profile.ID() })
+		lastWorking = r.profile.ID()
+		refresh()
 	}
 }
 

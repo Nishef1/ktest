@@ -257,7 +257,8 @@ func (b *wsBridge) observeCLIConnected() {
 
 // windscribeServerCert checks only a Windscribe hostname hint. It does NOT
 // validate the TLS certificate chain, and must never be counted as PKI trust.
-// The authenticated inner OpenVPN client verifies the VPN server.
+// The authenticated inner OpenVPN client verifies the VPN server. Probes
+// report the chain separately (wstunnel.TrustPKI vs TrustNameOnly).
 func windscribeServerCert(certs []*x509.Certificate) error {
 	if len(certs) == 0 {
 		return errors.New("no certificate")

@@ -539,7 +539,7 @@ func TestProbeDoesNotConfuseCustomPeerCallbackWithPKIVerification(t *testing.T) 
 	if !result.TCP || !result.TLS || !result.WebSocket {
 		t.Fatalf("expected outer carrier to work: %+v", result)
 	}
-	if result.CertificateVerified || result.VPNAuthenticated {
+	if result.CertificateVerified || result.VPNAuthenticated || result.CertificateTrust != TrustNameOnly {
 		t.Fatalf("peer callback/HTTP 101 must not imply certificate or VPN authentication: %+v", result)
 	}
 }

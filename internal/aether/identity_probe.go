@@ -29,6 +29,11 @@ const (
 	// possible causes, not established). Callers set the key aside rather
 	// than delete it.
 	IdentityRejected
+	// IdentityGatewayRefused: TLS completed but the gateway refused the
+	// request in a way that does not name the credential (e.g. CONNECT-IP
+	// 400, observed from 162.159.197.x for a key another gateway accepted).
+	// It is never evidence against the key and never counts toward rejection.
+	IdentityGatewayRefused
 )
 
 // ProbeGateways are MASQUE gateways that accepted a valid key over H2 on
@@ -70,13 +75,18 @@ func probePeers(masquePath string) []string {
 
 var (
 	probeAccepted = regexp.MustCompile(`connect-ip status: 2\d\d|tunnel validated`)
-	probeRejected = regexp.MustCompile(`connect-ip status: 4\d\d|ALERT_ACCESS_DENIED|ALERT_CERTIFICATE_UNKNOWN|ALERT_BAD_CERTIFICATE`)
-	probeTLS      = regexp.MustCompile(`\[h2\] tls established`)
+	// Only refusals that name the credential: a TLS alert about the client
+	// key/certificate after the handshake, or HTTP 401/403 to CONNECT-IP.
+	probeRejected = regexp.MustCompile(`connect-ip status: 40[13]([^0-9]|$)|ALERT_ACCESS_DENIED|ALERT_CERTIFICATE_UNKNOWN|ALERT_BAD_CERTIFICATE|ALERT_CERTIFICATE_REVOKED|ALERT_CERTIFICATE_EXPIRED`)
+	// Any other 4xx/5xx is a request or gateway problem, not a dead key.
+	probeGatewayRefused = regexp.MustCompile(`connect-ip status: [45]\d\d`)
+	probeTLS            = regexp.MustCompile(`\[h2\] tls established`)
 )
 
 // ClassifyIdentityLine reads one line of a forced-peer core log. A rejection
 // counts only after TLS to the gateway completed, so a filtered network is
-// never mistaken for a dead key.
+// never mistaken for a dead key, and only credential-specific refusals count:
+// a request or gateway error (CONNECT-IP 400, 5xx) is IdentityGatewayRefused.
 func ClassifyIdentityLine(line string, tlsSeen bool) (verdict IdentityVerdict, tls bool) {
 	tls = tlsSeen || probeTLS.MatchString(line)
 	switch {
@@ -84,6 +94,8 @@ func ClassifyIdentityLine(line string, tlsSeen bool) (verdict IdentityVerdict, t
 		return IdentityAccepted, tls
 	case tls && probeRejected.MatchString(line):
 		return IdentityRejected, tls
+	case tls && probeGatewayRefused.MatchString(line):
+		return IdentityGatewayRefused, tls
 	}
 	return IdentityUnknown, tls
 }
@@ -107,9 +119,9 @@ func ProbeMasqueIdentity(ctx context.Context, binary, masquePath string) (Identi
 	if err := os.WriteFile(copyPath, key, 0o600); err != nil {
 		return IdentityUnknown, err
 	}
-	rejected := 0
+	rejected, silent := 0, 0
 	for _, peer := range probePeers(masquePath) {
-		verdict, err := probeOnce(ctx, binary, dir, copyPath, peer)
+		verdict, tls, err := probeOnce(ctx, binary, dir, copyPath, peer)
 		if err != nil {
 			return IdentityUnknown, err
 		}
@@ -121,18 +133,29 @@ func ProbeMasqueIdentity(ctx context.Context, binary, masquePath string) (Identi
 				return IdentityRejected, nil
 			}
 		}
+		// Gateways that never complete TLS mean a filtered path; more of
+		// them cannot judge the key and only delay the real connection.
+		if !tls {
+			if silent++; silent >= 2 {
+				return IdentityUnknown, nil
+			}
+		}
 	}
 	return IdentityUnknown, nil
 }
 
-func probeOnce(parent context.Context, binary, dir, masquePath, peer string) (IdentityVerdict, error) {
+// probePeerTimeout bounds one gateway; a refusal or acceptance normally
+// arrives within a few seconds of TLS.
+const probePeerTimeout = 20 * time.Second
+
+func probeOnce(parent context.Context, binary, dir, masquePath, peer string) (IdentityVerdict, bool, error) {
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
-		return IdentityUnknown, err
+		return IdentityUnknown, false, err
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	ctx, cancel := context.WithTimeout(parent, probePeerTimeout)
 	defer cancel()
 	r, w := io.Pipe()
 	args := []string{"--masque", "--h2", "-4", "--peer", peer, "--startup-secs", "15",
@@ -154,12 +177,9 @@ func probeOnce(parent context.Context, binary, dir, masquePath, peer string) (Id
 	go io.Copy(io.Discard, r)
 	<-done
 	if parent.Err() != nil {
-		return IdentityUnknown, parent.Err()
+		return IdentityUnknown, tls, parent.Err()
 	}
-	if verdict == IdentityUnknown && !tls {
-		return IdentityUnknown, nil
-	}
-	return verdict, nil
+	return verdict, tls, nil
 }
 
 // SetAsideRejectedIdentity renames a key the gateways refused, so the next

@@ -30,6 +30,10 @@ carry data and pass independent HTTPS/foreign-exit verification. The sampled
 2026-10-19 network reached ECH-capable gateways but also returned CONNECT-IP
 400 responses, certificate rejection or timeout; that test did not establish
 a usable native WARP exit. These failures are not promoted as working routes.
+The saved-key check treats only credential-specific refusals (a TLS
+access-denied/certificate alert after the handshake, or CONNECT-IP 401/403)
+from two gateways as a refused key; CONNECT-IP 400 and 5xx are gateway or
+request errors and never cause a key to be set aside.
 
 | Option | Scope | IP policy | Failure policy |
 | --- | --- | --- | --- |
@@ -80,7 +84,9 @@ In the `aether` profile, the first verified foreign exit route that succeeds for
 
 When a truly stable login/location is necessary (AI sites may trigger extra checks on exit-IP changes), use a fixed Windscribe location, or consider Windscribe's optional Static IP offering. Use Windscribe Firewall when the VPN is active. Tor is designed for anonymity properties, *not* for fixed identity across websites; some services also block Tor exits.
 
-Hostname routing in Fast and Balanced cannot protect what it cannot identify (for example, some opaque IP-only, ECH-without-visible-name, non-proxied, or UDP connections). For sensitive applications, use a verified foreign-only route with their traffic explicitly through ktest, or a system-wide VPN with a real firewall.
+Hostname routing in Fast and Balanced cannot protect what it cannot identify (for example, some opaque IP-only, non-proxied, or UDP connections). An address-only TLS connection that offers Encrypted Client Hello (its outer SNI is only the provider's public name, e.g. `cloudflare-ech.com`) is routed by the names ktest's own DNS recently resolved to that address: protected if any of them is protected (shared CDN addresses included), and protected by default when no name is known (fail closed onto the foreign exit; in local-only Windscribe it keeps its local route). Applications that resolve through their own DoH therefore send ECH connections to the foreign exit. This is a source-level policy with unit and SOCKS-level tests; it has not been validated end to end with a real ECH browser through the Android TUN. For sensitive applications, use a verified foreign-only route with their traffic explicitly through ktest, or a system-wide VPN with a real firewall.
+
+UDP follows the same identity rule. In Balanced/Fast, non-DNS UDP still needs a verified foreign SOCKS5 exit with UDP ASSOCIATE. In Aether, where a working WARP carrier may carry ordinary websites even when it geolocates to Iran, UDP (e.g. QUIC) may also use that carrier, but only for a destination known not to be protected: a named destination, or an address whose resolved names are all ordinary. Unknown addresses and protected names keep the foreign-exit rule; there is never a direct UDP fallback.
 
 Mixed modes do not preselect an ISP route for a silent connection. If an otherwise unprotected destination sends no initial client bytes within two seconds, that connection is closed; use a verified foreign-only mode for server-first protocols. Fragmented TLS ClientHello messages are gathered before hostname/SNI policy is applied.
 

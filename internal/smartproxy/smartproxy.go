@@ -280,6 +280,7 @@ type Proxy struct {
 	bootstrapPinned string          // legacy verified foreign-exit dialer; never used for local bypass
 	localAttempts   map[string]memo // last local method attempted per exact host:port
 	priors          map[FailureKind]*familyPrior
+	resolved        resolvedNames // DNS answers, for address-only ECH targets
 }
 
 func allowedLocalOnly(u Upstream) bool {
@@ -482,7 +483,7 @@ func (p *Proxy) DialWindscribeCarrier(ctx context.Context, host, port string) (n
 }
 
 func (p *Proxy) dialLocalBypass(ctx context.Context, host, port string, report bool) (net.Conn, error) {
-	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) {
+	if p.exitOnly(host) {
 		return nil, errors.New("protected AI domains cannot use the local Windscribe bootstrap bridge")
 	}
 	if err := ctx.Err(); err != nil {
@@ -569,7 +570,7 @@ func (p *Proxy) DialVerifiedExit(ctx context.Context, host, port string) (net.Co
 // Windscribe's authenticated VPN can use a proven WARP carrier even when that
 // carrier exits in Iran. This never grants access to protected AI destinations.
 func (p *Proxy) DialExitCarrier(ctx context.Context, host, port string) (net.Conn, error) {
-	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) {
+	if p.exitOnly(host) {
 		return p.DialVerifiedExit(ctx, host, port)
 	}
 	return p.dialManagedExit(ctx, host, port, false)
@@ -687,7 +688,7 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 		p.serveDNSStream(ctx, client)
 		return
 	}
-	identityRequired := p.cfg.ExitOnly != nil && !p.cfg.ExitOnly(host) && !p.exitRequired(host)
+	identityRequired := p.cfg.ExitOnly != nil && !p.exitOnly(host) && !p.exitRequired(host)
 	firstByteWait := 400 * time.Millisecond
 	if identityRequired {
 		firstByteWait = 2 * time.Second
@@ -709,6 +710,15 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	var win winner
 	if isTLSFlight(flight) {
 		name := p.nameFor(host, flight)
+		if ip := net.ParseIP(host); ip != nil && !Bogus(ip) && p.cfg.ExitOnly != nil && !p.cfg.ExitOnly(name) &&
+			ClientHelloOffersECH(flight) && p.hiddenTargetProtected(host) {
+			// The real name is encrypted and the outer SNI is only a
+			// provider's public name: route the address itself as
+			// protected, never as that public name over a local path.
+			p.resolved.markHidden(host, time.Now())
+			p.logf("%s offers ECH with a hidden name; routing it as protected", host)
+			name = host
+		}
 		if ip := net.ParseIP(host); ip != nil && name != host && !Bogus(ip) {
 			// The SNI decides routing (protected sites, fronting families), but
 			// the client chose this address: dial it, never a re-resolved name.
@@ -1380,7 +1390,7 @@ func (p *Proxy) Add(u Upstream) error {
 }
 
 func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (net.Conn, error) {
-	if p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host) {
+	if p.exitOnly(host) {
 		if !u.Exit || !u.AIEligible {
 			return nil, errors.New("protected destination requires a verified foreign exit")
 		}

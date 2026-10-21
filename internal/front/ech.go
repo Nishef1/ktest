@@ -28,6 +28,11 @@ import (
 func dummyECHConfig(public string) []byte {
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)
+	return echConfigList(public, key)
+}
+
+// echConfigList encodes a one-entry ECHConfigList for an X25519 public key.
+func echConfigList(public string, key []byte) []byte {
 	id := make([]byte, 1)
 	_, _ = rand.Read(id)
 	var c []byte
@@ -50,19 +55,44 @@ func dummyECHConfig(public string) []byte {
 	return append(list, cfg...)
 }
 
+// echTTL bounds how long an accepted configuration is reused before the
+// next connection relearns it; providers rotate ECH keys (hours, typically).
+const echTTL = time.Hour
+
+// echEntry is a configuration that completed an accepted ECH handshake.
+type echEntry struct {
+	list     []byte
+	accepted time.Time
+}
+
 func (f *Fronter) echConfig(public string) []byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.ech[public]
+	e, ok := f.ech[public]
+	if !ok || time.Since(e.accepted) > echTTL {
+		delete(f.ech, public)
+		return nil
+	}
+	return e.list
 }
 
+// storeECH keeps only a configuration that an edge just accepted, never a
+// retry list on its own: a list that does not complete must not stay cached.
 func (f *Fronter) storeECH(public string, list []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.ech == nil {
-		f.ech = map[string][]byte{}
+		f.ech = map[string]echEntry{}
 	}
-	f.ech[public] = list
+	f.ech[public] = echEntry{list: list, accepted: time.Now()}
+}
+
+func (f *Fronter) forgetECH(public string, list []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e, ok := f.ech[public]; ok && string(e.list) == string(list) {
+		delete(f.ech, public)
+	}
 }
 
 // tryECH reaches name through an ECH service. connect opens a fresh TCP
@@ -95,19 +125,23 @@ func (f *Fronter) tryECH(ctx context.Context, fr Front, name string, protos []st
 			switch {
 			case !st.ECHAccepted:
 				_ = raw.Close()
+				f.forgetECH(fr.ECH, list)
 				return nil, errors.New("the edge did not accept Encrypted Client Hello")
 			case len(protos) == 1 && st.NegotiatedProtocol != protos[0] && !noALPNIsHTTP1(protos, st.NegotiatedProtocol):
 				_ = raw.Close()
 				return nil, fmt.Errorf("edge chose %q instead of %q", st.NegotiatedProtocol, protos[0])
 			}
+			f.storeECH(fr.ECH, list)
 			return c, nil
 		}
 		_ = raw.Close()
 		var rej *tls.ECHRejectionError
 		// RFC 9849: never accept a second retry_config after the retry.
 		if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 && round == 0 {
+			// A cached list the edge no longer holds is replaced only once
+			// the retry is accepted (stored above).
+			f.forgetECH(fr.ECH, list)
 			list = rej.RetryConfigList
-			f.storeECH(fr.ECH, list)
 			continue
 		}
 		return nil, fmt.Errorf("handshake: %w", err)

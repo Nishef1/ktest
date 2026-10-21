@@ -124,6 +124,7 @@ func (p *Proxy) serveDNSStream(ctx context.Context, client net.Conn) {
 			}
 			return
 		}
+		p.learnDNS(response)
 		frame := binary.BigEndian.AppendUint16(nil, uint16(len(response)))
 		if _, err := client.Write(append(frame, response...)); err != nil {
 			return

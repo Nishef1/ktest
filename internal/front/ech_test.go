@@ -13,8 +13,8 @@ import (
 // A server that does not speak ECH must see the dummy configuration as a
 // well-formed one it cannot use: the client falls back to the public name,
 // verifies the certificate for it and reports an ECH rejection. That is the
-// first half of the bootstrap; the retry configuration only a real Cloudflare
-// edge returns is exercised live (see docs/WINDOWS.md).
+// first half of the bootstrap; the retry and acceptance half is in
+// ech_retry_test.go, and the real Cloudflare edge is exercised live.
 func TestDummyECHConfigIsWellFormedAndRejectedCleanly(t *testing.T) {
 	e := startEdge(t, CloudflareECH)
 	f := New(Config{Roots: e.roots})

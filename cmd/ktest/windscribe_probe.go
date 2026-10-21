@@ -30,6 +30,7 @@ type wsProbeResult struct {
 	tcp, tls, websocket bool
 	took                time.Duration
 	stage, failure      string
+	trust               string
 }
 
 // Probe only the outer carrier. It sends no OpenVPN authentication material.
@@ -37,7 +38,7 @@ func probeWSCarrier(ctx context.Context, transport string, cfg wstunnel.Config) 
 	r := wstunnel.Probe(ctx, transport, cfg)
 	return wsProbeResult{wsProbeCase: wsProbeCase{cfg.Addr, cfg.SNI, transport},
 		tcp: r.TCP, tls: r.TLS, websocket: r.WebSocket,
-		took: time.Duration(r.ElapsedMS) * time.Millisecond, stage: r.Stage, failure: trimDetail(r.Failure)}
+		took: time.Duration(r.ElapsedMS) * time.Millisecond, stage: r.Stage, failure: trimDetail(r.Failure), trust: r.CertificateTrust}
 }
 
 func parseProbeSNIs(raw string) ([]string, error) {
@@ -133,6 +134,7 @@ type wsProbeScore struct {
 	attempts, tcp, tls, websocket int
 	elapsed                       time.Duration
 	failure                       string
+	trust                         string
 }
 
 func runWSProbeCases(ctx context.Context, cases []wsProbeCase, rounds int, timeout time.Duration) []wsProbeScore {
@@ -194,6 +196,10 @@ func runWSProbeCases(ctx context.Context, cases []wsProbeCase, rounds int, timeo
 		}
 		if r.failure != "" {
 			s.failure = r.stage + ": " + r.failure
+		}
+		if r.trust != "" && s.trust != wstunnel.TrustNameOnly && s.trust != wstunnel.TrustUnverified {
+			// Report the weakest outer trust seen for this case.
+			s.trust = r.trust
 		}
 	}
 	var ordered []wsProbeScore
@@ -401,6 +407,7 @@ func runWindscribeTestContext(parent context.Context, args []string, u *term, su
 	}
 	u.Note("OpenVPN reply: not tested. Authentication: not tested. VPN data: not tested.")
 	u.Note("WS101 ranks WebSocket reachability only; Stealth TLS alone does not prove an OpenVPN service.")
+	u.Note("outerTLS=pki: certificate chain valid; name-only: Windscribe name accepted without a valid chain; unverified: no outer check. Server identity then rests on OpenVPN authentication.")
 	for _, s := range scores {
 		if s.transport == "wstunnel" && s.websocket == *rounds && s.attempts == *rounds && s.sni != "" {
 			u.Note("Candidate SNI (outer transport only): %s. Try with connect -mode windscribe -windscribe-wstunnel-sni %s; authentication still belongs to Windscribe.", s.sni, s.sni)

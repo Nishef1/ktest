@@ -12,6 +12,9 @@ import (
 	"github.com/Nishef1/ktest/internal/front"
 )
 
+// identityCheckBudget leaves room for the two-gateway rejection quorum.
+const identityCheckBudget = 45 * time.Second
+
 // bootstrapAndroidWARP gives a phone with no VPN an initial path to Cloudflare
 // registration: ECH with a key ktest fetched itself, then a local Fast
 // anti-DPI SOCKS carrier when available, fragmented HTTPS and a Psiphon CDN
@@ -34,7 +37,9 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	if identity.Protocol == "masque" && aether.CheckIdentity(path, "masque") == nil {
 		// A key can be intact on disk and refused by every gateway; then it
 		// never connects. Set it aside (never deleted) and register anew.
-		checkCtx, stopCheck := context.WithTimeout(ctx, 8*time.Second)
+		// Two credential refusals are needed and one gateway may take up to
+		// 20s on a slow network; a filtered path ends after two silent peers.
+		checkCtx, stopCheck := context.WithTimeout(ctx, identityCheckBudget)
 		verdict, checkErr := aether.ProbeMasqueIdentity(checkCtx, paths.Aether, path)
 		stopCheck()
 		if checkErr == nil && verdict == aether.IdentityRejected {
@@ -55,16 +60,21 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	if config, edge, err := front.FetchCloudflareECH(echCtx); err == nil {
 		routes = append(routes, aether.EnrollmentRoute{
 			Label: "ECH registration", Args: []string{"--ech", base64.StdEncoding.EncodeToString(config), "--api-address", edge},
+			// Succeeds within seconds where it works; a stalled attempt must
+			// leave time for the independent routes below.
+			Timeout: 25 * time.Second,
 		})
 	}
 	stopECH()
 	if o.carrier != "" {
 		routes = append(routes, aether.EnrollmentRoute{
 			Label: "local Fast anti-DPI", Args: []string{"--upstream", "socks5://" + o.carrier},
+			Timeout: 30 * time.Second,
 		})
 	}
 	routes = append(routes, aether.EnrollmentRoute{
 		Label: "fragmented registration TLS", Args: []string{"--fragment"},
+		Timeout: 30 * time.Second,
 	})
 	if paths.Psiphon != "" {
 		routes = append(routes, aether.EnrollmentRoute{
@@ -74,7 +84,9 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 			},
 		})
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// Each route has its own bound; the whole transaction gets their sum so
+	// the last fallback (Psiphon) is always reached.
+	probeCtx, cancel := context.WithTimeout(ctx, aether.EnrollmentBudget(routes))
 	defer cancel()
 	err := aether.EnrollIdentity(probeCtx, aether.EnrollmentOptions{
 		Binary:   paths.Aether,

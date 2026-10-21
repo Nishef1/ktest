@@ -80,7 +80,7 @@ type Fronter struct {
 
 	mu       sync.Mutex
 	scores   map[string]*score
-	ech      map[string][]byte // learned ECH configurations by public name
+	ech      map[string]echEntry // ECH configurations an edge accepted, by public name
 	accepted int
 	refused  int // total application refusals
 	disabled string

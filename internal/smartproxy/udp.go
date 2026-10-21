@@ -89,6 +89,7 @@ func (p *Proxy) serveUDP(parent context.Context, control net.Conn, host, port st
 					}
 					return
 				}
+				p.learnDNS(response)
 				packet, err := udpPacket(destination, dstPort, response)
 				if err == nil {
 					_, _ = socket.WriteToUDP(packet, source)
@@ -120,7 +121,7 @@ func (p *Proxy) serveUDP(parent context.Context, control net.Conn, host, port st
 				}
 			}()
 		}
-		if !p.udpExitAllowed(exit.route, destination) || p.verifyExit(ctx, exit.route) != nil {
+		if !p.udpExitAllowed(exit.route, destination) || p.verifyUDPRoute(ctx, exit.route) != nil {
 			continue
 		}
 		// Preserve the SOCKS header, including numeric IPv6 destinations.
@@ -141,11 +142,43 @@ func (e *udpExit) close() {
 	_ = e.control.Close()
 }
 
+// udpCarrierAllowed: where every destination rides an exit (Aether), a
+// working carrier that geolocates to Iran may carry UDP like TCP, but only for
+// a destination known not to be protected: a name, or an address whose
+// resolved names are all ordinary. Unknown addresses keep the foreign rule.
+func (p *Proxy) udpCarrierAllowed(host string) bool {
+	if p.cfg.ExitOnly == nil || !p.exitRequired(host) || p.exitOnly(host) {
+		return false
+	}
+	if net.ParseIP(host) == nil {
+		return true
+	}
+	names := p.resolved.names(host, time.Now())
+	for _, n := range names {
+		if p.cfg.ExitOnly(n) {
+			return false
+		}
+	}
+	return len(names) > 0
+}
+
+// udpRouteEligible: a foreign exit within the session's protected pin, or
+// (for non-protected destinations only) a working exit carrier.
+func (p *Proxy) udpRouteEligibleLocked(u *upstreamState, host string, carrier bool) bool {
+	if !u.Exit || (u.Match != nil && !u.Match(host)) {
+		return false
+	}
+	if u.AIEligible && (p.aiPinned == "" || p.aiPinned == u.Name) {
+		return true
+	}
+	return carrier
+}
+
 func (p *Proxy) udpExitAllowed(u *upstreamState, host string) bool {
+	carrier := p.udpCarrierAllowed(host)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.cfg.LocalOnly || p.cfg.RejectExits || !u.Exit || !u.AIEligible ||
-		(u.Match != nil && !u.Match(host)) || (p.aiPinned != "" && p.aiPinned != u.Name) {
+	if p.cfg.LocalOnly || p.cfg.RejectExits || !p.udpRouteEligibleLocked(u, host, carrier) {
 		return false
 	}
 	for _, active := range p.ups {
@@ -160,9 +193,10 @@ func (p *Proxy) udpExitAllowed(u *upstreamState, host string) bool {
 // select a local method for TCP while sending QUIC only through an already
 // verified foreign SOCKS5 UDP associate. Never create a direct UDP fallback.
 func (p *Proxy) udpCandidates(host string) []*upstreamState {
+	protected := p.exitOnly(host)
+	carrier := p.udpCarrierAllowed(host)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	protected := p.cfg.ExitOnly != nil && p.cfg.ExitOnly(host)
 	selected := p.aiPinned
 	if pins := p.cfg.Frozen; pins != nil && protected {
 		if pins.Protected == "" {
@@ -170,17 +204,16 @@ func (p *Proxy) udpCandidates(host string) []*upstreamState {
 		}
 		selected = pins.Protected
 	}
-	var out []*upstreamState
+	var out, carriers []*upstreamState
 	for _, u := range p.ups {
-		if !u.Exit || !u.AIEligible || (u.Match != nil && !u.Match(host)) {
-			continue
+		if u.Exit && u.AIEligible && (u.Match == nil || u.Match(host)) && (selected == "" || u.Name == selected) {
+			out = append(out, u)
+		} else if carrier && !u.AIEligible && p.udpRouteEligibleLocked(u, host, true) {
+			carriers = append(carriers, u)
 		}
-		if selected != "" && u.Name != selected {
-			continue
-		}
-		out = append(out, u)
 	}
-	return out
+	// Foreign exits first, so one association also serves protected names.
+	return append(out, carriers...)
 }
 
 func (p *Proxy) openUDPExit(ctx context.Context, host, port string) (*udpExit, error) {
@@ -193,7 +226,7 @@ func (p *Proxy) openUDPExit(ctx context.Context, host, port string) (*udpExit, e
 		}
 	}
 	for _, u := range p.udpCandidates(host) {
-		if !p.udpExitAllowed(u, host) || p.verifyExit(ctx, u) != nil {
+		if !p.udpExitAllowed(u, host) || p.verifyUDPRoute(ctx, u) != nil {
 			continue
 		}
 		e, err := dialUDPExit(ctx, u, p.cfg.ConnectTimeout)
@@ -201,8 +234,8 @@ func (p *Proxy) openUDPExit(ctx context.Context, host, port string) (*udpExit, e
 			continue
 		}
 		p.mu.Lock()
-		allowed := p.aiPinned == "" || p.aiPinned == u.Name
-		if allowed {
+		allowed := !u.AIEligible || p.aiPinned == "" || p.aiPinned == u.Name
+		if allowed && u.AIEligible {
 			p.aiPinned = u.Name
 		}
 		p.mu.Unlock()
@@ -211,7 +244,16 @@ func (p *Proxy) openUDPExit(ctx context.Context, host, port string) (*udpExit, e
 		}
 		e.close()
 	}
-	return nil, errors.New("UDP requires a verified SOCKS5 foreign exit with UDP ASSOCIATE; direct fallback is disabled")
+	return nil, errors.New("UDP requires a verified SOCKS5 exit with UDP ASSOCIATE (foreign unless the destination is known to be ordinary); direct fallback is disabled")
+}
+
+// verifyUDPRoute mirrors TCP: a foreign exit keeps its trust lease, a
+// carrier is only rechecked as a working carrier.
+func (p *Proxy) verifyUDPRoute(ctx context.Context, u *upstreamState) error {
+	if u.AIEligible {
+		return p.verifyExit(ctx, u)
+	}
+	return p.verifyCarrier(ctx, u)
 }
 
 func dialUDPExit(ctx context.Context, route *upstreamState, timeout time.Duration) (*udpExit, error) {
