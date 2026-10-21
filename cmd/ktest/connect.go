@@ -113,6 +113,9 @@ type connectOptions struct {
 	verbose             bool
 	stopHint            string
 	aetherMethod        string
+	aetherFingerprint   string
+	masqueSNI           string
+	aetherFragment      string
 	// carrierSource holds the anti-DPI routes that carry a Psiphon or Tor
 	// core; the exit-only proxy of those modes has none of its own.
 	carrierSource *smartproxy.Proxy
@@ -158,6 +161,9 @@ func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs.BoolVar(&o.noFront, "no-front", o.noFront, "do not use domain fronting even if the ktest CA is trusted")
 	fs.BoolVar(&o.noWarp, "no-warp", o.noWarp, "do not start Aether's WARP/Psiphon exit search even if it is enabled")
 	fs.StringVar(&o.aetherMethod, "aether-method", o.aetherMethod, "auto, masque-h2, masque-h3, wireguard, gool-h2, gool-h3, wiw, mim-h2, mim-h3, psiphon, psiphon-cdn")
+	fs.StringVar(&o.aetherFingerprint, "aether-fingerprint", o.aetherFingerprint, "MASQUE ClientHello (F&F fingerprint): auto (measured per network), chrome, firefox, semi-python or go")
+	fs.StringVar(&o.masqueSNI, "masque-sni", o.masqueSNI, "MASQUE server name: auto (measured per network), a name, or comma-separated names to measure among")
+	fs.StringVar(&o.aetherFragment, "aether-fragment", o.aetherFragment, "Aether ClientHello fragment: auto (measured per network), off, or size/delay such as 8-16/2-10")
 	fs.BoolVar(&o.noHTTP, "no-http", o.noHTTP, "disable the local HTTP proxy for Windscribe")
 	fs.StringVar(&o.httpListen, "http-listen", o.httpListen, "loopback HTTP proxy for Windscribe Proxy Settings")
 	fs.StringVar(&o.exitSocks, "exit-socks", o.exitSocks, "optional loopback SOCKS5 exit (Tor, Psiphon or authorized Worker), TCP only")
@@ -212,6 +218,9 @@ func validateConnectOptions(o connectOptions) error {
 	}
 	if o.strategies < 0 || o.strategies > 12 {
 		return errors.New("-strategies must be 0..12")
+	}
+	if _, err := aetherTLSOptions(o); err != nil {
+		return err
 	}
 	if !validAetherMethod(o.aetherMethod) {
 		return errors.New("unknown -aether-method; use connect -h for supported methods")

@@ -16,6 +16,7 @@ import (
 	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/exitnode"
 	"github.com/Nishef1/ktest/internal/smartproxy"
+	"github.com/Nishef1/ktest/internal/tlsshape"
 )
 
 // Which way out works is a property of the network, not of the program: one
@@ -32,7 +33,14 @@ func aetherProfilesFile(base string) string {
 }
 
 // loadAetherProfiles reads the editable list when it exists, else the default.
-func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProfile, error) {
+// A session's F&F and MASQUE-name shape is applied before the carriers are
+// added, so exit-node twins inherit it; without one the defaults (auto, not
+// measured) apply.
+func loadAetherProfiles(base, ech, ip string, mode ConnectionMode, shape ...tlsShape) ([]aetherProfile, error) {
+	s := tlsShape{opts: tlsshape.Options{Fingerprint: tlsshape.Auto, SNI: tlsshape.Auto, Fragment: tlsshape.Auto}}
+	if len(shape) > 0 {
+		s = shape[0]
+	}
 	text := defaultAetherProfiles
 	if b, err := os.ReadFile(aetherProfilesFile(base)); err == nil {
 		text = string(b)
@@ -50,10 +58,11 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode) ([]aetherProf
 			profiles = append(profiles, aetherProfile{Label: "Tor-only", Args: []string{"--tor-only"}})
 		}
 	}
+	profiles = tlsshape.Apply(profiles, s.opts, s.result)
 	if mode == ModeFast || mode == ModeBalanced || mode == ModeAether {
 		profiles = aether.WithLocalCarriers(aether.WithExitNodes(profiles))
 	}
-	return profilesForMode(profiles, mode), nil
+	return tlsshape.Order(profilesForMode(profiles, mode), s.result), nil
 }
 
 // A first-use nested method must bootstrap its inner identity over an outer

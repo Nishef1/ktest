@@ -42,7 +42,8 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	if err != nil {
 		u.Note("Saved network diagnosis not used: %v", err)
 	}
-	templates, err := loadAetherProfiles(o.base, "discovered", "discovered", o.mode)
+	shape := sessionTLSShape(ctx, o, key, u)
+	templates, err := loadAetherProfiles(o.base, "discovered", "discovered", o.mode, shape)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +73,7 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 		}
 		cancel()
 	}
-	profiles, err := loadAetherProfiles(o.base, ech, ip, o.mode)
+	profiles, err := loadAetherProfiles(o.base, ech, ip, o.mode, shape)
 	if err != nil {
 		return nil, err
 	}

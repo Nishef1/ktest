@@ -190,6 +190,16 @@ func (p Profile) ID() string {
 		if (flag == "--ech" || flag == "--api-address") && i+1 < len(args) {
 			args[i+1] = "<discovered>"
 		}
+		// The MASQUE name and fragment ranges are measured per network
+		// (tlsshape); a new measurement keeps the profile's history.
+		if (flag == "--masque-sni" || flag == "--fragment-size" || flag == "--fragment-delay") && i+1 < len(args) {
+			args[i+1] = "<tuned>"
+		}
+		for _, key := range []string{"--masque-sni=", "--fragment-size=", "--fragment-delay="} {
+			if strings.HasPrefix(flag, key) {
+				args[i] = key + "<tuned>"
+			}
+		}
 		for _, key := range []string{"--ech=", "--enroll-address=", "--api-address="} {
 			if strings.HasPrefix(flag, key) {
 				name := key

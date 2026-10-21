@@ -167,3 +167,7 @@ func wrapUDP(conn net.PacketConn, masks []Noise) net.PacketConn {
 	}
 	return conn
 }
+
+// WrapTCP gives an outgoing TCP connection this mask's TCP fragments, as the
+// exit-node's own dials carry them (used to measure a mask before using it).
+func (m Mask) WrapTCP(conn net.Conn) net.Conn { return wrapTCP(conn, m.TCP) }

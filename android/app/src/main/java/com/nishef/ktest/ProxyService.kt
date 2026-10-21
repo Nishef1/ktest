@@ -217,6 +217,13 @@ class ProxyService : Service() {
                                 // The Settings "AI policy" switch, read at each start.
                                 Mobilebridge.setAIPolicy(getSharedPreferences("ktest_android", MODE_PRIVATE)
                                     .getBoolean("ai_policy", true))
+                                // The F&F and MASQUE SNI settings; a bad saved value falls back to auto.
+                                getSharedPreferences("ktest_android", MODE_PRIVATE).let { p ->
+                                    runCatching {
+                                        Mobilebridge.setAetherTLS(p.getString("aether_fingerprint", "auto"),
+                                            p.getString("masque_sni", "auto"), p.getString("aether_fragment", "auto"))
+                                    }.onFailure { Mobilebridge.setAetherTLS("auto", "auto", "auto") }
+                                }
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {
                                     // Psiphon and Tor need no WARP: by default they dial out

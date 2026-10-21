@@ -55,6 +55,7 @@ const usageText = `ktest: free access toolkit
     -zapret fake|split|combo opt-in Windows single-entry packet desync A/B (Administrator)
     -verify-vpn            CLI + one system HTTPS exit-IP check; no reconnects
   ktest aether-test        bounded per-network comparison (-budget 3m; optional -speed)
+  ktest tls-calibrate      measure F&F and MASQUE SNI on this network (-fingerprint, -sni, -fragment)
 
 Setup
   ktest ca                 domain-fronting certificate (-install, -renew, -uninstall, -delete)
@@ -122,6 +123,8 @@ func run(args []string) int {
 		return runWindscribeTest(args[1:])
 	case "aether-test":
 		return runAetherTest(args[1:])
+	case "tls-calibrate":
+		return runTLSCalibrate(args[1:])
 	case "ca":
 		return runCA(args[1:])
 	case "warp":

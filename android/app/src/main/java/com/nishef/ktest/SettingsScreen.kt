@@ -358,6 +358,8 @@ internal fun SettingsScreen(
             Note("Applies on the next connection.")
         }
 
+        AetherTlsPanel(scope, preferences, privateDir, targetsEditable && !manualTesting)
+
         AetherIdentityBackupPanel(scope, privateDir, nativeLibraryDir, targetsEditable && !manualTesting)
 
         RouteTargetsPanel(routeTargets, scope, privateDir, targetsEditable,

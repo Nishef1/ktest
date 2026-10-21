@@ -61,7 +61,9 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 	if err != nil {
 		return aether.Profile{}, err
 	}
-	profiles = aether.FilterMethod(aether.ProfilesForMode(profiles, mode), method)
+	// An explicit method uses the saved calibration only; Auto measures.
+	shape, measured := mobileTLSShape(context.Background(), "", false)
+	profiles = aether.FilterMethod(aether.ProfilesForMode(shapeProfiles(profiles, shape, measured), mode), method)
 	if viaFast && mode == "aether" {
 		profiles = tcpCarriedProfiles(profiles)
 		if len(profiles) == 0 {
@@ -88,7 +90,8 @@ func nativeAutoCandidatesWithECH(viaCarrier bool, ech, ip string) ([]aether.Prof
 	if err != nil {
 		return nil, err
 	}
-	profiles = aether.ProfilesForMode(profiles, "aether")
+	shape, _ := mobileTLSShape(context.Background(), "", false)
+	profiles = aether.ProfilesForMode(shapeProfiles(profiles, shape, nil), "aether")
 	if viaCarrier {
 		profiles = tcpCarriedProfiles(profiles)
 	}

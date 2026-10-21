@@ -36,11 +36,7 @@ func WithLocalCarriers(profiles []Profile) []Profile {
 			continue
 		}
 		carried := Profile{Label: p.Label + " through local anti-DPI"}
-		for _, arg := range p.Args {
-			if arg != "--fragment" && arg != "--no-fragment" {
-				carried.Args = append(carried.Args, arg)
-			}
-		}
+		carried.Args = withoutFragment(p.Args)
 		// The local proxy collects and shapes the complete first flight.
 		carried.Args = append(carried.Args, "--no-fragment", "--upstream", LocalCarrierURL)
 		out = append(out, carried)
@@ -98,12 +94,7 @@ func WithExitNodes(profiles []Profile) []Profile {
 			continue
 		}
 		node := Profile{Label: p.Label + " through PattNG exit-node (" + preset + ")"}
-		for _, arg := range p.Args {
-			if arg != "--fragment" {
-				node.Args = append(node.Args, arg)
-			}
-		}
-		node.Args = append(node.Args, "--upstream", ExitNodeURL(preset))
+		node.Args = append(withoutFragment(p.Args), "--upstream", ExitNodeURL(preset))
 		out = append(out, node)
 		remaining--
 	}
@@ -131,4 +122,23 @@ func BindLocalCarrier(args []string, address string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// withoutFragment drops Aether's own ClientHello fragmentation, with its
+// size and delay ranges, where KTest's carrier shapes the first flight.
+func withoutFragment(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		switch name, _, inline := strings.Cut(args[i], "="); name {
+		case "--fragment", "--no-fragment":
+			continue
+		case "--fragment-size", "--fragment-delay":
+			if !inline {
+				i++
+			}
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
