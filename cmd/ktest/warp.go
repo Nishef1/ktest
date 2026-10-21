@@ -79,7 +79,7 @@ func aetherVersionReady(base string) bool {
 	_, digest, err := aether.DesktopArchiveFor(runtime.GOOS, runtime.GOARCH)
 	if err != nil { return false }
 	dir := aetherVersionDir(base)
-	marker, err := os.ReadFile(filepath.Join(dir, ".archive-sha256"))
+	marker, err := os.ReadFile(filepath.Join(dir, "aether-release.sha256"))
 	if err != nil || strings.TrimSpace(string(marker)) != digest { return false }
 	return fileOK(filepath.Join(dir, aetherName())) &&
 		fileOK(filepath.Join(dir, "pt", psiphonName())) &&
@@ -217,7 +217,7 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	for name := range want {
 		if !seen[name] { return fmt.Errorf("Aether archive missing %s; previous core preserved", name) }
 	}
-	if err := os.WriteFile(filepath.Join(stage, ".archive-sha256"), []byte(strings.ToLower(sha)+"\n"), 0o600); err != nil { return err }
+	if err := os.WriteFile(filepath.Join(stage, "aether-release.sha256"), []byte(strings.ToLower(sha)+"\n"), 0o600); err != nil { return err }
 	if err := os.Rename(stage, aetherVersionDir(base)); err != nil {
 		if aetherVersionReady(base) { return nil }
 		return fmt.Errorf("cannot publish Aether generation (previous core preserved): %w", err)
