@@ -62,10 +62,10 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
 	if err := fetchAether(context.Background(), srv.URL, hex.EncodeToString(sum[:]), base); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(aetherBinary(base)); string(b) != "core" {
+	if b, _ := os.ReadFile(filepath.Join(aetherVersionDir(base), aetherName())); string(b) != "core" {
 		t.Fatalf("core content %q", b)
 	}
-	if b, _ := os.ReadFile(psiphonCore(base)); string(b) != "psiphon" {
+	if b, _ := os.ReadFile(filepath.Join(aetherVersionDir(base), "pt", psiphonName())); string(b) != "psiphon" {
 		t.Fatalf("psiphon core %q", b)
 	}
 	var names []string
@@ -75,8 +75,8 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
 		}
 		return nil
 	})
-	if len(names) != 3 {
-		t.Fatalf("only the three known files may be extracted, got %v", names)
+	if len(names) != 4 {
+		t.Fatalf("only three executables and one pinned archive marker may be staged, got %v", names)
 	}
 
 	// An archive without the core is refused even with a matching checksum.
