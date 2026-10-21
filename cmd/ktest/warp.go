@@ -61,15 +61,21 @@ func warpDir() string {
 }
 
 func aetherName() string {
-	if runtime.GOOS == "windows" { return "aether.exe" }
+	if runtime.GOOS == "windows" {
+		return "aether.exe"
+	}
 	return "aether"
 }
 func psiphonName() string {
-	if runtime.GOOS == "windows" { return "psiphon-tunnel-core.exe" }
+	if runtime.GOOS == "windows" {
+		return "psiphon-tunnel-core.exe"
+	}
 	return "psiphon-tunnel-core"
 }
 func lyrebirdName() string {
-	if runtime.GOOS == "windows" { return "lyrebird.exe" }
+	if runtime.GOOS == "windows" {
+		return "lyrebird.exe"
+	}
 	return "lyrebird"
 }
 func aetherVersionDir(base string) string {
@@ -77,20 +83,28 @@ func aetherVersionDir(base string) string {
 }
 func aetherVersionReady(base string) bool {
 	_, digest, err := aether.DesktopArchiveFor(runtime.GOOS, runtime.GOARCH)
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 	dir := aetherVersionDir(base)
 	marker, err := os.ReadFile(filepath.Join(dir, "aether-release.sha256"))
-	if err != nil || strings.TrimSpace(string(marker)) != digest { return false }
+	if err != nil || strings.TrimSpace(string(marker)) != digest {
+		return false
+	}
 	return fileOK(filepath.Join(dir, aetherName())) &&
 		fileOK(filepath.Join(dir, "pt", psiphonName())) &&
 		fileOK(filepath.Join(dir, "pt", lyrebirdName()))
 }
 func aetherBinary(base string) string {
-	if aetherVersionReady(base) { return filepath.Join(aetherVersionDir(base), aetherName()) }
+	if aetherVersionReady(base) {
+		return filepath.Join(aetherVersionDir(base), aetherName())
+	}
 	return filepath.Join(base, "cores", aetherName())
 }
 func psiphonCore(base string) string {
-	if aetherVersionReady(base) { return filepath.Join(aetherVersionDir(base), "pt", psiphonName()) }
+	if aetherVersionReady(base) {
+		return filepath.Join(aetherVersionDir(base), "pt", psiphonName())
+	}
 	return filepath.Join(base, "cores", "pt", psiphonName())
 }
 func aetherArchiveFor(goos, goarch string) (string, string, error) {
@@ -119,7 +133,9 @@ func warpState(base string) string {
 // fetchAether verifies the pinned release and extracts Aether plus its
 // whitelisted Psiphon/Lyrebird helpers into base/cores.
 func fetchAether(ctx context.Context, url, sha, base string) error {
-	if aetherVersionReady(base) { return nil }
+	if aetherVersionReady(base) {
+		return nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -136,7 +152,9 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	if err != nil {
 		return err
 	}
-	if len(data) == 0 || len(data) > 200<<20 { return errors.New("Aether archive empty or too large") }
+	if len(data) == 0 || len(data) > 200<<20 {
+		return errors.New("Aether archive empty or too large")
+	}
 	sum := sha256.Sum256(data)
 	if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, sha) {
 		return fmt.Errorf("checksum mismatch: got %s, pinned %s; the file was not used", got, sha)
@@ -144,15 +162,19 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	// Stage a complete generation alongside the running old core. Nothing
 	// in the existing core directory is overwritten by partial downloads.
 	parent := filepath.Dir(aetherVersionDir(base))
-	if err := os.MkdirAll(parent, 0o755); err != nil { return err }
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return err
+	}
 	stage, err := os.MkdirTemp(parent, ".aether-staging-")
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer os.RemoveAll(stage)
 	core, ptBin, lyre := aetherName(), psiphonName(), lyrebirdName()
 	want := map[string]string{
-		core: filepath.Join(stage, core),
+		core:          filepath.Join(stage, core),
 		"pt/" + ptBin: filepath.Join(stage, "pt", ptBin),
-		"pt/" + lyre: filepath.Join(stage, "pt", lyre),
+		"pt/" + lyre:  filepath.Join(stage, "pt", lyre),
 	}
 	seen := make(map[string]bool)
 	found := false
@@ -166,7 +188,9 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 			if !ok {
 				continue
 			}
-			if seen[f.Name] { return fmt.Errorf("duplicate Aether member %s", f.Name) }
+			if seen[f.Name] {
+				return fmt.Errorf("duplicate Aether member %s", f.Name)
+			}
 			seen[f.Name] = true
 			if err := extractZipFile(f, dest); err != nil {
 				return err
@@ -201,7 +225,9 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 			if h.Size < 0 || h.Size > 100<<20 {
 				return fmt.Errorf("Aether archive entry %s exceeds size limit", name)
 			}
-			if seen[name] { return fmt.Errorf("duplicate Aether member %s", name) }
+			if seen[name] {
+				return fmt.Errorf("duplicate Aether member %s", name)
+			}
 			seen[name] = true
 			if err := extractVerifiedFile(tr, dest, h.Size); err != nil {
 				return err
@@ -213,13 +239,21 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	} else {
 		return fmt.Errorf("unsupported Aether archive format")
 	}
-	if !found { return fmt.Errorf("Aether archive missing %s", core) }
-	for name := range want {
-		if !seen[name] { return fmt.Errorf("Aether archive missing %s; previous core preserved", name) }
+	if !found {
+		return fmt.Errorf("Aether archive missing %s", core)
 	}
-	if err := os.WriteFile(filepath.Join(stage, "aether-release.sha256"), []byte(strings.ToLower(sha)+"\n"), 0o600); err != nil { return err }
+	for name := range want {
+		if !seen[name] {
+			return fmt.Errorf("Aether archive missing %s; previous core preserved", name)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(stage, "aether-release.sha256"), []byte(strings.ToLower(sha)+"\n"), 0o600); err != nil {
+		return err
+	}
 	if err := os.Rename(stage, aetherVersionDir(base)); err != nil {
-		if aetherVersionReady(base) { return nil }
+		if aetherVersionReady(base) {
+			return nil
+		}
 		return fmt.Errorf("cannot publish Aether generation (previous core preserved): %w", err)
 	}
 	return nil
@@ -314,7 +348,10 @@ func warpUpgrade(ctx context.Context, u *term, base string) int {
 		return 0
 	}
 	url, digest, err := aetherArchiveFor(runtime.GOOS, runtime.GOARCH)
-	if err != nil { u.Line(toneFail, "%v", err); return 1 }
+	if err != nil {
+		u.Line(toneFail, "%v", err)
+		return 1
+	}
 	step := u.Progress("Staging Aether "+aetherVersion+" without touching active cores or WARP identities", 1)
 	if err := fetchAether(ctx, url, digest, base); err != nil {
 		step.Finish(toneFail, err.Error())
@@ -495,7 +532,9 @@ func (t *terminal) warpSetup(base string, in *input) bool {
 				ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 				defer cancel()
 				warpUpgrade(ctx, u, base)
-			}, in.enter()) { return false }
+			}, in.enter()) {
+				return false
+			}
 			continue
 		}
 		if strings.EqualFold(ans, "REMOVE") {

@@ -13,14 +13,14 @@ import (
 var desktopBundleJSON []byte
 
 type DesktopArchive struct {
-	File string `json:"file"`
+	File   string `json:"file"`
 	SHA256 string `json:"sha256"`
 }
 
 type DesktopManifest struct {
-	Version string `json:"version"`
-	Repository string `json:"repository"`
-	Archives map[string]DesktopArchive `json:"archives"`
+	Version    string                    `json:"version"`
+	Repository string                    `json:"repository"`
+	Archives   map[string]DesktopArchive `json:"archives"`
 }
 
 func DesktopBundleManifest() (DesktopManifest, error) {
@@ -48,15 +48,21 @@ func DesktopBundleManifest() (DesktopManifest, error) {
 
 func DesktopVersion() string {
 	m, err := DesktopBundleManifest()
-	if err != nil { return "" }
+	if err != nil {
+		return ""
+	}
 	return m.Version
 }
 
 func DesktopArchiveFor(goos, goarch string) (string, string, error) {
 	manifest, err := DesktopBundleManifest()
-	if err != nil { return "", "", err }
+	if err != nil {
+		return "", "", err
+	}
 	platform := goos + "/" + goarch
 	archive, found := manifest.Archives[platform]
-	if !found { return "", "", fmt.Errorf("no checksum-pinned Aether %s archive for %s", manifest.Version, platform) }
-	return manifest.Repository+"/releases/download/"+manifest.Version+"/"+archive.File, archive.SHA256, nil
+	if !found {
+		return "", "", fmt.Errorf("no checksum-pinned Aether %s archive for %s", manifest.Version, platform)
+	}
+	return manifest.Repository + "/releases/download/" + manifest.Version + "/" + archive.File, archive.SHA256, nil
 }

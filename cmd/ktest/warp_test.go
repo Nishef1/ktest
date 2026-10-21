@@ -93,9 +93,15 @@ func TestAetherUpgradeFailurePreservesLegacyFiles(t *testing.T) {
 	base := t.TempDir()
 	legacy := filepath.Join(base, "cores", aetherName())
 	helper := filepath.Join(base, "cores", "pt", psiphonName())
-	if err := os.MkdirAll(filepath.Dir(helper), 0700); err != nil { t.Fatal(err) }
-	if err := os.WriteFile(legacy, []byte("working-legacy-core"), 0700); err != nil { t.Fatal(err) }
-	if err := os.WriteFile(helper, []byte("working-legacy-helper"), 0700); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(filepath.Dir(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("working-legacy-core"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("working-legacy-helper"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	// The new release has a good SHA-256 but is missing a required helper.
 	archive := zipOf(t, map[string]string{aetherName(): "new-incomplete-core"})
 	hash := sha256.Sum256(archive)
