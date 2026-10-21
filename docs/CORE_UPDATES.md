@@ -44,6 +44,14 @@ may also install the pinned generation when running Setup. Close and restart
 the connection to begin using newly installed files. The Setup menu accepts
 `u` to perform the same update.
 
+For an immediate rollback on Windows, start a fresh PowerShell with
+`$env:KTEST_AETHER_USE_LEGACY = "1"` and launch KTest again. This selects
+`cores/aether.exe` and its matching `cores/pt/` helpers when they exist.
+Clear the variable with `Remove-Item Env:KTEST_AETHER_USE_LEGACY` to
+select the new pinned generation again. **The override changes only
+which files new connections launch; it never deletes the newer version or
+a saved WARP identity.** For releases without a legacy core, it is a no-op.
+
 An in-progress core continues to use its existing executable. Never remove
 an older directory while its process may be running. Keep old versions for
 manual rollback; do not clean old directories automatically after an update.
