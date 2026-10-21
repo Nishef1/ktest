@@ -531,7 +531,9 @@ class ProxyService : Service() {
     }
 
     private fun stopVpn() {
-        if (KTestVpnService.state == "disconnected") return
+        // The first stop request moves the service to "stopping" immediately.
+        // Do not enqueue a second ACTION_STOP from the canceled startup's finally block.
+        if (KTestVpnService.state in setOf("disconnected", "stopping", "failed", "revoked")) return
         runCatching {
             startService(Intent(this, KTestVpnService::class.java).apply { action = KTestVpnService.ACTION_STOP })
         }
