@@ -89,6 +89,32 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
 	}
 }
 
+func TestAetherUpgradeFailurePreservesLegacyFiles(t *testing.T) {
+	base := t.TempDir()
+	legacy := filepath.Join(base, "cores", aetherName())
+	helper := filepath.Join(base, "cores", "pt", psiphonName())
+	if err := os.MkdirAll(filepath.Dir(helper), 0700); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(legacy, []byte("working-legacy-core"), 0700); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(helper, []byte("working-legacy-helper"), 0700); err != nil { t.Fatal(err) }
+	// The new release has a good SHA-256 but is missing a required helper.
+	archive := zipOf(t, map[string]string{aetherName(): "new-incomplete-core"})
+	hash := sha256.Sum256(archive)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) }))
+	defer server.Close()
+	if err := fetchAether(context.Background(), server.URL, hex.EncodeToString(hash[:]), base); err == nil {
+		t.Fatal("incomplete generation was accepted")
+	}
+	if data, _ := os.ReadFile(aetherBinary(base)); string(data) != "working-legacy-core" {
+		t.Fatalf("failed update changed active core: %q", data)
+	}
+	if data, _ := os.ReadFile(psiphonCore(base)); string(data) != "working-legacy-helper" {
+		t.Fatalf("failed update changed helper: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(aetherVersionDir(base), aetherName())); !os.IsNotExist(err) {
+		t.Fatal("incomplete version was made active")
+	}
+}
+
 func TestDefaultProfilesCoverTheTransportsAndSkipWhatNeedsECH(t *testing.T) {
 	all, err := parseAetherProfiles(defaultAetherProfiles, "CFG", "1.2.3.4")
 	if err != nil {
@@ -287,7 +313,7 @@ func TestAetherHelpOptionMatchingAndEqualsValues(t *testing.T) {
 func TestOfficialAetherAssetSelection(t *testing.T) {
 	for _, platform := range [][2]string{{"windows", "amd64"}, {"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}} {
 		url, hash, err := aetherArchiveFor(platform[0], platform[1])
-		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/v2.3.1/") {
+		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/v2.3.2/") {
 			t.Fatalf("%v: %s / %s / %v", platform, url, hash, err)
 		}
 	}
@@ -332,7 +358,7 @@ func TestTarGzAetherExtractionRejectsUnexpectedAndPublishesKnownEntries(t *testi
 		t.Fatal(err)
 	}
 	for _, name := range []string{"aether", "pt/psiphon-tunnel-core", "pt/lyrebird"} {
-		if !fileOK(filepath.Join(base, "cores", filepath.FromSlash(name))) {
+		if !fileOK(filepath.Join(aetherVersionDir(base), filepath.FromSlash(name))) {
 			t.Fatalf("missing %s", name)
 		}
 	}
