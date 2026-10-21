@@ -95,6 +95,7 @@ func aetherVersionReady(base string) bool {
 		fileOK(filepath.Join(dir, "pt", psiphonName())) &&
 		fileOK(filepath.Join(dir, "pt", lyrebirdName()))
 }
+
 // An explicit operator override allows immediate rollback if an upgraded
 // executable starts but fails on a particular ISP. This changes selection
 // only; no binary, helper, or saved WARP key is deleted.

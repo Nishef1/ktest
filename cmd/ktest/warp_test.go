@@ -129,19 +129,37 @@ func TestPinnedAetherCanBeRolledBackWithoutDeletingEitherCore(t *testing.T) {
 	modernHelper := filepath.Join(aetherVersionDir(base), "pt", psiphonName())
 	modernTor := filepath.Join(aetherVersionDir(base), "pt", lyrebirdName())
 	_, sha, err := aetherArchiveFor(runtime.GOOS, runtime.GOARCH)
-	if err != nil { t.Fatal(err) }
-	for _, path := range []string{legacy, legacyHelper, modern, modernHelper, modernTor} {
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil { t.Fatal(err) }
-		if err := os.WriteFile(path, []byte("valid file placeholder"), 0700); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(aetherVersionDir(base), "aether-release.sha256"), []byte(sha+"\n"), 0600); err != nil { t.Fatal(err) }
-	if got := aetherBinary(base); got != modern { t.Fatalf("new generation was not preferred: %s", got) }
-	if got := psiphonCore(base); got != modernHelper { t.Fatalf("new helper was not preferred: %s", got) }
+	for _, path := range []string{legacy, legacyHelper, modern, modernHelper, modernTor} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("valid file placeholder"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(aetherVersionDir(base), "aether-release.sha256"), []byte(sha+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := aetherBinary(base); got != modern {
+		t.Fatalf("new generation was not preferred: %s", got)
+	}
+	if got := psiphonCore(base); got != modernHelper {
+		t.Fatalf("new helper was not preferred: %s", got)
+	}
 	t.Setenv("KTEST_AETHER_USE_LEGACY", "1")
-	if got := aetherBinary(base); got != legacy { t.Fatalf("legacy rollback failed: %s", got) }
-	if got := psiphonCore(base); got != legacyHelper { t.Fatalf("legacy helper did not match rollback: %s", got) }
+	if got := aetherBinary(base); got != legacy {
+		t.Fatalf("legacy rollback failed: %s", got)
+	}
+	if got := psiphonCore(base); got != legacyHelper {
+		t.Fatalf("legacy helper did not match rollback: %s", got)
+	}
 	t.Setenv("KTEST_AETHER_USE_LEGACY", "")
-	if got := aetherBinary(base); got != modern { t.Fatalf("clearing rollback did not restore pinned core: %s", got) }
+	if got := aetherBinary(base); got != modern {
+		t.Fatalf("clearing rollback did not restore pinned core: %s", got)
+	}
 }
 
 func TestDefaultProfilesCoverTheTransportsAndSkipWhatNeedsECH(t *testing.T) {
