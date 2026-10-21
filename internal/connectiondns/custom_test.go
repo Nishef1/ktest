@@ -31,7 +31,12 @@ func TestNormalizeAndParseCustomDNSList(t *testing.T) {
 			t.Fatalf("accepted unsupported DNS entry %q", bad)
 		}
 	}
-	if _, err := ParseServerList(strings.Repeat("1.1.1.1\n", 13)); err == nil {
+	tooMany := strings.Join([]string{
+		"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5",
+		"192.0.2.6", "192.0.2.7", "192.0.2.8", "192.0.2.9", "192.0.2.10",
+		"192.0.2.11", "192.0.2.12", "192.0.2.13",
+	}, "\n")
+	if _, err := ParseServerList(tooMany); err == nil {
 		t.Fatal("accepted more than 12 DNS candidates")
 	}
 }
