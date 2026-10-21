@@ -5,8 +5,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,17 +19,7 @@ import (
 	"github.com/Nishef1/ktest/internal/probe"
 )
 
-type cdnScanResult struct {
-	IP           string `json:"ip"`
-	TCPMS        int64  `json:"tcp_ms"`
-	TLSMS        int64  `json:"tls_ms"`
-	ElapsedMS    int64  `json:"elapsed_ms"`
-	HTTPStatus   int    `json:"http_status"`
-	TLSVerified  bool   `json:"tls_verified"`
-	HTTPVerified bool   `json:"http_verified"`
-	Assessment   string `json:"assessment"`
-	Error        string `json:"error"`
-}
+type cdnScanResult = edges.ScanResult
 
 type cdnScan struct {
 	Running       bool            `json:"running"`
@@ -223,7 +211,7 @@ func runCDNScan(ctx context.Context, cancel context.CancelFunc, provider string,
 		failure = "could not complete private scan export"
 	}
 	if dir != "" && len(best) > 0 && !writeFailed {
-		if saveVerifiedCDNEdges(dir, cdnEdgeCache{Provider: provider, Source: preset.Source, VerifiedAt: time.Now().UTC(), Results: best}) != nil {
+		if saveVerifiedCDNEdges(dir, edges.VerifiedCache{Provider: provider, Source: preset.Source, VerifiedAt: time.Now().UTC(), Results: best}) != nil {
 			cacheFailed = true
 			failure = "scan finished but verified provider edges could not be saved"
 		}
@@ -245,43 +233,7 @@ func runCDNScan(ctx context.Context, cancel context.CancelFunc, provider string,
 
 // cdnResult copies only measurements and fixed error categories, never response
 // content, headers, resolver diagnostics, URLs, or raw filesystem error text.
-func cdnResult(ip string, r probe.Result) cdnScanResult {
-	result := cdnScanResult{IP: ip, TCPMS: r.ConnectMS, TLSMS: r.TLSMS, ElapsedMS: r.ElapsedMS,
-		HTTPStatus: r.Status, TLSVerified: r.TLSVersion != ""}
-	if r.Error != "" {
-		err := strings.ToLower(r.Error)
-		switch {
-		case strings.Contains(err, "canceled"):
-			result.Error = "canceled"
-		case strings.Contains(err, "timeout"), strings.Contains(err, "deadline exceeded"):
-			result.Error = "timeout"
-		case strings.Contains(err, "x509"), strings.Contains(err, "certificate"):
-			result.Error = "certificate verification failed"
-		case strings.Contains(err, "tls"):
-			result.Error = "TLS failed"
-		case strings.Contains(err, "connection refused"):
-			result.Error = "connection refused"
-		case strings.Contains(err, "connection reset"):
-			result.Error = "connection reset"
-		default:
-			result.Error = "probe failed"
-		}
-	}
-	result.HTTPVerified = r.Success && result.TLSVerified && r.Status >= 200 && r.Status < 300 && result.Error == ""
-	switch {
-	case result.HTTPVerified:
-		result.Assessment = "provider_https_verified"
-	case result.Error == "canceled":
-		result.Assessment = "canceled"
-	case result.TLSVerified:
-		result.Assessment = "tls_only"
-	case r.Reachable || r.Phase == "tls" || r.Phase == "http" || r.Phase == "tls_or_http":
-		result.Assessment = "tcp_only"
-	default:
-		result.Assessment = "unreachable"
-	}
-	return result
-}
+func cdnResult(ip string, r probe.Result) cdnScanResult { return edges.ResultOf(ip, r) }
 
 func cdnProvider(p string) bool {
 	return cdnranges.Known(p)
@@ -363,29 +315,10 @@ func CancelCDNScan() {
 	}
 }
 
-type cdnEdgeCache struct {
-	Provider   string          `json:"provider"`
-	Source     string          `json:"source"`
-	VerifiedAt time.Time       `json:"verified_at"`
-	Results    []cdnScanResult `json:"results"`
-}
-
-func saveVerifiedCDNEdges(dir string, cache cdnEdgeCache) error {
-	file, err := os.CreateTemp(dir, "verified-*.partial")
-	if err != nil {
-		return err
-	}
-	defer func() { file.Close(); os.Remove(file.Name()) }()
-	if err := json.NewEncoder(file).Encode(cache); err != nil {
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), filepath.Join(dir, "verified-"+cache.Provider+".json"))
+// saveVerifiedCDNEdges keeps Android's network-independent cache; the shared
+// edges package applies the same rules as the desktop's per-network one.
+func saveVerifiedCDNEdges(dir string, cache edges.VerifiedCache) error {
+	return edges.SaveVerified(dir, cache)
 }
 
 // loadVerifiedCDNEdges loads at most 100 previous provider-HTTPS measurements for
@@ -399,29 +332,5 @@ func loadVerifiedCDNEdges(privateFilesDir, provider string) []string {
 	if !realPrivateDirectory(dir) {
 		return nil
 	}
-	path := filepath.Join(dir, "verified-"+provider+".json")
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 128*1024 {
-		return nil
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	var cache cdnEdgeCache
-	if json.NewDecoder(io.LimitReader(f, 128*1024)).Decode(&cache) != nil || cache.Provider != provider || cache.Source == "" || len(cache.Results) > 100 || cache.VerifiedAt.After(time.Now()) || time.Since(cache.VerifiedAt) > 24*time.Hour {
-		return nil
-	}
-	ips := make([]string, 0, len(cache.Results))
-	seen := map[string]bool{}
-	for _, r := range cache.Results {
-		ip, err := netip.ParseAddr(r.IP)
-		if err != nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || !r.HTTPVerified || !r.TLSVerified || r.HTTPStatus < 200 || r.HTTPStatus >= 300 || r.Error != "" || seen[ip.String()] {
-			return nil
-		}
-		ips = append(ips, ip.String())
-		seen[ip.String()] = true
-	}
-	return ips
+	return edges.LoadVerified(dir, provider, "")
 }

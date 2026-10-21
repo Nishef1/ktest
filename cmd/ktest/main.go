@@ -464,11 +464,13 @@ func runQuickScanContext(parent context.Context, args []string) int {
 	}
 	ips, target, source := preset.IPs, preset.URL, preset.Source
 	fmt.Printf("CDN %s | %d source-backed candidate IPs | source: %s\n", *provider, len(ips), source)
+	network := networkSignature(ctx)
 	if *cdnHost != "" {
 		u := newTerm(os.Stdout)
 		u.Note("Own CDN route: TLS certificate + WebSocket 101 for %s; no OpenVPN credentials/authentication test", *cdnHost)
 		b := newWSBridge(opts, nil, nil, u.Note)
-		b.scanCDNEdges(ctx, ips)
+		// Cloudflare edges a provider scan verified here go first.
+		b.scanCDNEdges(ctx, withSavedCloudflareEdges(network, ips))
 		b.mu.Lock()
 		found := append([]string(nil), b.edges...)
 		b.mu.Unlock()
@@ -487,7 +489,11 @@ func runQuickScanContext(parent context.Context, args []string) int {
 		return 0
 	}
 	fmt.Println("Target: 10 certificate-verified HTTPS responses. This does NOT prove arbitrary domain fronting.")
+	var verified []edges.ScanResult
 	scan, err := edges.ScanCDN(ctx, ips, target, 10, nil, func(ip string, r probe.Result, tried, passed int) {
+		if res := edges.ResultOf(ip, r); res.HTTPVerified {
+			verified = append(verified, res)
+		}
 		switch {
 		case r.Success && r.TLSVersion != "" && r.Status >= 200 && r.Status < 300 && r.Error == "":
 			fmt.Printf("[%d/%d] VERIFIED HTTPS %-18s (%d/%d)\n", tried, len(ips), ip, passed, 10)
@@ -498,6 +504,13 @@ func runQuickScanContext(parent context.Context, args []string) int {
 	if err != nil && ctx.Err() == nil {
 		fmt.Fprintln(os.Stderr, "CDN scan:", err)
 		return 1
+	}
+	if len(verified) > 0 {
+		if err := saveCDNScan(network, *provider, source, verified); err != nil {
+			fmt.Println("Verified edges not kept:", err)
+		} else {
+			fmt.Printf("Kept %d verified %s edges for this network (24h); fronting and Psiphon try them first.\n", len(verified), *provider)
+		}
 	}
 	if ctx.Err() != nil {
 		fmt.Printf("Scan cancelled after %d candidates. No fronting claim made.\n", scan.Attempted)

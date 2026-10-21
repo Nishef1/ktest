@@ -1081,6 +1081,8 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				bridge.note = func(f string, a ...any) { t.Line(toneInfo, f, a...) }
 				if o.ws.cdnHost != "" && o.ws.cdnEdges == "" {
 					if ips, err := edges.CloudflareCandidates(300); err == nil {
+						// Cloudflare edges verified by `ktest scan` here go first.
+						ips = withSavedCloudflareEdges(networkSignature(ctx), ips)
 						t.Line(toneInfo, "Scanning %d Cloudflare IPs for edges that reach %s", len(ips), o.ws.cdnHost)
 						go bridge.scanCDNEdges(ctx, ips)
 					}
@@ -1513,7 +1515,9 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 	}
 	f := front.New(front.Config{
 		CA: ca, Families: fams, Resolve: resolve, Logf: logf,
-		OnTrouble: func(msg string) { t.Line(toneWarn, "%s", msg) },
+		// Edges `ktest scan` verified on this network are tried first.
+		PreferredEdges: frontPreferredEdges(context.Background()),
+		OnTrouble:      func(msg string) { t.Line(toneWarn, "%s", msg) },
 		OnSession: func(si front.SessionInfo) {
 			if history != nil && history.add(si) {
 				t.Line(toneWarn, "%-26s %s", si.Host, t.Yellow("fronted connection received nothing back")+t.Dim("  via "+si.Front))

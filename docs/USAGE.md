@@ -182,6 +182,8 @@ Registration writes into a temporary directory, validates the result offline, an
 
 The CDN tool tests provider HTTPS by default. With your configured Windscribe CDN hostname, use ktest scan -windscribe-cdn your.hostname; that branch requires certificate-verified TLS and a valid WebSocket 101 for the hostname. Neither scan authenticates OpenVPN. The menu exposes Cloudflare/Akamai/Google/Fastly providers; own Windscribe CDN routing uses the Cloudflare branch.
 
+Verified provider edges are kept for 24 hours per provider and per network (in the `cdn-scans` folder next to the WARP files; nothing is kept when the network cannot be identified). On that network, `ktest connect` gives them to domain fronting first (Cloudflare, Google, Fastly, Meta) and to Psiphon's `--psiphon-cdn-ips` ahead of the inventory samples (Akamai, Cloudflare, Fastly, CloudFront); `-windscribe-cdn` without `-windscribe-cdn-edge` tries saved Cloudflare edges before scanning. They are only candidates: each path still verifies its own target. Android keeps the same cache.
+
 Use ktest windscribe-test -target "Ashburn - Bles Park" for a fixed-node SNI comparison, or a requested OpenVPN TCP IP from the feed. Use ktest windscribe-test -verify-vpn once Windscribe is connected to compare one system HTTPS request against the CLI-reported exit. See WINDSCRIBE_BOOTSTRAP.md for stage meanings and limits.
 
 ## 9. What is, and is not, possible
