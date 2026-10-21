@@ -1,7 +1,6 @@
 package mobilebridge
 
 import (
-	"encoding/json"
 	"testing"
 )
 
