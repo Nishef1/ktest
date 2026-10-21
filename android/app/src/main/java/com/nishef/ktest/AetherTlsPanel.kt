@@ -10,6 +10,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,6 +29,7 @@ internal val aetherFingerprints = listOf("auto", "chrome", "firefox", "semi-pyth
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreferences, privateDir: String, canMeasure: Boolean) {
+    val context = LocalContext.current
     var fingerprint by remember { mutableStateOf(preferences.getString("aether_fingerprint", "auto") ?: "auto") }
     var sni by remember { mutableStateOf(preferences.getString("masque_sni", "auto") ?: "auto") }
     var fragment by remember { mutableStateOf(preferences.getString("aether_fragment", "auto") ?: "auto") }
@@ -78,7 +80,10 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
                 message = ""
                 scope.launch {
                     try {
-                        message = withContext(Dispatchers.IO) { Mobilebridge.calibrateAetherTLS(privateDir) }
+                        message = withContext(Dispatchers.IO) {
+                            ProxyService.prepareUnderlyingNetwork(context)
+                            Mobilebridge.calibrateAetherTLS(privateDir)
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {

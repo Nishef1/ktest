@@ -2,7 +2,7 @@
 
 `ktest connect` defaults to **balanced**: local-first adaptive routing with on-demand exit discovery. There is no AI/TikTok-specific routing rule in current source. For a verified foreign IP, choose Aether to Psiphon or Aether to Tor; the local-only Windscribe mode is not a foreign exit, while Windscribe through Aether requires the actual Windscribe VPN to connect.
 
-Current source/CI evidence and known calibration/performance gaps are tracked in [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md).
+Current source/CI evidence and known calibration/performance gaps are tracked in [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md). Mode IDs, canonical titles/details, Android availability and shared routing policy live in `internal/connectionpolicy`; the terminal and Android should consume that catalog rather than maintain independent mode semantics. The two UIs intentionally differ in presentation, while route selection, failure policy and the meaning of connection status must remain aligned.
 
 The menu separates **policy** (1-6) from **coverage** (7). Policies 1-4 and 6 use the selected proxy-app or Whole PC TCP coverage. Option 5 is the Windscribe bridge and always leaves coverage to Windscribe. Select coverage first, then the policy; choosing Whole PC does not launch a second routing policy or silently reset the selected policy to Balanced.
 

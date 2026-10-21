@@ -3,11 +3,93 @@ package mobilebridge
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nishef1/ktest/internal/coreprocess"
+	"github.com/Nishef1/ktest/internal/tlsshape"
 )
+
+func TestNativeStatePathResolvesAndroidPrivateDirectory(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "aether")
+	if got := nativePrivateDir(state); got != root {
+		t.Fatalf("native private dir = %q, want %q", got, root)
+	}
+	if got := nativePrivateDir(filepath.Join(root, "custom-state")); got != "" {
+		t.Fatalf("unknown state layout must not guess a calibration directory: %q", got)
+	}
+	if got := nativePrivateDir("aether"); got != "" {
+		t.Fatalf("relative state path must not guess a calibration directory: %q", got)
+	}
+}
+
+func TestNativeProfilesConsumeSavedTLSCalibration(t *testing.T) {
+	privateDir := t.TempDir()
+	routeNetworkMu.Lock()
+	oldNetwork := routeNetworkToken
+	routeNetworkToken = ""
+	routeNetworkMu.Unlock()
+	t.Cleanup(func() {
+		routeNetworkMu.Lock()
+		routeNetworkToken = oldNetwork
+		routeNetworkMu.Unlock()
+	})
+	if err := SetRouteNetworkToken("test-network-calibration"); err != nil {
+		t.Fatal(err)
+	}
+	aetherTLSMu.Lock()
+	oldOptions := aetherTLSOpts
+	autoOptions, err := tlsshape.ParseOptions("auto", "auto", "auto")
+	if err != nil {
+		aetherTLSMu.Unlock()
+		t.Fatal(err)
+	}
+	aetherTLSOpts = autoOptions
+	aetherTLSMu.Unlock()
+	t.Cleanup(func() {
+		aetherTLSMu.Lock()
+		aetherTLSOpts = oldOptions
+		aetherTLSMu.Unlock()
+	})
+	result := tlsshape.Result{
+		Options: autoOptions.Key(), Checked: time.Now().UTC(),
+		SNI: "edge.example.com", AltFingerprint: "go", Fragment: "10-20/0-1",
+		Trials: []tlsshape.Trial{{
+			Shape: tlsshape.Shape{SNI: "edge.example.com", Fingerprint: "go", Fragment: "10-20/0-1"},
+			Attempts: 1, OK: 1,
+		}},
+	}
+	if err := tlsshape.Save(tlsCalibrationPath(privateDir), tlsNetworkKey(), result); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := nativeAutoCandidatesWithECHAndPrivateDir(false, "", "", privateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var measuredTwin bool
+	for _, p := range profiles {
+		if strings.Contains(p.Label, "F&F go") &&
+			p.Value("--masque-sni") == "edge.example.com" &&
+			p.Value("--fragment-size") == "10-20" &&
+			p.Value("--fragment-delay") == "0-1" {
+			measuredTwin = true
+			break
+		}
+	}
+	if !measuredTwin {
+		t.Fatalf("native Auto ignored the saved SNI/fingerprint/fragment result: %+v", profiles)
+	}
+	explicit, err := nativeProfileWithPrivateDir("aether", "masque-h2", false, privateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Value("--masque-sni") != "edge.example.com" {
+		t.Fatalf("explicit native method ignored saved calibration: %+v", explicit)
+	}
+}
 
 func TestAndroidAutoGivesIndependentTransportsAQuickPassBeforeFullScans(t *testing.T) {
 	profiles, err := nativeAutoCandidatesWithECH(false, "ECH", "1.1.1.1")

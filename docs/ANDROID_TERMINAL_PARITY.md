@@ -16,11 +16,12 @@ Reviewed against the KTest source baseline on 2026-10-21. This document describe
 - `aether-fragment=off` now excludes the desktop's TCP TLS-hello exit-node masks as well as disabling Aether's own fragment flag. The independent UDP-noise exit-node remains available because it is a distinct UDP strategy, not TLS fragmentation. Android's label explains that separate local anti-DPI carrier strategies can still shape the outer connection.
 - Android no longer claims that “all apps are connected” just because its local proxy and TUN adapter are active. It distinguishes system VPN readiness from per-destination reachability.
 - Android native profile selection filters the requested mode and transport before applying MASQUE-only TLS shaping, so unrelated profile variants are not processed for an explicit method.
+- The native Android path passes the app's private directory into profile construction and consumes saved TLS calibration for both explicit and Auto profiles. The per-network cache key is set before all connection modes and before the manual calibration action; previously the native path passed an empty directory and discarded the calibration result.
 
 ## Acceptance still required
 
 - Run Go unit/race tests, formatting checks and Android source/APK CI on this branch.
-- On a physical Android device, test fast repeated taps, connect/cancel during startup, 20 connect/disconnect cycles, process background/termination, Wi-Fi-to-cellular handover, VPN permission revocation, DNS and IPv6 leak checks, UDP, and sustained HTTPS traffic.
+- On a physical Android device, test fast repeated taps, connect/cancel during startup, 20 connect/disconnect cycles, process background/termination, Wi-Fi-to-cellular handover, VPN permission revocation, DNS and IPv6 leak checks, UDP, sustained HTTPS traffic, and confirm saved MASQUE calibration is used on the next native connection.
 - Confirm that Android's UI says “VPN active” only for a live packet adapter and never equates that with successful HTTPS to every destination.
 - On Windows, verify the same mode details and route policy in TUI, explicit WireGuard startup without MASQUE calibration, and `aether-fragment=off` with H2 and WireGuard profiles.
 - Do not treat a passing build or a listening local port as proof of live Internet access. Record the tested commit, OS/device, network, mode, coverage and exact result.
