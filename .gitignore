@@ -6,3 +6,6 @@ android/app/libs/
 
 # Generated executable belongs to CI artifacts, not source control.
 /cmd/ktest/ktest.exe
+
+# Cores staged by `ktest warp -upgrade -base .` are local, never committed.
+/cores/

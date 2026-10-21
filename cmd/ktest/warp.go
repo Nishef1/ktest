@@ -314,7 +314,18 @@ func extractZipFile(f *zip.File, dest string) error {
 }
 
 // warpEnable makes the WARP exit available: the core, then the identity.
-func warpEnable(ctx context.Context, u *term, base, proxy string) int {
+// via, when set, is a local SOCKS5 proxy of another app (an exit node) to
+// register through first; see aether.ParseEnrollmentProxy.
+func warpEnable(ctx context.Context, u *term, base, proxy, via string) int {
+	var viaRoute *enrollmentRoute
+	if via != "" {
+		route, err := aether.ViaProxyRoute(ctx, via)
+		if err != nil {
+			u.Line(toneFail, "-via: %v", err)
+			return 1
+		}
+		viaRoute = &enrollmentRoute{route.Label, route.Args}
+	}
 	url, hash, err := aetherArchiveFor(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		u.Line(toneFail, "%v", err)
@@ -339,7 +350,12 @@ func warpEnable(ctx context.Context, u *term, base, proxy string) int {
 	_, masqueErr := os.Stat(identityFile())
 	_, wgErr := os.Stat(wireguardIdentityFile())
 	if errors.Is(masqueErr, os.ErrNotExist) || errors.Is(wgErr, os.ErrNotExist) {
-		routes = enrollmentRoutes(ctx, base, proxy, "", "")
+		if viaRoute != nil {
+			// The user's own exit first; with ECH blocked it is the route
+			// most likely to reach the WARP API.
+			routes = append(routes, *viaRoute)
+		}
+		routes = append(routes, enrollmentRoutes(ctx, base, proxy, "", "")...)
 	}
 	failed := false
 	for _, protocol := range []string{"masque", "wg"} {
@@ -430,7 +446,7 @@ func warpStatus(u *term, base string) {
 		u.Line(toneWarn, "Legacy Aether is available; use `ktest warp -upgrade` to stage %s without replacing it.", aetherVersion)
 	}
 	u.Note("Initial registration uses HTTPS to the WARP API; a working gateway does not prove that registration is reachable.")
-	u.Note("Saved keys are reused. ECH or Psiphon can carry initial registration; they do not guarantee access on every network.")
+	u.Note("Saved keys are reused. Without one, register once through another app's local proxy (p / -via) or with another VPN on, then turn that VPN off; ECH and Psiphon are tried too, but cloudflare-ech.com is reported blocked since 2026-10-21.")
 	u.Note("Gool and nested MASQUE/WireGuard prepare separate inner identities only when selected. Gool registers its inner key through the outer MASQUE tunnel.")
 	u.Note("Portable folder updates keep the key directory %s. To survive removal of user data, use warp -backup / -restore with an encrypted file.", warpDir())
 	u.Note("Traffic using these exits leaves through Cloudflare or Psiphon. When they join routing depends on the selected policy.")
@@ -441,6 +457,9 @@ const warpUsage = `usage: ktest warp [-enable | -upgrade | -disable | -backup FI
 
   (no flag)   show the state of the exit paths
   -enable     stage pinned Aether if needed; prepare missing MASQUE and WireGuard identities
+  -via ADDR   with -enable: register through another app's local proxy first
+              (SOCKS5 127.0.0.1:10808 or http://127.0.0.1:10809). With another VPN on, plain -enable
+              registers through it; turn that VPN off afterwards.
   -upgrade    stage the latest SHA-pinned Aether generation; keep old core and identities
   -disable    delete the MASQUE and WireGuard identities (other settings are kept)
   -backup     save encrypted identities to a new file; hidden password prompt
@@ -456,6 +475,7 @@ func runWarp(args []string) int {
 	disable := fs.Bool("disable", false, "")
 	backup := fs.String("backup", "", "")
 	restore := fs.String("restore", "", "")
+	via := fs.String("via", "", "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, warpUsage) }
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return 2
@@ -471,6 +491,10 @@ func runWarp(args []string) int {
 		u.Line(toneFail, "Choose exactly one of -enable, -upgrade, -disable, -backup or -restore")
 		return 2
 	}
+	if *via != "" && !*enable {
+		u.Line(toneFail, "-via is used with -enable")
+		return 2
+	}
 	switch {
 	case *backup != "":
 		return runWarpBackup(*backup, false, u)
@@ -479,7 +503,7 @@ func runWarp(args []string) int {
 	case *upgrade:
 		return warpUpgrade(context.Background(), u, *base)
 	case *enable:
-		return warpEnable(context.Background(), u, *base, connectListenDefault)
+		return warpEnable(context.Background(), u, *base, connectListenDefault, *via)
 	case *disable:
 		return warpDisable(u)
 	}
@@ -542,7 +566,7 @@ func (t *terminal) warpSetup(base string, in *input) bool {
 	u := t.ui
 	for {
 		warpStatus(u, base)
-		u.Printf("  y = prepare/retry missing identities; u = upgrade Aether; REMOVE = delete WARP identities; Enter / 0 = back > ")
+		u.Printf("  y = prepare/retry missing identities; p = register through another app's local proxy; u = upgrade Aether; REMOVE = delete WARP identities; Enter / 0 = back > ")
 		ans, ok := in.read()
 		if !ok {
 			return false
@@ -564,15 +588,28 @@ func (t *terminal) warpSetup(base string, in *input) bool {
 			warpDisable(u)
 			continue
 		}
+		via := ""
+		if strings.EqualFold(ans, "p") {
+			u.Printf("  Local proxy of the other app (SOCKS5 127.0.0.1:10808 or http://127.0.0.1:10809) > ")
+			addr, ok := in.read()
+			if !ok {
+				return false
+			}
+			if _, err := aether.ParseEnrollmentProxy(addr); err != nil {
+				u.Line(toneWarn, "%v", err)
+				continue
+			}
+			via, ans = addr, "y"
+		}
 		if !isYes(ans) {
-			u.Line(toneWarn, "Select y, u, REMOVE, or 0 to go back.")
+			u.Line(toneWarn, "Select y, p, u, REMOVE, or 0 to go back.")
 			continue
 		}
 		u.Note("Press Enter to cancel setup.")
 		if !t.foreground(func(ctx context.Context) {
 			ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 			defer cancel()
-			warpEnable(ctx, u, base, t.options.listen)
+			warpEnable(ctx, u, base, t.options.listen, via)
 		}, in.enter()) {
 			return false
 		}

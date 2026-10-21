@@ -150,7 +150,7 @@ func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore
 	// not suppress ordinary MASQUE H2/H3 or WireGuard profiles.
 	ech, ip := "", ""
 	discoveryCtx, stopDiscovery := context.WithTimeout(ctx, 3*time.Second)
-	if cfg, address, discoveryErr := front.FetchCloudflareECH(discoveryCtx); discoveryErr == nil {
+	if cfg, address, discoveryErr := front.SharedCloudflareECH(discoveryCtx); discoveryErr == nil {
 		ech, ip = base64.StdEncoding.EncodeToString(cfg), address
 	}
 	stopDiscovery()

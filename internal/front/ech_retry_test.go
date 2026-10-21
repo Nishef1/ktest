@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/tls"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -115,5 +116,28 @@ func TestECHRotatedKeyReplacesCacheAfterAcceptance(t *testing.T) {
 	c.Close()
 	if got := f.echConfig(CloudflareECH); !bytes.Equal(got, list) {
 		t.Fatal("rotated key did not replace the stale cached list")
+	}
+}
+
+// A blocked bootstrap (cloudflare-ech.com refused) is remembered so automatic
+// callers do not repeat the handshakes on every attempt; a success is shared.
+func TestSharedECHBootstrapRemembersDefiniteResults(t *testing.T) {
+	t.Cleanup(func() {
+		echBootstrap.Lock()
+		echBootstrap.config, echBootstrap.edge, echBootstrap.err, echBootstrap.at = nil, "", nil, time.Time{}
+		echBootstrap.Unlock()
+	})
+	echBootstrap.Lock()
+	echBootstrap.err, echBootstrap.at = errors.New("connection reset"), time.Now()
+	echBootstrap.Unlock()
+	began := time.Now()
+	if _, _, err := SharedCloudflareECH(context.Background()); err == nil || time.Since(began) > time.Second {
+		t.Fatalf("recent failure not reused: %v after %s", err, time.Since(began))
+	}
+	echBootstrap.Lock()
+	echBootstrap.config, echBootstrap.edge, echBootstrap.err = []byte{1, 2}, "104.16.0.1", nil
+	echBootstrap.Unlock()
+	if cfg, edge, err := SharedCloudflareECH(context.Background()); err != nil || edge != "104.16.0.1" || len(cfg) != 2 {
+		t.Fatalf("shared success = %v %q %v", cfg, edge, err)
 	}
 }

@@ -12,8 +12,9 @@ import (
 	"github.com/Nishef1/ktest/internal/front"
 )
 
-// identityCheckBudget leaves room for the two-gateway rejection quorum.
-const identityCheckBudget = 45 * time.Second
+// identityCheckBudget leaves room for the two-gateway rejection quorum; a
+// filtered path ends after two gateways without TLS (8s each).
+const identityCheckBudget = 30 * time.Second
 
 // bootstrapAndroidWARP gives a phone with no VPN an initial path to Cloudflare
 // registration: ECH with a key ktest fetched itself, then a local Fast
@@ -37,8 +38,8 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	if identity.Protocol == "masque" && aether.CheckIdentity(path, "masque") == nil {
 		// A key can be intact on disk and refused by every gateway; then it
 		// never connects. Set it aside (never deleted) and register anew.
-		// Two credential refusals are needed and one gateway may take up to
-		// 20s on a slow network; a filtered path ends after two silent peers.
+		// Two credential refusals are needed; a refusal arrives seconds after
+		// TLS, and a gateway without TLS is abandoned after 8s.
 		checkCtx, stopCheck := context.WithTimeout(ctx, identityCheckBudget)
 		verdict, checkErr := aether.ProbeMasqueIdentity(checkCtx, paths.Aether, path)
 		stopCheck()
@@ -57,7 +58,7 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	// ECH first, never with --fragment: where the API name itself is
 	// filtered it is the route that registers (desktop, 2026-10-20).
 	echCtx, stopECH := context.WithTimeout(ctx, 15*time.Second)
-	if config, edge, err := front.FetchCloudflareECH(echCtx); err == nil {
+	if config, edge, err := front.SharedCloudflareECH(echCtx); err == nil {
 		routes = append(routes, aether.EnrollmentRoute{
 			Label: "ECH registration", Args: []string{"--ech", base64.StdEncoding.EncodeToString(config), "--api-address", edge},
 			// Succeeds within seconds where it works; a stalled attempt must

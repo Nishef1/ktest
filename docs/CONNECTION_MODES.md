@@ -30,6 +30,10 @@ carry data and pass independent HTTPS/foreign-exit verification. The sampled
 2026-10-19 network reached ECH-capable gateways but also returned CONNECT-IP
 400 responses, certificate rejection or timeout; that test did not establish
 a usable native WARP exit. These failures are not promoted as working routes.
+Since 2026-10-21 `cloudflare-ech.com` is reported blocked everywhere in Iran;
+ECH registration and ECH-dependent profiles are skipped once the shared
+bootstrap fails (rechecked every five minutes), and a first key is obtained
+through another app's local proxy or another VPN (see USAGE.md).
 The saved-key check treats only credential-specific refusals (a TLS
 access-denied/certificate alert after the handshake, or CONNECT-IP 401/403)
 from two gateways as a refused key; CONNECT-IP 400 and 5xx are gateway or

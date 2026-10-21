@@ -24,13 +24,14 @@ import org.json.JSONObject
 // A portable backup is therefore created *only* after a deliberate user
 // action, encrypted in Go before its bytes enter a shared SAF document.
 @Composable
-internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String, canRestore: Boolean) {
+internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String, nativeLibraryDir: String, canRestore: Boolean) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var valid by remember { mutableIntStateOf(0) }
+    var via by remember { mutableStateOf("") }
 
     fun refreshStatus() {
         scope.launch {
@@ -116,9 +117,57 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
         }
     }
 
+    // cloudflare-ech.com is blocked (2026-10-21), so ECH can no longer fetch a
+    // first key. Register once through another app's local proxy, or with
+    // another VPN turned on, while KTest is disconnected.
+    fun register() {
+        if (busy) return
+        val proxy = via.trim()
+        busy = true
+        message = ""
+        error = ""
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    JSONObject(Mobilebridge.registerAetherIdentity(nativeLibraryDir, privateDir, proxy))
+                }
+                val items = result.getJSONArray("results")
+                val failed = (0 until items.length()).map { items.getJSONObject(it) }.filter { !it.optBoolean("ready") }
+                if (failed.isEmpty()) {
+                    message = "WARP keys are ready. If you turned on another VPN for this, turn it off before connecting KTest."
+                } else {
+                    error = failed.joinToString("\n") { "${it.optString("protocol")}: ${it.optString("error")}" }
+                }
+                refreshStatus()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = e.message ?: "WARP registration failed"
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     Panel {
         SectionLabel("WARP identity recovery")
         Text("Valid saved Aether keys: $valid", color = K.text)
+        if (valid == 0) {
+            Note("No WARP key yet. ECH registration is blocked on Iranian networks since 2026-10-21. " +
+                "Get a key once: enter another app's local proxy (e.g. 127.0.0.1:10808 or http://127.0.0.1:10809), " +
+                "or leave it empty and turn on another VPN first. Then turn that VPN off and connect.", Tone.Warn)
+        }
+        OutlinedTextField(
+            value = via,
+            onValueChange = { via = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Other app's local proxy (optional, SOCKS5 or http://)") },
+            singleLine = true,
+            enabled = !busy,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+        )
+        SecondaryButton("Get WARP key", { register() },
+            Modifier.fillMaxWidth(), enabled = canRestore, busy = busy)
         Note("Your WARP identity is generated automatically by Aether on first use and kept in this app's private storage. App updates keep it; uninstalling or clearing app data removes it. Export an encrypted copy before uninstalling.")
         OutlinedTextField(
             value = password,

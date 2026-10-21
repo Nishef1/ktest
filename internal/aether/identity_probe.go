@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -145,8 +146,12 @@ func ProbeMasqueIdentity(ctx context.Context, binary, masquePath string) (Identi
 }
 
 // probePeerTimeout bounds one gateway; a refusal or acceptance normally
-// arrives within a few seconds of TLS.
-const probePeerTimeout = 20 * time.Second
+// arrives within a few seconds of TLS. A gateway that has not completed TLS
+// by probeTLSDeadline is on a filtered path and cannot judge the key.
+const (
+	probePeerTimeout = 20 * time.Second
+	probeTLSDeadline = 8 * time.Second
+)
 
 func probeOnce(parent context.Context, binary, dir, masquePath, peer string) (IdentityVerdict, bool, error) {
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -167,9 +172,18 @@ func probeOnce(parent context.Context, binary, dir, masquePath, peer string) (Id
 	// otherwise makes a working tunnel look inconclusive until timeout.
 	go func() { done <- Run(ctx, binary, args, w); w.Close() }()
 	verdict, tls := IdentityUnknown, false
+	var tlsSeen atomic.Bool
+	silent := time.AfterFunc(probeTLSDeadline, func() {
+		if !tlsSeen.Load() {
+			cancel()
+		}
+	})
+	defer silent.Stop()
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		if verdict, tls = ClassifyIdentityLine(scanner.Text(), tls); verdict != IdentityUnknown {
+		verdict, tls = ClassifyIdentityLine(scanner.Text(), tls)
+		tlsSeen.Store(tls)
+		if verdict != IdentityUnknown {
 			break
 		}
 	}

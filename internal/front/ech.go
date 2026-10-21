@@ -9,6 +9,7 @@ import (
 	"fmt"
 	mrand "math/rand/v2"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -154,6 +155,48 @@ func shuffled(s []string) []string {
 	out := append([]string(nil), s...)
 	mrand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
 	return out
+}
+
+// The bootstrap result is shared by every automatic caller for a while. Since
+// 2026-10-21 cloudflare-ech.com is reported blocked on all Iranian networks
+// (Patterniha); a refused bootstrap must not cost every connection attempt
+// another round of handshakes. Only definite answers are kept: a caller's own
+// deadline expiring says nothing about the network.
+const (
+	echBootstrapOK   = 10 * time.Minute
+	echBootstrapFail = 5 * time.Minute
+)
+
+var echBootstrap struct {
+	sync.Mutex
+	config []byte
+	edge   string
+	err    error
+	at     time.Time
+}
+
+// SharedCloudflareECH is FetchCloudflareECH with the shared result above. Explicit
+// diagnostics call FetchCloudflareECH to measure the network afresh.
+func SharedCloudflareECH(ctx context.Context) ([]byte, string, error) {
+	echBootstrap.Lock()
+	age := time.Since(echBootstrap.at)
+	if echBootstrap.config != nil && age < echBootstrapOK {
+		defer echBootstrap.Unlock()
+		return echBootstrap.config, echBootstrap.edge, nil
+	}
+	if echBootstrap.err != nil && age < echBootstrapFail {
+		defer echBootstrap.Unlock()
+		return nil, "", fmt.Errorf("ECH bootstrap failed %s ago (not retried yet): %w", age.Round(time.Second), echBootstrap.err)
+	}
+	echBootstrap.Unlock()
+	config, edge, err := FetchCloudflareECH(ctx)
+	if err != nil && ctx.Err() != nil {
+		return nil, "", err
+	}
+	echBootstrap.Lock()
+	echBootstrap.config, echBootstrap.edge, echBootstrap.err, echBootstrap.at = config, edge, err, time.Now()
+	echBootstrap.Unlock()
+	return config, edge, err
 }
 
 // FetchCloudflareECH asks a Cloudflare edge address for the current ECH

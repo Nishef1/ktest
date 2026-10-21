@@ -220,7 +220,7 @@ func (a *automaticExit) hintFile() string {
 func (a *automaticExit) profiles() []aether.Profile {
 	ech, ip := "", ""
 	ctx, stop := context.WithTimeout(a.ctx, 3*time.Second)
-	if config, edge, err := front.FetchCloudflareECH(ctx); err == nil {
+	if config, edge, err := front.SharedCloudflareECH(ctx); err == nil {
 		ech, ip = base64.StdEncoding.EncodeToString(config), edge
 	}
 	stop()

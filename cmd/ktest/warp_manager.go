@@ -740,13 +740,15 @@ func (m *warpManager) checkMasqueKey(ctx context.Context, p aetherProfile) {
 	probeCtx := ctx
 	if !m.diagnosis {
 		// This optional preflight must not spend up to six 20-second peer
-		// timeouts before the real carrier attempt even starts. An inconclusive
+		// timeouts before the real carrier attempt even starts, yet must give
+		// two gateways time to answer (the rejection quorum). A filtered path
+		// ends after two gateways without TLS (8s each). An inconclusive
 		// check preserves the key; live tunnel/HTTPS validation remains required.
 		var cancel context.CancelFunc
-		probeCtx, cancel = context.WithTimeout(ctx, 8*time.Second)
+		probeCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		if m.t != nil {
-			m.t.Note("Checking the saved WARP key (up to 8s); live carrier search follows")
+			m.t.Note("Checking the saved WARP key (up to 20s; usually a few seconds); live carrier search follows")
 		}
 	}
 	verdict, err := aether.ProbeMasqueIdentity(probeCtx, aetherBinary(m.o.base), identityFile())

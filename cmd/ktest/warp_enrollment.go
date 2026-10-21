@@ -44,7 +44,7 @@ func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enroll
 	var routes []enrollmentRoute
 	if ech == "" {
 		fctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		if cfg, addr, err := front.FetchCloudflareECH(fctx); err == nil {
+		if cfg, addr, err := front.SharedCloudflareECH(fctx); err == nil {
 			ech, ip = base64.StdEncoding.EncodeToString(cfg), addr
 		}
 		cancel()

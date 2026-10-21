@@ -340,7 +340,7 @@ internal fun SettingsScreen(
                 "Remove the user CA manually from Android's trusted credentials too.")
         }
 
-        AetherIdentityBackupPanel(scope, privateDir, targetsEditable && !manualTesting)
+        AetherIdentityBackupPanel(scope, privateDir, nativeLibraryDir, targetsEditable && !manualTesting)
 
         RouteTargetsPanel(routeTargets, scope, privateDir, targetsEditable,
             s.caReport?.optString("fingerprint").orEmpty(), onTargetsChanged)
