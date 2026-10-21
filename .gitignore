@@ -3,3 +3,6 @@ dist/
 /ktest.exe
 android/app/src/main/jniLibs/
 android/app/libs/
+
+# Generated executable belongs to CI artifacts, not source control.
+/cmd/ktest/ktest.exe
