@@ -58,7 +58,7 @@ func TestNativeProfilesConsumeSavedTLSCalibration(t *testing.T) {
 		Options: autoOptions.Key(), Checked: time.Now().UTC(),
 		SNI: "edge.example.com", AltFingerprint: "go", Fragment: "10-20/0-1",
 		Trials: []tlsshape.Trial{{
-			Shape: tlsshape.Shape{SNI: "edge.example.com", Fingerprint: "go", Fragment: "10-20/0-1"},
+			Shape:    tlsshape.Shape{SNI: "edge.example.com", Fingerprint: "go", Fragment: "10-20/0-1"},
 			Attempts: 1, OK: 1,
 		}},
 	}
