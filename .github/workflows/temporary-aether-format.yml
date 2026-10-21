@@ -1,0 +1,24 @@
+name: Format Aether rollback regression
+on:
+  push:
+    branches: [feat/aether-v232-atomic-upgrades-20261021]
+    paths: [.github/workflows/temporary-aether-format.yml]
+permissions:
+  contents: write
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/aether-v232-atomic-upgrades-20261021
+          persist-credentials: true
+      - name: Format rollback implementation and regression tests
+        run: |
+          set -euo pipefail
+          gofmt -w cmd/ktest/warp.go cmd/ktest/warp_test.go
+          git add -- cmd/ktest/warp.go cmd/ktest/warp_test.go
+          if ! git diff --cached --quiet; then
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Format offline legacy Aether fallback and rollback tests"
+            git push origin HEAD:refs/heads/feat/aether-v232-atomic-upgrades-20261021
+          fi
