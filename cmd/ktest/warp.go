@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/Nishef1/ktest/internal/aether"
 )
 
 // The WARP exit is the one path that does not depend on what a site's CDN
@@ -28,11 +30,9 @@ import (
 // destinations that are blocked by address (Telegram) and sites that no front
 // reaches open too. It is opt-in because it registers a free, anonymous WARP
 // identity on this PC and sends the traffic that uses it through Cloudflare.
-const (
-	aetherVersion  = "v2.3.1"
-	aetherZipSHA   = "a3bdd2384a624b01e9c4885f2816d75f7039fd2f62d46a94c54a0785e7c8fcb4"
-	aetherBasePort = 10830
-)
+const aetherBasePort = 10830
+
+var aetherVersion = aether.DesktopVersion()
 
 // aetherHasModernCLI distinguishes old v2.3.0 installations from the newer
 // PattNG-aligned core without touching saved WARP identities. This is a
@@ -60,41 +60,41 @@ func warpDir() string {
 	return filepath.Join(base, "ktest", "warp")
 }
 
+func aetherName() string {
+	if runtime.GOOS == "windows" { return "aether.exe" }
+	return "aether"
+}
+func psiphonName() string {
+	if runtime.GOOS == "windows" { return "psiphon-tunnel-core.exe" }
+	return "psiphon-tunnel-core"
+}
+func lyrebirdName() string {
+	if runtime.GOOS == "windows" { return "lyrebird.exe" }
+	return "lyrebird"
+}
+func aetherVersionDir(base string) string {
+	return filepath.Join(base, "cores", "aether-versions", aetherVersion)
+}
+func aetherVersionReady(base string) bool {
+	_, digest, err := aether.DesktopArchiveFor(runtime.GOOS, runtime.GOARCH)
+	if err != nil { return false }
+	dir := aetherVersionDir(base)
+	marker, err := os.ReadFile(filepath.Join(dir, ".archive-sha256"))
+	if err != nil || strings.TrimSpace(string(marker)) != digest { return false }
+	return fileOK(filepath.Join(dir, aetherName())) &&
+		fileOK(filepath.Join(dir, "pt", psiphonName())) &&
+		fileOK(filepath.Join(dir, "pt", lyrebirdName()))
+}
 func aetherBinary(base string) string {
-	name := "aether"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	return filepath.Join(base, "cores", name)
+	if aetherVersionReady(base) { return filepath.Join(aetherVersionDir(base), aetherName()) }
+	return filepath.Join(base, "cores", aetherName())
 }
-
-// psiphonCore is the helper Aether runs for its Psiphon profiles; it must
-// sit in a pt folder next to aether.exe.
 func psiphonCore(base string) string {
-	name := "psiphon-tunnel-core"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	return filepath.Join(base, "cores", "pt", name)
+	if aetherVersionReady(base) { return filepath.Join(aetherVersionDir(base), "pt", psiphonName()) }
+	return filepath.Join(base, "cores", "pt", psiphonName())
 }
-
 func aetherArchiveFor(goos, goarch string) (string, string, error) {
-	name, sum := "", ""
-	switch goos + "/" + goarch {
-	case "windows/amd64":
-		name, sum = "aether-windows-x86_64.zip", aetherZipSHA
-	case "linux/amd64":
-		name, sum = "aether-linux-x86_64.tar.gz", "371f92dcaa2b060bcd24e430f79d2b4864a38b3f7a76f1a05fd0692cc2c50a38"
-	case "linux/arm64":
-		name, sum = "aether-linux-arm64.tar.gz", "3725989e5a78dfccb821c66fb1204e3cc11ac0d3c9511e06d679f64b800ee2ab"
-	case "darwin/amd64":
-		name, sum = "aether-macos-x86_64.tar.gz", "10c89a252f51a3de5d3770ca2f2587400bb4565a11e692607a953f1ed9bdbbb1"
-	case "darwin/arm64":
-		name, sum = "aether-macos-arm64.tar.gz", "dfb7d24f8cadfff16f5dfbbf1b0007732a97f367763cced4c2efb54f46d5eb72"
-	default:
-		return "", "", fmt.Errorf("no checksum-pinned Aether %s archive for %s/%s", aetherVersion, goos, goarch)
-	}
-	return "https://github.com/patterniha/Aether/releases/download/" + aetherVersion + "/" + name, sum, nil
+	return aether.DesktopArchiveFor(goos, goarch)
 }
 
 func identityFile() string          { return filepath.Join(warpDir(), "masque.toml") }
@@ -119,6 +119,7 @@ func warpState(base string) string {
 // fetchAether verifies the pinned release and extracts Aether plus its
 // whitelisted Psiphon/Lyrebird helpers into base/cores.
 func fetchAether(ctx context.Context, url, sha, base string) error {
+	if aetherVersionReady(base) { return nil }
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -131,27 +132,29 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 200<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (200<<20)+1))
 	if err != nil {
 		return err
 	}
+	if len(data) == 0 || len(data) > 200<<20 { return errors.New("Aether archive empty or too large") }
 	sum := sha256.Sum256(data)
 	if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, sha) {
 		return fmt.Errorf("checksum mismatch: got %s, pinned %s; the file was not used", got, sha)
 	}
-	// The release workflow packages aether and pt/ at archive root. Reject
-	// every other entry, never extracting arbitrary filenames from the archive.
-	core := filepath.Base(aetherBinary(base))
-	ptBin := filepath.Base(psiphonCore(base))
-	lyre := "lyrebird"
-	if runtime.GOOS == "windows" {
-		lyre += ".exe"
-	}
+	// Stage a complete generation alongside the running old core. Nothing
+	// in the existing core directory is overwritten by partial downloads.
+	parent := filepath.Dir(aetherVersionDir(base))
+	if err := os.MkdirAll(parent, 0o755); err != nil { return err }
+	stage, err := os.MkdirTemp(parent, ".aether-staging-")
+	if err != nil { return err }
+	defer os.RemoveAll(stage)
+	core, ptBin, lyre := aetherName(), psiphonName(), lyrebirdName()
 	want := map[string]string{
-		core:          aetherBinary(base),
-		"pt/" + ptBin: psiphonCore(base),
-		"pt/" + lyre:  filepath.Join(base, "cores", "pt", lyre),
+		core: filepath.Join(stage, core),
+		"pt/" + ptBin: filepath.Join(stage, "pt", ptBin),
+		"pt/" + lyre: filepath.Join(stage, "pt", lyre),
 	}
+	seen := make(map[string]bool)
 	found := false
 	if bytes.HasPrefix(data, []byte{'P', 'K', 3, 4}) {
 		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
@@ -163,6 +166,8 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 			if !ok {
 				continue
 			}
+			if seen[f.Name] { return fmt.Errorf("duplicate Aether member %s", f.Name) }
+			seen[f.Name] = true
 			if err := extractZipFile(f, dest); err != nil {
 				return err
 			}
@@ -196,6 +201,8 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 			if h.Size < 0 || h.Size > 100<<20 {
 				return fmt.Errorf("Aether archive entry %s exceeds size limit", name)
 			}
+			if seen[name] { return fmt.Errorf("duplicate Aether member %s", name) }
+			seen[name] = true
 			if err := extractVerifiedFile(tr, dest, h.Size); err != nil {
 				return err
 			}
@@ -206,8 +213,14 @@ func fetchAether(ctx context.Context, url, sha, base string) error {
 	} else {
 		return fmt.Errorf("unsupported Aether archive format")
 	}
-	if !found {
-		return fmt.Errorf("the archive does not contain %s", core)
+	if !found { return fmt.Errorf("Aether archive missing %s", core) }
+	for name := range want {
+		if !seen[name] { return fmt.Errorf("Aether archive missing %s; previous core preserved", name) }
+	}
+	if err := os.WriteFile(filepath.Join(stage, ".archive-sha256"), []byte(strings.ToLower(sha)+"\n"), 0o600); err != nil { return err }
+	if err := os.Rename(stage, aetherVersionDir(base)); err != nil {
+		if aetherVersionReady(base) { return nil }
+		return fmt.Errorf("cannot publish Aether generation (previous core preserved): %w", err)
 	}
 	return nil
 }
