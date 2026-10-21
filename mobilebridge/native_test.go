@@ -104,7 +104,9 @@ func TestAndroidAutoGivesIPv4IPv6AndIndependentTransportsAQuickPassBeforeFullSca
 	seen := map[string]bool{}
 	for _, p := range attempts[:quickCount] {
 		key := p.Method()
-		if p.Has("-6") { key += "/ipv6" }
+		if p.Has("-6") {
+			key += "/ipv6"
+		}
 		if p.Value("--scan") != "turbo" || seen[key] {
 			t.Fatalf("independent IPv4/IPv6 transports delayed by repeated/full scan: %v", attempts[:quickCount])
 		}
