@@ -96,7 +96,7 @@ internal fun ConnectScreen(
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
-        if (activeMode.id == "balanced") Note("Recommended for first setup: Balanced starts independent WARP, Psiphon and Tor discovery in parallel. Psiphon/Tor do not wait for a WARP key, and only a verified working exit is promoted.")
+        if (activeMode.id == "balanced") Note("Recommended for first setup: when no external SOCKS upstream is set, Balanced starts independent WARP, Psiphon and Tor discovery in parallel. Psiphon/Tor do not wait for a WARP key, and only a verified working exit is promoted.")
         if (activeMode.id == "fast") Note("Fast prioritizes quick local routes and WARP; it does not warm Psiphon/Tor fallback on startup. Choose Balanced for automatic cross-backend fallback.")
         PublicIpPanel(state == LinkState.Active)
         CoverageCard(coverage, onCoverage, !locked)

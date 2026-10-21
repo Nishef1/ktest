@@ -238,6 +238,37 @@ func TestAndroidAutoTriesIndependentWarpTransportsOnly(t *testing.T) {
 	}
 }
 
+func TestAndroidAutoCarrierQuickPassKeepsDirectAndCarriedRoutesSeparate(t *testing.T) {
+	profiles, err := nativeAutoCandidates(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := nativeAutoAttemptProfiles(profiles)
+	if len(attempts) < 4 {
+		t.Fatalf("carrier Auto did not produce a complete quick pass: %v", attempts)
+	}
+	var directH2, directH3, directWG, carriedH2 bool
+	for _, profile := range attempts[:4] {
+		if profile.Value("--scan") != "turbo" {
+			t.Fatalf("full scan was scheduled before all independent quick attempts: %v", profile.Args)
+		}
+		switch {
+		case profile.LocalCarrier() && profile.Method() == "masque-h2":
+			carriedH2 = true
+		case !profile.LocalCarrier() && profile.Method() == "masque-h2":
+			directH2 = true
+		case !profile.LocalCarrier() && profile.Method() == "masque-h3":
+			directH3 = true
+		case !profile.LocalCarrier() && profile.Method() == "wireguard":
+			directWG = true
+		}
+	}
+	if !directH2 || !directH3 || !directWG || !carriedH2 {
+		t.Fatalf("quick pass must include direct H2/H3/WireGuard plus carried H2: H2=%v H3=%v WG=%v carried=%v",
+			directH2, directH3, directWG, carriedH2)
+	}
+}
+
 func TestAndroidAutoECHProfilesKeepDirectFallbackAndTransportIsolation(t *testing.T) {
 	withECH, err := nativeAutoCandidatesWithECH(false, "valid-config", "162.159.197.1")
 	if err != nil {

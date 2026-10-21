@@ -134,13 +134,19 @@ func nativeAutoAttemptProfiles(profiles []aether.Profile) []aether.Profile {
 	var quick []aether.Profile
 	seen := map[string]bool{}
 	for _, p := range profiles {
-		if seen[p.Method()] {
+		// A carried H2 profile is a distinct bootstrap route from direct H2.
+		// Give it a quick pass too, without starving direct H3/WireGuard.
+		key := p.Method()
+		if p.LocalCarrier() {
+			key += "/local-carrier"
+		}
+		if seen[key] {
 			continue
 		}
 		launch := aether.QuickScanProfile(p)
 		if launch.ID() != p.ID() {
 			quick = append(quick, launch)
-			seen[p.Method()] = true
+			seen[key] = true
 		}
 	}
 	return append(quick, profiles...)
