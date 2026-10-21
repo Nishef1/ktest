@@ -78,7 +78,7 @@ jobs:
             if (-not (Test-Path -LiteralPath $src)) { throw "Pinned Aether helper missing: $helper" }
             Copy-Item -LiteralPath $src -Destination "$target/pt/$helper"
           }
-          [System.IO.File]::WriteAllText((Join-Path (Resolve-Path $target) ".archive-sha256"), "$($asset.sha256)`n")
+          [System.IO.File]::WriteAllText((Join-Path (Resolve-Path $target) "aether-release.sha256"), "$($asset.sha256)`n")
           & "$target/aether.exe" --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "Updated Aether Windows executable failed --help smoke" }
           Invoke-WebRequest -Uri "$($aetherLock.repository.Replace('github.com','raw.githubusercontent.com'))/$($aetherLock.version)/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Aether-AGPL-3.0.txt
