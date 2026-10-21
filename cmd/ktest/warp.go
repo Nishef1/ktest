@@ -95,14 +95,21 @@ func aetherVersionReady(base string) bool {
 		fileOK(filepath.Join(dir, "pt", psiphonName())) &&
 		fileOK(filepath.Join(dir, "pt", lyrebirdName()))
 }
+// An explicit operator override allows immediate rollback if an upgraded
+// executable starts but fails on a particular ISP. This changes selection
+// only; no binary, helper, or saved WARP key is deleted.
+func aetherUseLegacy(base string) bool {
+	return os.Getenv("KTEST_AETHER_USE_LEGACY") == "1" &&
+		fileOK(filepath.Join(base, "cores", aetherName()))
+}
 func aetherBinary(base string) string {
-	if aetherVersionReady(base) {
+	if !aetherUseLegacy(base) && aetherVersionReady(base) {
 		return filepath.Join(aetherVersionDir(base), aetherName())
 	}
 	return filepath.Join(base, "cores", aetherName())
 }
 func psiphonCore(base string) string {
-	if aetherVersionReady(base) {
+	if !aetherUseLegacy(base) && aetherVersionReady(base) {
 		return filepath.Join(aetherVersionDir(base), "pt", psiphonName())
 	}
 	return filepath.Join(base, "cores", "pt", psiphonName())
@@ -309,11 +316,17 @@ func warpEnable(ctx context.Context, u *term, base, proxy string) int {
 	if !aetherVersionReady(base) {
 		step := u.Progress("Installing or upgrading Aether "+aetherVersion, 1)
 		if err := fetchAether(ctx, url, hash, base); err != nil {
-			step.Finish(toneFail, err.Error())
-			u.Note("Download %s yourself, check its SHA-256 (%s) and put the core plus pt/ helpers into %s.", url, hash, filepath.Join(base, "cores"))
-			return 1
+			// Setup must not turn an already-working legacy core into an
+			// offline installation failure. Continue with its saved keys.
+			if !aetherHasModernCLI(ctx, aetherBinary(base)) || !fileOK(psiphonCore(base)) {
+				step.Finish(toneFail, err.Error())
+				u.Note("Download %s yourself and check its SHA-256 (%s); your existing identities were preserved.", url, hash)
+				return 1
+			}
+			step.Finish(toneWarn, "Upgrade unavailable; using compatible legacy Aether without deleting any keys")
+		} else {
+			step.Finish(toneOK, "verified against the pinned SHA-256")
 		}
-		step.Finish(toneOK, "verified against the pinned SHA-256")
 	}
 	var routes []enrollmentRoute
 	_, masqueErr := os.Stat(identityFile())
@@ -400,6 +413,9 @@ func warpStatus(u *term, base string) {
 				u.Line(toneOK, "%s identity: saved / locally valid", item.protocol)
 			}
 		}
+	}
+	if aetherUseLegacy(base) {
+		u.Line(toneWarn, "Legacy Aether selected by KTEST_AETHER_USE_LEGACY=1; v%s generation is not used in this process.", strings.TrimPrefix(aetherVersion, "v"))
 	}
 	if aetherVersionReady(base) {
 		u.Line(toneOK, "Aether release %s installed (verified archive marker and all helpers).", aetherVersion)
