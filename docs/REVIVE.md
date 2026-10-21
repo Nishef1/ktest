@@ -1,5 +1,7 @@
 # CLI initial connectivity profile (2026-10-15)
 
+> **Historical recipe:** this file captures an experimental CLI setup, not the canonical current mode contract. The latest source has no AI/TikTok-specific route rule; WARP carrier readiness is not proof of a foreign IP or a working application data plane. Check [USAGE.md](USAGE.md), [CONNECTION_MODES.md](CONNECTION_MODES.md) and [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md) before relying on any old result.
+
 This module uses the **existing** public Patterniha v52 serverless profiles to try to restore direct access to selected foreign HTTP(S) destinations. It is not a VPN and does not promise general foreign IP access.
 
 Source: https://github.com/patterniha/Serverless-for-Iran

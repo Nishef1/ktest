@@ -1,5 +1,7 @@
 # Direct-access integration — 2026-10-13
 
+> **Current status (2026-10-21):** the narrow external-engine integration remains a separate, opt-in path. The local-test status below is not a current Iranian-ISP success claim and does not replace the main mode policies. See [current audit](CURRENT_AUDIT_2026-10-21.md) for the latest source/CI boundary.
+
 Status: **local integration tests passed; NOT verified on an Iranian ISP.**
 This is a domain-scoped HTTPS CONNECT adapter, not a full VPN. It uses the existing SNI-Spoofing-Go packet-injection engine, without building a new injection implementation or installing any root CA.
 

@@ -1,5 +1,7 @@
 # Windows portable — managed CLI (2026-10-15)
 
+> **Current-state note (2026-10-21):** this file preserves dated implementation and field notes; [USAGE.md](USAGE.md) and [CONNECTION_MODES.md](CONNECTION_MODES.md) are the current user-facing contracts. The latest reviewed snapshot pins Aether v2.3.2 and Xray-core v26.10.21 and passes its then-current CI, but this does not prove current ISP access or resource efficiency. No AI/TikTok-specific routing exception exists in current policy. See [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md).
+
 > **2026-10-16:** `docs/USAGE.md` is now the entry point. The menu was later reorganised (see USAGE.md, section 8); the Advanced screen described below no longer exists. `ktest auto` was removed (Connect replaces it) and `ktest smart` is now `ktest connect` (the old name still works). Later sections of this file are dated notes written while those features were built; where they differ, USAGE.md is current.
 
 Use the latest successful `windows-portable` GitHub Actions artifact `ktest-windows-portable`; extract both ZIP layers fully. The complete folder includes `ktest.exe`, `cores/xray.exe`, `cores/ciadpi.exe`, `cores/sing-box.exe`, `cores/wintun.dll`, `profiles/Serverless-for-Iran.json`, and third-party license texts. Do not run just the executable extracted from the generic `verify` workflow.

@@ -1,4 +1,6 @@
-# CDN IP Source Review — 2026-10-15
+# CDN IP Source Review — refreshed 2026-10-21
+
+> **Evidence boundary (2026-10-21):** provider HTTPS success establishes reachability to that provider endpoint only. It does not establish arbitrary-origin fronting, a foreign exit, or improved application performance. No comprehensive physical-device CPU/RAM/battery benchmark is available; see [current audit](CURRENT_AUDIT_2026-10-21.md).
 
 Purpose: prefer proven upstream logic without copying unsafe TLS behavior. Internet reachability from a particular Iranian ISP is not established by GitHub README claims.
 

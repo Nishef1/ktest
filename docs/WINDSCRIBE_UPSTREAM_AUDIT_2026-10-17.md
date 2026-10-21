@@ -1,5 +1,7 @@
 # Windscribe upstream compatibility audit — 2026-10-17
 
+> **Historical audit:** findings below describe the public upstream and KTest state inspected on 2026-10-17. Re-check the current code before treating an item as still open or fixed. The current desktop behavior and acceptance boundary are in [WINDSCRIBE_BOOTSTRAP.md](WINDSCRIBE_BOOTSTRAP.md) and [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md). CI success is not proof of an authenticated Windscribe tunnel on a live ISP.
+
 Scope: review **relevant network-path sources**, released changelogs, public PRs/issues across Windscribe Desktop-App, Android-App, wstunnel and wsnet, compared to `Nishef1/ktest`. This is not a claim that every line of the four repositories or private Windscribe issues was inspected. Version context: Desktop stable v2.24.13, 2.25.3-alpha (post-connect validation), newest checked 2.25.4-alpha (Oct 13); wsnet 1.5.39 (Oct 9).
 
 ## Verified upstream facts and ktest discrepancies

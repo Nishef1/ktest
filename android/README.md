@@ -2,12 +2,18 @@
 
 Android uses the **existing upstream networking cores**, a narrow shared Go integration layer and a native UI. Aether owns MASQUE/WireGuard, native gateway scans/reconnect and its Tor/Psiphon backends. Xray, ByeDPI and Windscribe retain their respective roles. Do not reimplement these engines in Go or Kotlin, or port the entire CLI supervisor as an Android prerequisite. The [engineering roadmap](../docs/ROADMAP.md) records responsibility boundaries, remaining work and the code reuse audit.
 
+## Current verification status (2026-10-21)
+
+The latest reviewed source snapshot is [`978e0ab`](https://github.com/Nishef1/ktest/commit/978e0ab487e086ed5da61478f313db60bf272365). Its Go/race/formatting, Android source, Android APK and Windows portable CI jobs passed. CI does not verify physical-phone traffic, current ISP reachability, feed/media access, leak-free TUN behavior or resource efficiency. See [current audit](../docs/CURRENT_AUDIT_2026-10-21.md).
+
+Current mode contract: Balanced/Fast have no AI/TikTok-specific route rule; Aether requires a working WARP carrier for all managed traffic but that IP may geolocate to Iran; only Psiphon/Tor require a verified non-Iran/non-Russia exit. Android does not expose the desktop Windscribe modes.
+
 Keep Go for required KTest policy, lifecycle, shared diagnostics and existing mixed-mode routing. Prefer the selected core's native SOCKS/HTTP and packet capabilities where they satisfy the mode contract; an additional Go proxy is not a universal requirement. Any simplified path must preserve verified-exit checks, expiry and fail-closed routing.
 
 ## Single-source architecture
 
 - `cmd/ktest`: original CLI and its platform-dependent orchestrators.
-- `internal/smartproxy`: shared Go adaptive TCP/SOCKS engine and RFC 1928 UDP ASSOCIATE. Non-DNS datagrams require a verified foreign loopback transport with a working UDP relay (in Aether, also the working WARP carrier for destinations known to be ordinary; see docs/CONNECTION_MODES.md), and never fall back to a direct UDP socket.
+- `internal/smartproxy`: shared Go adaptive TCP/SOCKS engine and RFC 1928 UDP ASSOCIATE. Non-DNS datagrams use a verified foreign SOCKS5 UDP relay in Balanced/Fast and strict foreign-exit modes. In Aether mode, a working WARP carrier may carry managed UDP to any destination even when its IP geolocates to Iran. There is no direct UDP fallback; see docs/CONNECTION_MODES.md.
 - `internal/connectionpolicy`: shared CLI and Android routing policy and mode catalog.
 - `internal/connectionsession`: shared SOCKS/HTTP/probe listener lifetime, failure propagation and stream cancellation. Both `connectSession` and Android use this package; desktop native-core discovery/launch is still outside it.
 - `internal/aether`: the original CLI method/profile catalog, mode filters, identity requirements, private identity validation, staged enrollment transaction, command construction and native process launcher. CLI now uses this shared implementation. Android can inspect the same catalog and checksum-pinned native package through `mobilebridge`.
@@ -23,10 +29,10 @@ The Go policy catalog has all seven desktop modes, but **not every launcher is a
 
 | Original CLI mode | Android status |
 | --- | --- |
-| Balanced | Go direct/ClientHello routes plus the original packaged ByeDPI and shared desktop strategy catalog |
-| Fast | Same native/local routes with the shared Fast policy |
-| Aether | Managed packaged core with native method selection; optional existing loopback SOCKS path |
-| Aether to Tor | Managed Aether Tor-only backend; Tor Project and foreign-exit checks required before connection is active |
+| Balanced | Shared Go SmartProxy, nine packaged ByeDPI candidates, official Xray TLS-fragment path and optional consented fronting; local-first adaptive routing, exits on demand |
+| Fast | Same native/local routes with the shorter Fast policy; native Aether exits on demand, no Psiphon/Tor or unidentified external SOCKS |
+| Aether | Managed packaged core with native method selection; WARP carrier required for managed traffic, but the carrier IP is not guaranteed foreign |
+| Aether to Tor | Managed Aether Tor-only backend; verified Tor circuit and non-Iran/non-Russia exit required before strict-mode traffic is allowed |
 | Windscribe | Disabled pending portable original WStunnel / Xray / ByeDPI orchestration |
 | Aether to Psiphon | Managed Aether Psiphon / CDN profiles; bundled shirokhorshid helper, no external SOCKS substitution |
 | Windscribe through Aether | Disabled until the original two-core carrier is portable |
@@ -46,7 +52,7 @@ The Android service:
 
 **Whole-device VPN is the default coverage (beta).** Connect asks for Android VPN consent and starts the selected Go proxy. After proxy startup and any required strict-exit verification, `KTestVpnService` passes Android's TUN fd to the Go core. Go tries the checksum-pinned Xray TUN inbound first; Xray receives the fd through `XRAY_TUN_FD` and sends every flow to the local Go SOCKS listener. Xray is only the packet adapter, not an independent exit: adaptive route selection, DNS policy, fronting, verified foreign exits and UDP leak prevention remain in Go. If Xray is missing, unsupported, fails startup or exits later, Go automatically switches to HEV on the same Android TUN fd. The active packet engine and fallback reason appear in Settings. The user does not need to select or retry these adapters manually.
 
-"Proxy apps only" remains a choice. IPv6 is routed into the TUN only when the underlying network has a global IPv6 address and default route; otherwise Android carries no v6 route, so apps use IPv4. DNS goes through the Go packet-DNS path; other UDP (e.g. QUIC) is relayed only via a verified foreign SOCKS5 UDP association (Aether: also its working WARP carrier, for destinations whose names are known and not protected) and is otherwise dropped. Address-only ECH connections are routed by the names Go's packet DNS resolved to that address and fail closed onto the foreign exit when none is known. Apps may fall back to TCP, but whether and how quickly that happens is client-dependent. The service polls Go and tears the TUN down if the proxy or both packet adapters stop. Xray TUN support is upstream's layer-3-to-layer-7 proxy, not a native IP tunnel; its startup and process liveness are not proof that every destination is reachable. Physical-device, leak, roaming and battery validation are still open.
+"Proxy apps only" remains a choice. IPv6 is routed into the TUN only when the underlying network has a global IPv6 address and default route; otherwise Android carries no v6 route, so apps use IPv4. DNS goes through the Go packet-DNS path; other UDP (e.g. QUIC) is relayed only via a verified foreign SOCKS5 UDP association (Aether: also its working WARP carrier, for destinations whose names are known and not protected) and is otherwise dropped. Address-only ECH connections can be associated with names Go's packet DNS recently resolved to that address. Strict foreign-exit modes fail closed to a verified exit when the destination remains unknown; Balanced/Fast have no AI/TikTok-specific foreign-exit rule and do not guarantee a foreign route for hidden ECH names. Apps may fall back to TCP, but whether and how quickly that happens is client-dependent. The service polls Go and tears the TUN down if the proxy or both packet adapters stop. Xray TUN support is upstream's layer-3-to-layer-7 proxy, not a native IP tunnel; its startup and process liveness are not proof that every destination is reachable. Physical-device, leak, roaming and battery validation are still open.
 
 The KTest app UID is excluded from the TUN while the Xray/HEV packet dataplane is active, to prevent upstream feedback loops. As Android documents, that app's own networking is then outside its VPN coverage; user's other apps remain in its routing scope. Alternative `protect(fd)` per Go socket may be evaluated when the Go core's Dialer can support it.
 
@@ -54,7 +60,7 @@ The KTest app UID is excluded from the TUN while the Xray/HEV packet dataplane i
 
 ## Retained functionality
 
-- Shared Go proxy mode routing, bounded foreign-exit checking and app-facing SOCKS5/HTTP proxy. Both Balanced and Fast connect immediately with adaptive routing and no automatic calibration or frozen targets. Offline route tests are optional diagnostics; see [route calibration and evidence boundaries](../docs/ANDROID_ROUTE_CALIBRATION.md).
+- Shared Go proxy mode routing, bounded foreign-exit checking and app-facing SOCKS5/HTTP proxy. Balanced/Fast do not run a preconnection website sweep or freeze targets. On-demand Aether exit discovery can separately run bounded TLS-shape/F&F calibration when its cache is missing or stale. Offline route tests are optional diagnostics; see [route calibration and evidence boundaries](../docs/ANDROID_ROUTE_CALIBRATION.md).
 - Network DNS/TCP/TLS diagnostics, CDN fronting and ECH tests provided by existing Go packages.
 - Local CA generation and optional fronting reuse Go. Installation into Android's user trust store requires explicit user action; the private key stays in app-private storage, and native-app trust is not guaranteed.
 - English dark UI: animated power control with phase steps (prepare / start core / verify exit), session uptime, copyable SOCKS5/HTTP endpoints and per-target HTTPS verification; Tools as collapsible cards; Settings with manual update checks, packaged-core hash verification (`InspectAndroidBundle`), privacy notes and open-source notices for the shipped AGPL/GPL/BSD/MIT executables. Adaptive launcher icon, monochrome notification icon with a session chronometer.
@@ -107,9 +113,9 @@ An older APK signed with a runner-generated random debug key cannot be updated i
 
 - The Android package uses the **checksum-pinned `patterniha/Aether` v2.3.2 release archives**, not independently downloaded Psiphon or Tor binaries. Exact archive SHA-256 values are pinned in `internal/aether/android-cores.json`, and the unmodified executable SHA-256 values are checked both by the Android packager and at runtime by `AndroidBundlePaths`.
 - `libaether.so` contains the **Arti** Tor implementation, built by upstream with Cargo feature `tor`. Standalone Tor uses Aether's `--tor-only`; neither the Go app nor Kotlin includes a second Tor implementation. The extracted `liblyrebird.so` provides Tor pluggable-transport support; `ProfileArgs` explicitly passes its package path through `--tor-pt` and an app-private `--tor-dir`.
-- `libpsiphon-tunnel-core.so` is the **console-client helper from the `CluvexStudio/psiphon-tunnel-core` fork** selected by Aether v2.3.0's `psiphon-build.sh`. That script names `shirokhorshid` and source commit `83aa73b9b982e7421e00117f5b0c5aceb5dda452`. `ProfileArgs` passes the pinned APK helper path with `--psiphon-bin` and the private `--psiphon-dir`. This is not a separately selected Psiphon Android SDK.
+- `libpsiphon-tunnel-core.so` is the **console-client helper from the `CluvexStudio/psiphon-tunnel-core` fork** selected by Aether v2.3.2's `psiphon-build.sh`. That script names `shirokhorshid` and source commit `83aa73b9b982e7421e00117f5b0c5aceb5dda452`. `ProfileArgs` passes the pinned APK helper path with `--psiphon-bin` and the private `--psiphon-dir`. This is not a separately selected Psiphon Android SDK.
 - **Source provenance limitation:** the upstream `psiphon-build.sh` explicitly falls back to the current branch when checkout of the pinned commit fails; `pt-build.sh` can similarly fall back to the Lyrebird repository default branch. Thus the release archives' known hashes establish **artifact identity**, not reproducible proof that every ABI was built at those source commits. A self-built replacement must remove these fallback paths and lock all inputs before making that stronger claim.
-- Selection and verification are distinct: Tor requires an authenticated Tor egress check; Psiphon and Aether require a verified foreign exit. A native process launch, SOCKS listener, UI `Auto`, or VPN adapter does not by itself prove any of these. Android `Auto` currently chooses the *first compatible profile*, then the Aether core handles native gateway selection; it does **not** compare multiple Aether methods in parallel. The UI describes that explicitly.
+- Selection and verification are distinct: Tor and Psiphon require verified non-Iran/non-Russia egress; Aether requires a working WARP carrier but does not guarantee a foreign IP. A native process launch, SOCKS listener, UI `Auto`, or VPN adapter does not by itself prove any of these. Android `Auto` currently chooses the *first compatible profile*, then the Aether core handles native gateway selection; it does **not** compare multiple Aether methods in parallel. The UI describes that explicitly.
 - Android still needs device/ISP-based checks for sustained Tor, Psiphon and Aether traffic, native-helper crashes, reconnect and resource usage. Neither the APK hashes nor desktop CI prove this.
 
 ## Xray 26.10.21 TUN + HEV fallback: distinct responsibilities (ARMv8)
@@ -190,7 +196,7 @@ exited children and reaps all owned processes on disconnect. No executable is
 downloaded or copied to writable app storage at runtime. ByeDPI is a local
 anti-DPI transport; it does not change the public exit IP.
 
-Balanced/Fast now request a packaged foreign exit automatically when real
+Balanced/Fast now request managed exit discovery after local routes fail or stall; there is no AI/TikTok-specific immediate-discovery exception as of 2026-10-21. Balanced can search Aether, Psiphon/CDN and Tor; Fast permits native Aether exits only. Concurrent requests share discovery; local listeners remain usable.
 traffic exhausts or stalls the local routes, or immediately for protected
 services. Concurrent requests share discovery; local listeners remain usable.
 Balanced offers Aether, Psiphon/CDN and Tor, with independent startup slots;
@@ -242,6 +248,8 @@ The service now calls `StartNativeProxy` with `ApplicationInfo.nativeLibraryDir`
 Before calling this an Android port complete, validate the Xray TUN primary path and HEV automatic fallback on physical phones and real networks, including the actual SOCKS UDP/DoH path, dual-stack behavior, failover, leak prevention, roaming and battery use. Continue preserving Go's mode/egress policy and verify actual destination access instead of treating process startup as success. An Aether release supporting Termux is not automatically an app integration: Android 10+ restricts executing downloaded files from a writable app home. Native packaging must meet [Android's executable-code rules](https://developer.android.com/about/versions/10/behavior-changes-10#execute-permission), rather than adding a download-and-exec workaround.
 
 ### Implementation status, 2026-10-18
+
+**Refresh note (2026-10-21):** this table is a dated implementation snapshot, not a fresh physical-device acceptance report. Current mode policy, CI results and open issues are in [CURRENT_AUDIT_2026-10-21.md](../docs/CURRENT_AUDIT_2026-10-21.md).
 
 | Area | Implemented in source | Still required |
 | --- | --- | --- |

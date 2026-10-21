@@ -1,5 +1,7 @@
-# ByeDPI strategies tried by `ktest auto` (method "s") and run side by side by
-# `ktest smart`, one per line:
+# ByeDPI strategies tried by `ktest auto` (method "s"), run side by side by
+# `ktest smart`, and launched as Android Balanced/Fast local candidates. One per
+# line. Android currently starts all nine candidates; resource use is not yet
+# benchmarked, and no candidate is proven best for every ISP:
 #   label | ciadpi arguments
 # Lines starting with # are ignored. ktest adds "-i 127.0.0.1 -p <port>" itself,
 # so all listener/daemon overrides are rejected (including attached short

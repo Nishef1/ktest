@@ -1,5 +1,9 @@
 # KTest and PattNG: four-pass final source audit (2026-10-20)
 
+> **Historical snapshot:** this audit records source state and evidence as of 2026-10-20; it is not a claim that the same issues remain unfixed or that the release is now complete.
+>
+> **Follow-up, 2026-10-21:** Aether is now pinned to v2.3.2 and Xray-core to v26.10.21. The latest reviewed source snapshot passed Go/race/formatting, Android source, Android APK and Windows portable CI. The new current audit tracks the remaining calibration-setting, performance-measurement and physical-device acceptance gaps: [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md). Green CI does not replace the real-world acceptance gates below.
+
 Scope: compare Nishef1/ktest PR #8 with patterniha/PattNG my-releases at 89c760cee27051ac7b6c391d376e528adfdc8a0c and patterniha/Aether at cfc27c50176ee51fd01c1203f4658a0159d24b3b (v2.3.1). These are source and CI findings, NOT evidence of Iranian ISP connectivity. Findings marked fixed are PR changes, not released binaries.
 
 ## First independent pass: transport/core and protocol contract

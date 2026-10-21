@@ -29,6 +29,10 @@ go build -o ktest.exe ./cmd/ktest
 .\ktest.exe
 ```
 
+## Current verification status (2026-10-21)
+
+The latest reviewed source snapshot is [`978e0ab`](https://github.com/Nishef1/ktest/commit/978e0ab487e086ed5da61478f313db60bf272365). Its then-current CI passed Go tests/race/formatting, Android source checks, the Android APK build and the Windows portable package. These checks do **not** establish physical-phone reliability, current ISP reachability, end-to-end service access, or CPU/RAM/battery efficiency. See the [current audit and open issues](docs/CURRENT_AUDIT_2026-10-21.md).
+
 ## Documentation
 
 - [Usage](docs/USAGE.md)
@@ -46,3 +50,4 @@ go build -o ktest.exe ./cmd/ktest
 - [IP sources](docs/IP_SOURCES.md)
 - [Research](docs/RESEARCH.md)
 - [Roadmap](docs/ROADMAP.md)
+- [Current source, CI, performance and known-issue audit](docs/CURRENT_AUDIT_2026-10-21.md)

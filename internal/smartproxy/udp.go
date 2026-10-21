@@ -142,10 +142,10 @@ func (e *udpExit) close() {
 	_ = e.control.Close()
 }
 
-// udpCarrierAllowed: where every destination rides an exit (Aether), a
-// working carrier that geolocates to Iran may carry UDP like TCP, but only for
-// a destination known not to be protected: a name, or an address whose
-// resolved names are all ordinary. Unknown addresses keep the foreign rule.
+// udpCarrierAllowed: Aether requires every managed destination to use a
+// working WARP carrier; its observed IP may geolocate to Iran. Balanced/Fast
+// instead need a verified foreign SOCKS5 UDP relay. Strict exit-only modes keep
+// their verified-foreign requirement. No mode falls back to direct UDP.
 func (p *Proxy) udpCarrierAllowed(host string) bool {
 	if !p.exitRequired(host) || p.exitOnly(host) {
 		return false

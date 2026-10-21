@@ -1,6 +1,6 @@
 # Android adaptive routing and optional manual diagnostics
 
-**Updated 2026-10-19:** Balanced and Fast both connect without a preconnection website sweep, calibration, cached-profile prerequisite or frozen target selections. Existing diagnostic results never prevent connecting or lock a live route. Failed local helpers are removed; subsequent connections use the remaining eligible methods. Protected AI and TikTok traffic still requires a verified foreign exit and retains its session identity policy.
+**Updated 2026-10-21:** Balanced and Fast do not run a preconnection website sweep, target calibration, cached-profile prerequisite or frozen target selection. Existing website diagnostics never prevent connecting or lock a live route. This does **not** mean every subsystem is calibration-free: on-demand Aether MASQUE exit discovery can run a separate TLS-shape/F&F calibration when its network cache is missing or stale (up to 15 seconds). There is no AI/TikTok-specific route rule; these destinations follow the selected mode like other hosts.
 
 ## Connection behavior
 
@@ -18,7 +18,7 @@ The connected **Check HTTPS endpoints** action is also explicit. Its result is p
 
 The X HTML shell, API calls, images and video are separate paths. ECH now hedges certificate-verified handshakes over known Cloudflare edges before waiting for filtered DNS, so an API route does not lose its entire attempt budget to a poisoned lookup. Tests cover a silent TCP edge losing to a working ECH alternative. Account/API refusals still need to be distinguished from network errors.
 
-TikTok HTTP 451 or a closed connection is not working access. Local fragmentation or ECH does not establish a foreign exit. For a region-rejected service, use a verified foreign-only Aether/Psiphon route carrying the page, API and media together; no particular profile is declared working without independent exit and actual service evidence. Balanced/Fast now require that verified foreign session route for the observed dedicated TikTok page/API/media domain families. Android needs an available verified upstream, or the managed Aether to Psiphon CDN mode. Native-app account/region and CA policies can still differ from browser behavior.
+TikTok HTTP 451 or a closed connection is not working access. Local fragmentation or ECH does not establish a foreign exit. For a service that requires a foreign IP, choose **Aether to Psiphon** or **Aether to Tor** and verify page, API and media separately; ordinary Aether WARP may geolocate to Iran. There is no AI/TikTok-specific exception in Balanced/Fast.
 
 ## Custom targets, CA coverage and evidence
 
@@ -43,4 +43,4 @@ Previously verified provider edges can be loaded as source-backed preconnection 
 
 ## Candidate acceptance remains open
 
-The final phone check must verify immediate adaptive Balanced/Fast connection without calibration; optional manual tests and cancellation; target edits without a mandatory test; fallback after helper failure; same-exit verification refresh and fail-closed failures; exact-host CA rejection; continuous-scan cancellation and full picker export; and a same-signer in-place update retaining the local CA. Also check real profiles, pagination, new posts, native-app media, helper lifecycle, reconnect, DNS/IPv6/UDP leaks and battery behavior on the intended phone/network. Source tests and builds do not establish those device results.
+The final phone check must verify immediate adaptive Balanced/Fast startup without a website-target sweep; separately measure first-use Aether TLS-shape calibration; optional manual tests and cancellation; target edits without a mandatory test; fallback after helper failure; same-exit verification refresh and fail-closed failures; exact-host CA rejection; continuous-scan cancellation and full picker export; and a same-signer in-place update retaining the local CA. Also check real profiles, pagination, new posts, native-app media, helper lifecycle, reconnect, DNS/IPv6/UDP leaks and battery behavior on the intended phone/network. Source tests and builds do not establish those device results.

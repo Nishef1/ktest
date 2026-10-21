@@ -1,5 +1,7 @@
 # WARP first-use bootstrap and identity persistence (2026-10-20)
 
+> **Follow-up (2026-10-21):** the current source pins Aether v2.3.2 and includes optional MASQUE TLS-shape/F&F calibration. That calibration is bounded to 15 seconds on a missing/stale cache, measures gateway TLS response rather than a working tunnel, and can still run when `wireguard` is explicitly selected. The `fragment=off` setting also does not suppress exit-node `tlshello-0-len` variants. These are open code issues, not identity corruption; see [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md).
+
 This change addresses four *separate* conditions visible in Windows logs:
 the default SOCKS listener is occupied, the managed Aether core may be
 absent/old, WARP enrollment may have no direct route to its HTTPS API, and

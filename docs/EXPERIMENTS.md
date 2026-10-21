@@ -2,6 +2,26 @@
 
 Definitions: **Passed** means local unit tests verified intended code behavior, not censorship circumvention. **Unverified** means no controlled field evidence; **Failed** must include reproducible observations. Keep sensitive measurements offline.
 
+## Current code/CI status (2026-10-21)
+
+The reviewed source snapshot was [`978e0ab`](https://github.com/Nishef1/ktest/commit/978e0ab487e086ed5da61478f313db60bf272365). At that snapshot, the verification workflow passed Ubuntu and Windows Go tests, formatting, race tests and Android source checks; the Android APK and Windows portable build workflows also passed:
+
+- [Verify](https://github.com/Nishef1/ktest/actions/runs/39603654030)
+- [Android APK build](https://github.com/Nishef1/ktest/actions/runs/39603653990)
+- [Windows portable build](https://github.com/Nishef1/ktest/actions/runs/39603653941)
+
+These are code/build checks, not field experiments. The current commit has not been comprehensively accepted on a physical Android phone or every target ISP. CPU, RAM, battery, cold/warm startup P50/P95, 20-cycle reconnect and sustained data-plane benchmarks are **not measured**. Historical emulator/ISP observations elsewhere in this repository must retain their original date and scope.
+
+### Known implementation issues for the next code change
+
+- `cmd/ktest/tls_shape.go`: the automatic MASQUE/F&F calibration is bounded to 15 seconds but the guard does not exclude an explicitly selected `wireguard` method; an uncached network can therefore pay for irrelevant MASQUE measurements.
+- `internal/tlsshape/apply.go` and `cmd/ktest/warp_manager.go`: `fragment=off` removes the core's `--fragment` option, but later `aether.WithExitNodes(...)` can add `tlshello-0-len` masked variants. The current setting does not mean “disable every fragmentation mechanism.”
+- The calibration probes use uTLS and treat a gateway TLS response as evidence that the ClientHello passed that gateway. Aether uses its own native TLS stack; a calibration pass is only a ranking hint, not a byte-identical fingerprint match or a working-tunnel result.
+- Android Balanced/Fast start nine ByeDPI strategy processes plus an optional Xray local core. This is an observed implementation choice; resource cost has not been benchmarked and should not be described as optimal yet.
+- Android `tun_running_unverified` and a listening proxy indicate local readiness, not end-to-end Internet access. The UI/diagnostics must preserve that distinction.
+
+See [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md) for the current acceptance matrix.
+
 | Date (UTC) | ID | Environment | Method | Result | Notes |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-13 | LOCAL-001 | Go 1.23 loopback | HTTP Host override, bounded response, redirect handling | Passed | Self-hosted test server; no DPI |

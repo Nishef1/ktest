@@ -1,5 +1,7 @@
 # Windscribe bootstrap and carrier tests
 
+> **Current boundary (2026-10-21):** this is a desktop Windscribe integration, not an Android mode. `windscribe` is local anti-DPI/bootstrap only; `windscribe-aether` explicitly uses a WARP carrier for Windscribe OpenVPN TCP, while Windscribe owns the final VPN IP. A carrier-ready message or HTTP CONNECT 200 is not authenticated VPN success. The current CI is green, but current-network authenticated data-plane and resource-performance tests remain open. See [current audit](CURRENT_AUDIT_2026-10-21.md).
+
 ## Windscribe interoperability fixes (2026-10-20)
 
 - **Cold-start node lookup:** Provider mob-v2 and legacy catalog endpoints

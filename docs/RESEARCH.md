@@ -1,5 +1,7 @@
 # Evidence and design notes (reviewed 2026-10-13)
 
+> **Current implementation note (2026-10-21):** this document records research and hypotheses, not proof of a working bypass. The current code has no AI/TikTok-specific routing rule; use [connection-mode contracts](CONNECTION_MODES.md) for actual behavior and [CURRENT_AUDIT_2026-10-21.md](CURRENT_AUDIT_2026-10-21.md) for CI status, known implementation issues and unmeasured performance. Historical research results must not be promoted to current ISP guarantees.
+
 All external claims below are from linked public sources. **No field success has been demonstrated by this repository.** Issue reports are anecdotal, and tool availability is not proof of effectiveness on a given ISP.
 
 | Technique / source | What is supported | Limit for our use | Evidence |

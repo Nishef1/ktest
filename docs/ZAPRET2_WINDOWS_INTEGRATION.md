@@ -1,5 +1,7 @@
 # Zapret2 Windows integration decision (reviewed 2026-10-18)
 
+> **Current boundary (2026-10-21):** Zapret2 remains a Windows-only optional path and is not packaged or emulated on Android. A successful CI build or an isolated local route result does not prove a filtered ISP accepts the method. Do not treat this historical integration note as a current service-access guarantee; see [current audit](CURRENT_AUDIT_2026-10-21.md).
+
 Status: **Windows A/B pilot and explicitly selected experimental Windscribe bridge implemented (2026-10-18); no real ISP/device packet-capture result has been measured.** The bridge now detects the app's requested node through its existing HTTP CONNECT path. Packet manipulation stays off in ordinary local-bridge sessions. This document does not establish success on any Iranian ISP; general/default enablement still requires live validation.
 
 Upstream: https://github.com/bol-van/zapret2 (latest release verified 2026-10-18: v1.0.5.2). The original zapret1 is EOL and must not be chosen for new integration. Official docs:

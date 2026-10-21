@@ -1,6 +1,6 @@
-# Fronting engineering decisions — 2026-10-15
+# Fronting engineering decisions — reviewed 2026-10-21 (historical notes retained)
 
-Status: architecture confirmed against upstream docs; limited IP candidate selection implemented; four transports are NOT yet merged or field-verified on Iranian ISPs.
+Status as of 2026-10-21: shared Go fronting and Android's explicit opt-in path are implemented, alongside the Windows CLI path. Supported provider families and CA constraints remain narrow; no claim is made that arbitrary domains can be fronted or that any current Iranian ISP accepts the route. See [current audit](CURRENT_AUDIT_2026-10-21.md).
 
 ## Mechanisms: do not confuse layers
 
@@ -46,9 +46,9 @@ This creates a local certificate and private key; use the actual filename conven
 
 ## Remaining, evidence-based gates
 
-1. Confirm Xray MITM v23 profile's current syntax and outbound certificate validation before integrating any CA workflow.
+1. Re-check Xray configuration syntax and outbound certificate validation whenever the pinned upstream changes; this workflow is implemented but still requires device-specific CA-trust and origin acceptance tests.
 2. Use explicit, controlled provider-to-origin mappings; differentiate 421/403 from successful CDN routing.
-3. Only then add optional TLS slicing for the affected TLS handshake paths, not globally.
+3. Keep TLS slicing/fragmentation as separate, bounded route candidates; do not enable it globally or assume it helps a network without target-specific evidence.
 4. Integrate domain shadowing **only** when a front domain, CDN account and permitted origin are available; do not market it as free arbitrary-origin access.
 5. Real 2026 Iran ISP outcomes must be labeled unverified until observed on the user's network.
 

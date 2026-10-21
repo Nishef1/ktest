@@ -1,5 +1,7 @@
 # Updating native cores safely
 
+**Current acceptance boundary (2026-10-21):** Aether v2.3.2 and Xray-core v26.10.21 are separately pinned; updating Aether does not update Xray, HEV or ByeDPI. Current CI passed on commit `978e0ab`, but this does not establish live foreign egress, Android physical-device stability, or performance. See [the current audit](CURRENT_AUDIT_2026-10-21.md).
+
 KTest does not update a live tunnel in-place. Release pins are explicit in
 source control, and the Windows portable and Android builds independently
 verify the artifacts they distribute. KTest never fetches an unsigned
