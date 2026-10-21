@@ -19,11 +19,19 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCK = ROOT / "internal/aether/android-cores.json"
+DESKTOP_LOCK = ROOT / "internal/aether/desktop-cores.json"
 REPO = "https://github.com/patterniha/Aether"
 ASSET_TO_ABI = {
     "arm64-v8a": "aether-android-arm64.tar.gz",
     "armeabi-v7a": "aether-android-armv7.tar.gz",
     "x86_64": "aether-android-x86_64.tar.gz",
+}
+DESKTOP_ASSETS = {
+    "windows/amd64": "aether-windows-x86_64.zip",
+    "linux/amd64": "aether-linux-x86_64.tar.gz",
+    "linux/arm64": "aether-linux-arm64.tar.gz",
+    "darwin/amd64": "aether-macos-x86_64.tar.gz",
+    "darwin/arm64": "aether-macos-arm64.tar.gz",
 }
 MAX_ARCHIVE = 200 << 20
 MAX_FILE = 100 << 20
@@ -117,6 +125,34 @@ def update_manifest(version):
     return updated
 
 
+def update_desktop_manifest(version):
+    current = json.loads(DESKTOP_LOCK.read_text(encoding="utf-8"))
+    if current.get("repository") != REPO or set(current.get("archives", {})) != set(DESKTOP_ASSETS):
+        raise ValueError("unexpected desktop manifest platform inventory")
+    assets = fetch_release(version)
+    result = json.loads(json.dumps(current))
+    result["version"] = version
+    for platform, filename in DESKTOP_ASSETS.items():
+        asset = assets.get(filename)
+        if not asset:
+            raise ValueError(f"missing desktop asset {filename}")
+        asset_sha = asset.get("digest", "")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", asset_sha):
+            raise ValueError("desktop asset missing source SHA-256 digest")
+        entry = result["archives"][platform]
+        if entry["file"] != filename:
+            raise ValueError("desktop archive filename unexpectedly changed")
+        entry["sha256"] = asset_sha.partition(":")[2]
+    return result
+
+
+def atomic_write(path, contents):
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+        tmp.write(contents)
+        tmp_name = tmp.name
+    os.replace(tmp_name, path)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
@@ -125,16 +161,19 @@ def main():
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.version):
         raise ValueError("expected an explicit stable semver tag")
     updated = update_manifest(args.version)
+    desktop = update_desktop_manifest(args.version)
     result = json.dumps(updated, indent=2) + "\n"
+    desktop_text = json.dumps(desktop, indent=2) + "\n"
     if not args.write:
         print(result)
+        print(desktop_text)
         print("Dry run: no files changed; pass --write only after reviewing provenance.")
         return
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=LOCK.parent, delete=False) as tmp:
-        tmp.write(result)
-        tmp_name = tmp.name
-    os.replace(tmp_name, LOCK)
-    print("Wrote reviewed native lock:", LOCK)
+    # The version contract is enforced by Go tests. An interrupted update
+    # produces a visible manifest diff but never replaces an installed core.
+    atomic_write(LOCK, result)
+    atomic_write(DESKTOP_LOCK, desktop_text)
+    print("Wrote reviewed native and desktop locks:", LOCK, DESKTOP_LOCK)
 
 
 if __name__ == "__main__":
