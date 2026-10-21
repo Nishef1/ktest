@@ -245,7 +245,7 @@ func startWarp(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, t
 	if o.mode == ModePsiphon {
 		m.psiphonEdges = supportedPsiphonEdges(ctx, aetherBinary(o.base))
 	}
-	t.Note("Aether v2.3.1 stores WARP keys privately; a listener is not a verified foreign exit. KTest separately verifies outbound HTTPS.")
+	t.Note("Aether %s stores WARP keys privately; a listener is not a verified foreign exit. KTest separately verifies outbound HTTPS.", aetherVersion)
 	m.searching.Store(true)
 	mctx, stopManager := context.WithCancel(ctx)
 	m.processCtx = mctx

@@ -62,10 +62,10 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
 	if err := fetchAether(context.Background(), srv.URL, hex.EncodeToString(sum[:]), base); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(aetherBinary(base)); string(b) != "core" {
+	if b, _ := os.ReadFile(filepath.Join(aetherVersionDir(base), aetherName())); string(b) != "core" {
 		t.Fatalf("core content %q", b)
 	}
-	if b, _ := os.ReadFile(psiphonCore(base)); string(b) != "psiphon" {
+	if b, _ := os.ReadFile(filepath.Join(aetherVersionDir(base), "pt", psiphonName())); string(b) != "psiphon" {
 		t.Fatalf("psiphon core %q", b)
 	}
 	var names []string
@@ -75,8 +75,8 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
 		}
 		return nil
 	})
-	if len(names) != 3 {
-		t.Fatalf("only the three known files may be extracted, got %v", names)
+	if len(names) != 4 {
+		t.Fatalf("only three executables and one pinned archive marker may be staged, got %v", names)
 	}
 
 	// An archive without the core is refused even with a matching checksum.
@@ -86,6 +86,79 @@ func TestFetchAetherVerifiesTheChecksumAndExtractsOnlyKnownFiles(t *testing.T) {
 	defer srv2.Close()
 	if err := fetchAether(context.Background(), srv2.URL, hex.EncodeToString(esum[:]), t.TempDir()); err == nil {
 		t.Fatal("archive without the core accepted")
+	}
+}
+
+func TestAetherUpgradeFailurePreservesLegacyFiles(t *testing.T) {
+	base := t.TempDir()
+	legacy := filepath.Join(base, "cores", aetherName())
+	helper := filepath.Join(base, "cores", "pt", psiphonName())
+	if err := os.MkdirAll(filepath.Dir(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("working-legacy-core"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("working-legacy-helper"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// The new release has a good SHA-256 but is missing a required helper.
+	archive := zipOf(t, map[string]string{aetherName(): "new-incomplete-core"})
+	hash := sha256.Sum256(archive)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) }))
+	defer server.Close()
+	if err := fetchAether(context.Background(), server.URL, hex.EncodeToString(hash[:]), base); err == nil {
+		t.Fatal("incomplete generation was accepted")
+	}
+	if data, _ := os.ReadFile(aetherBinary(base)); string(data) != "working-legacy-core" {
+		t.Fatalf("failed update changed active core: %q", data)
+	}
+	if data, _ := os.ReadFile(psiphonCore(base)); string(data) != "working-legacy-helper" {
+		t.Fatalf("failed update changed helper: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(aetherVersionDir(base), aetherName())); !os.IsNotExist(err) {
+		t.Fatal("incomplete version was made active")
+	}
+}
+
+func TestPinnedAetherCanBeRolledBackWithoutDeletingEitherCore(t *testing.T) {
+	base := t.TempDir()
+	legacy := filepath.Join(base, "cores", aetherName())
+	legacyHelper := filepath.Join(base, "cores", "pt", psiphonName())
+	modern := filepath.Join(aetherVersionDir(base), aetherName())
+	modernHelper := filepath.Join(aetherVersionDir(base), "pt", psiphonName())
+	modernTor := filepath.Join(aetherVersionDir(base), "pt", lyrebirdName())
+	_, sha, err := aetherArchiveFor(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{legacy, legacyHelper, modern, modernHelper, modernTor} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("valid file placeholder"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(aetherVersionDir(base), "aether-release.sha256"), []byte(sha+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := aetherBinary(base); got != modern {
+		t.Fatalf("new generation was not preferred: %s", got)
+	}
+	if got := psiphonCore(base); got != modernHelper {
+		t.Fatalf("new helper was not preferred: %s", got)
+	}
+	t.Setenv("KTEST_AETHER_USE_LEGACY", "1")
+	if got := aetherBinary(base); got != legacy {
+		t.Fatalf("legacy rollback failed: %s", got)
+	}
+	if got := psiphonCore(base); got != legacyHelper {
+		t.Fatalf("legacy helper did not match rollback: %s", got)
+	}
+	t.Setenv("KTEST_AETHER_USE_LEGACY", "")
+	if got := aetherBinary(base); got != modern {
+		t.Fatalf("clearing rollback did not restore pinned core: %s", got)
 	}
 }
 
@@ -287,7 +360,7 @@ func TestAetherHelpOptionMatchingAndEqualsValues(t *testing.T) {
 func TestOfficialAetherAssetSelection(t *testing.T) {
 	for _, platform := range [][2]string{{"windows", "amd64"}, {"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}} {
 		url, hash, err := aetherArchiveFor(platform[0], platform[1])
-		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/v2.3.1/") {
+		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/v2.3.2/") {
 			t.Fatalf("%v: %s / %s / %v", platform, url, hash, err)
 		}
 	}
@@ -332,7 +405,7 @@ func TestTarGzAetherExtractionRejectsUnexpectedAndPublishesKnownEntries(t *testi
 		t.Fatal(err)
 	}
 	for _, name := range []string{"aether", "pt/psiphon-tunnel-core", "pt/lyrebird"} {
-		if !fileOK(filepath.Join(base, "cores", filepath.FromSlash(name))) {
+		if !fileOK(filepath.Join(aetherVersionDir(base), filepath.FromSlash(name))) {
 			t.Fatalf("missing %s", name)
 		}
 	}

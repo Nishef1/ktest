@@ -81,7 +81,7 @@ Passing it establishes Java/Kotlin source compatibility, including callback sign
 
 ## Stable preview signing and updates
 
-The preview revision is version code **18**, version name **0.4.6-preview**, with application ID `com.nishef.ktest`. Preview Actions builds use a dedicated, stable PKCS12 signing key; they remain debug build variants for internal testing, not production releases. The signing key is separate from the app's local MITM CA key.
+The preview revision is version code **19**, version name **0.4.7-preview**, with application ID `com.nishef.ktest`. Preview Actions builds use a dedicated, stable PKCS12 signing key; they remain debug build variants for internal testing, not production releases. The signing key is separate from the app's local MITM CA key.
 
 The repository owner provisions the preview signer outside the repository with [`android/scripts/provision-preview-signing.ps1`](scripts/provision-preview-signing.ps1). Its local state is under `%LOCALAPPDATA%/KTest/preview-signing`, with DPAPI-protected password storage; the PKCS12 alias is `ktest-preview`. Consult that script for its options. Do not commit the keystore/passwords or use a CI-generated replacement key. Key provisioning and secret updates are explicit owner actions, not part of the build workflow.
 
@@ -105,7 +105,7 @@ An older APK signed with a runner-generated random debug key cannot be updated i
 
 ## Aether / Tor / Psiphon upstream provenance and trust boundary
 
-- The Android package uses the **checksum-pinned `patterniha/Aether` v2.3.1 release archives**, not independently downloaded Psiphon or Tor binaries. Exact archive SHA-256 values are pinned in `internal/aether/android-cores.json`, and the unmodified executable SHA-256 values are checked both by the Android packager and at runtime by `AndroidBundlePaths`.
+- The Android package uses the **checksum-pinned `patterniha/Aether` v2.3.2 release archives**, not independently downloaded Psiphon or Tor binaries. Exact archive SHA-256 values are pinned in `internal/aether/android-cores.json`, and the unmodified executable SHA-256 values are checked both by the Android packager and at runtime by `AndroidBundlePaths`.
 - `libaether.so` contains the **Arti** Tor implementation, built by upstream with Cargo feature `tor`. Standalone Tor uses Aether's `--tor-only`; neither the Go app nor Kotlin includes a second Tor implementation. The extracted `liblyrebird.so` provides Tor pluggable-transport support; `ProfileArgs` explicitly passes its package path through `--tor-pt` and an app-private `--tor-dir`.
 - `libpsiphon-tunnel-core.so` is the **console-client helper from the `CluvexStudio/psiphon-tunnel-core` fork** selected by Aether v2.3.0's `psiphon-build.sh`. That script names `shirokhorshid` and source commit `83aa73b9b982e7421e00117f5b0c5aceb5dda452`. `ProfileArgs` passes the pinned APK helper path with `--psiphon-bin` and the private `--psiphon-dir`. This is not a separately selected Psiphon Android SDK.
 - **Source provenance limitation:** the upstream `psiphon-build.sh` explicitly falls back to the current branch when checkout of the pinned commit fails; `pt-build.sh` can similarly fall back to the Lyrebird repository default branch. Thus the release archives' known hashes establish **artifact identity**, not reproducible proof that every ABI was built at those source commits. A self-built replacement must remove these fallback paths and lock all inputs before making that stronger claim.
@@ -140,7 +140,7 @@ Generating or installing the CA alone does not activate optional fronting, enabl
 
 ## Native Aether packaging
 
-The pinned v2.3.1 release includes dedicated Android arm64, ARMv7 and x86_64
+The pinned v2.3.2 release includes dedicated Android arm64, ARMv7 and x86_64
 archives. `internal/aether/android-cores.json` pins each archive and every
 unmodified Aether, Psiphon and Lyrebird executable. It is shared by the Python
 packager and the Go runtime verifier; a missing, modified or wrong-ABI bundle

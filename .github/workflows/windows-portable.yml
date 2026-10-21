@@ -3,6 +3,11 @@ name: windows-portable
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - ".github/workflows/windows-portable.yml"
+      - "cmd/ktest/**"
+      - "internal/aether/**"
   workflow_dispatch:
 
 permissions:
@@ -59,17 +64,29 @@ jobs:
           $driver = "build/wintun/wintun/bin/amd64/wintun.dll"
           if (-not (Test-Path $driver)) { throw "Official Wintun AMD64 signed DLL missing" }
           Copy-Item $driver portable/ktest/cores/wintun.dll
-          DownloadVerified "https://github.com/patterniha/Aether/releases/download/v2.3.1/aether-windows-x86_64.zip" "build/aether.zip" "a3bdd2384a624b01e9c4885f2816d75f7039fd2f62d46a94c54a0785e7c8fcb4"
+          # Same checked-in release lock read by Go's first-use installer.
+          $aetherLock = Get-Content -Raw internal/aether/desktop-cores.json | ConvertFrom-Json
+          $asset = $aetherLock.archives.'windows/amd64'
+          if ([string]::IsNullOrEmpty($asset.file) -or $asset.sha256 -notmatch '^[a-f0-9]{64}$') { throw "Invalid pinned Aether Windows archive" }
+          $releaseUrl = "$($aetherLock.repository)/releases/download/$($aetherLock.version)/$($asset.file)"
+          DownloadVerified $releaseUrl "build/aether.zip" $asset.sha256
           Expand-Archive -LiteralPath build/aether.zip -DestinationPath build/aether -Force
           $ae = Get-ChildItem -Path build/aether -Filter aether.exe -File -Recurse | Select-Object -First 1
-          if ($null -eq $ae) { throw "Official Aether zip did not contain aether.exe" }
-          Copy-Item $ae.FullName portable/ktest/cores/aether.exe
+          if ($null -eq $ae) { throw "Pinned Aether archive did not contain aether.exe" }
           $pt = Get-ChildItem -Path build/aether -Directory -Filter pt -Recurse | Select-Object -First 1
-          if ($null -eq $pt) { throw "Official Aether zip did not contain the pt folder" }
-          New-Item -ItemType Directory -Force -Path portable/ktest/cores/pt | Out-Null
-          Copy-Item (Join-Path $pt.FullName "psiphon-tunnel-core.exe") portable/ktest/cores/pt/psiphon-tunnel-core.exe
-          Copy-Item (Join-Path $pt.FullName "lyrebird.exe") portable/ktest/cores/pt/lyrebird.exe
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/patterniha/Aether/v2.3.1/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Aether-AGPL-3.0.txt
+          if ($null -eq $pt) { throw "Pinned Aether archive did not contain pt helper folder" }
+          $target = "portable/ktest/cores/aether-versions/$($aetherLock.version)"
+          New-Item -ItemType Directory -Force -Path "$target/pt" | Out-Null
+          Copy-Item $ae.FullName "$target/aether.exe"
+          foreach ($helper in @("psiphon-tunnel-core.exe", "lyrebird.exe")) {
+            $src = Join-Path $pt.FullName $helper
+            if (-not (Test-Path -LiteralPath $src)) { throw "Pinned Aether helper missing: $helper" }
+            Copy-Item -LiteralPath $src -Destination "$target/pt/$helper"
+          }
+          [System.IO.File]::WriteAllText((Join-Path (Resolve-Path $target) "aether-release.sha256"), "$($asset.sha256)`n")
+          & "$target/aether.exe" --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Updated Aether Windows executable failed --help smoke" }
+          Invoke-WebRequest -Uri "$($aetherLock.repository.Replace('github.com','raw.githubusercontent.com'))/$($aetherLock.version)/LICENSE" -OutFile portable/ktest/THIRD_PARTY/Aether-AGPL-3.0.txt
           Copy-Item "build/wintun/wintun/LICENSE.txt" portable/ktest/THIRD_PARTY/Wintun-LICENSE.txt
       - name: Bundle official pinned Zapret2 Windows packet engine
         shell: pwsh
@@ -199,6 +216,12 @@ jobs:
           $menuText = $menu -join "`n"
           if ($LASTEXITCODE -ne 0 -or $menuText -notmatch "(?i)Disconnected" -or $menuText -notmatch "Connect with") {
             throw "Terminal menu did not start and exit cleanly"
+          }
+          # Offline smoke: a valid staged Aether generation needs no download,
+          # and must be selected instead of any obsolete root executable.
+          $aetherStatus = & ./portable/ktest/ktest.exe warp -upgrade -base portable/ktest 2>&1
+          if ($LASTEXITCODE -ne 0 -or (($aetherStatus -join "`n") -notmatch "already installed")) {
+            throw "New versioned Aether install not selected: $($aetherStatus -join ' ')"
           }
           $version = & ./portable/ktest/cores/xray.exe version
           if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.10\.10")) {
