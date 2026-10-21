@@ -1,0 +1,44 @@
+name: Update Aether Android lock
+
+on:
+  # Temporarily bootstrap the first v2.3.2 update on its isolated feature branch.
+  push:
+    branches: [feat/aether-v232-atomic-upgrades-20261021]
+    paths: [.github/workflows/update-aether-lock.yml]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Reviewed upstream stable tag, e.g. v2.3.3"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  pin-android:
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+      - name: Derive and pin native hashes from published release
+        env:
+          REQUESTED_VERSION: ${{ inputs.version || 'v2.3.2' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 android/scripts/update-aether-release.py --version "$REQUESTED_VERSION" --write
+          python3 -m py_compile android/scripts/update-aether-release.py
+          git diff --check
+      - name: Commit the reviewed lock on the feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -- internal/aether/android-cores.json
+          if ! git diff --cached --quiet; then
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Pin verified Aether v2.3.2 Android archives and executable digests"
+            git push origin HEAD:refs/heads/feat/aether-v232-atomic-upgrades-20261021
+          fi
