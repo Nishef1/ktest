@@ -147,10 +147,11 @@ func (e *udpExit) close() {
 // a destination known not to be protected: a name, or an address whose
 // resolved names are all ordinary. Unknown addresses keep the foreign rule.
 func (p *Proxy) udpCarrierAllowed(host string) bool {
-	if p.cfg.ExitOnly == nil || !p.exitRequired(host) || p.exitOnly(host) {
+	if !p.exitRequired(host) || p.exitOnly(host) {
 		return false
 	}
-	if net.ParseIP(host) == nil {
+	// Without protected names (AI policy off) every destination is ordinary.
+	if p.cfg.ExitOnly == nil || net.ParseIP(host) == nil {
 		return true
 	}
 	names := p.resolved.names(host, time.Now())

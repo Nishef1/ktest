@@ -212,3 +212,20 @@ func TestAetherUDPCarrierOnlyForKnownOrdinaryDestinations(t *testing.T) {
 		t.Fatalf("modes without ExitRequired must keep foreign-only UDP: %v", got)
 	}
 }
+
+// AI policy off (no protected names): the working carrier takes UDP to any
+// destination, addresses included; live test 2026-10-21 found it took none.
+func TestAetherUDPWithoutProtectedNamesUsesCarrier(t *testing.T) {
+	p, err := New(Config{
+		Upstreams:    []Upstream{{Name: "carrier", Addr: "127.0.0.1:9", Exit: true}},
+		ExitRequired: func(string) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"stun.cloudflare.com", "162.159.207.0", "chatgpt.com"} {
+		if got := p.udpCandidates(host); len(got) != 1 {
+			t.Fatalf("%s: UDP candidates %v, want the carrier", host, got)
+		}
+	}
+}
