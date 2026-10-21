@@ -10,6 +10,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,6 +29,7 @@ internal val aetherFingerprints = listOf("auto", "chrome", "firefox", "semi-pyth
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreferences, privateDir: String, canMeasure: Boolean) {
+    val context = LocalContext.current
     var fingerprint by remember { mutableStateOf(preferences.getString("aether_fingerprint", "auto") ?: "auto") }
     var sni by remember { mutableStateOf(preferences.getString("masque_sni", "auto") ?: "auto") }
     var fragment by remember { mutableStateOf(preferences.getString("aether_fragment", "auto") ?: "auto") }
@@ -66,7 +68,7 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
         )
         OutlinedTextField(
             value = fragment, onValueChange = { fragment = it }, modifier = Modifier.fillMaxWidth(),
-            label = { Text("Fragment: auto, off, or size/delay (e.g. 8-16/2-10)") },
+            label = { Text("Aether TLS fragmentation: auto, off, or size/delay (e.g. 8-16/2-10)") },
             singleLine = true, enabled = !busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
         )
         SecondaryButton("Save", {
@@ -78,7 +80,10 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
                 message = ""
                 scope.launch {
                     try {
-                        message = withContext(Dispatchers.IO) { Mobilebridge.calibrateAetherTLS(privateDir) }
+                        message = withContext(Dispatchers.IO) {
+                            ProxyService.prepareUnderlyingNetwork(context)
+                            Mobilebridge.calibrateAetherTLS(privateDir)
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -92,7 +97,8 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
         if (!canMeasure) Note("Disconnect to measure: it must see this network, not the tunnel.", Tone.Warn)
         if (message.isNotBlank()) Note(message, Tone.Good)
         if (error.isNotBlank()) Note(error, Tone.Danger)
-        Note("Auto keeps Chrome's hello and adds an F&F twin (Patterniha's semi-python with tlshello-0-len), " +
-            "and measures names and fragment ranges on each network, saved for 6 hours.")
+        Note("Off disables Aether's own TLS fragmentation and KTest's TCP TLS-hello exit-node masks. " +
+            "Independent local anti-DPI carrier strategies may still shape the outer connection. Auto uses a saved MASQUE " +
+            "measurement when available; use Measure this network now to refresh it.")
     }
 }

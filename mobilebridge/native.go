@@ -15,6 +15,7 @@ import (
 	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/egresscheck"
 	"github.com/Nishef1/ktest/internal/front"
+	"github.com/Nishef1/ktest/internal/tlsshape"
 )
 
 type nativeOptions struct {
@@ -44,10 +45,25 @@ func StartNativeProxy(mode, method, libraryDir, stateDir string) (string, error)
 	if mode != "aether" && mode != "tor" && mode != "psiphon" {
 		return "", errors.New("managed native startup requires Aether, Tor or Psiphon mode")
 	}
-	return startProxy(mode, "", &nativeOptions{method: method, libraryDir: libraryDir, stateDir: stateDir}, "")
+	return startProxy(mode, "", &nativeOptions{
+		method: method, libraryDir: libraryDir, stateDir: stateDir,
+		privateDir: nativePrivateDir(stateDir),
+	}, "")
+}
+
+func nativePrivateDir(stateDir string) string {
+	clean := filepath.Clean(stateDir)
+	if !filepath.IsAbs(clean) || filepath.Base(clean) != "aether" {
+		return ""
+	}
+	return filepath.Dir(clean)
 }
 
 func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
+	return nativeProfileWithPrivateDir(mode, method, viaFast, "")
+}
+
+func nativeProfileWithPrivateDir(mode, method string, viaFast bool, privateDir string) (aether.Profile, error) {
 	if !aether.ValidMethod(method) {
 		return aether.Profile{}, errors.New("unknown Aether method")
 	}
@@ -61,15 +77,22 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 	if err != nil {
 		return aether.Profile{}, err
 	}
-	// An explicit method uses the saved calibration only; Auto measures.
-	shape, measured := mobileTLSShape(context.Background(), "", false)
-	profiles = aether.FilterMethod(aether.ProfilesForMode(shapeProfiles(profiles, shape, measured), mode), method)
+	// Filter the requested backend before applying MASQUE-only TLS shaping.
+	// Android's connection path uses saved calibration only; measuring is an
+	// explicit Settings action, never an implicit startup delay.
+	profiles = aether.FilterMethod(aether.ProfilesForMode(profiles, mode), method)
+	if len(profiles) == 0 {
+		return aether.Profile{}, errors.New("selected method is incompatible with this mode")
+	}
+	shape, measured := mobileTLSShape(context.Background(), privateDir, false)
+	profiles = shapeProfiles(profiles, shape, measured)
 	if viaFast && mode == "aether" {
 		profiles = tcpCarriedProfiles(profiles)
 		if len(profiles) == 0 {
 			return aether.Profile{}, errors.New("no compatible TCP/HTTP2 profile can use the local anti-DPI carrier")
 		}
 	}
+	profiles = tlsshape.Order(profiles, measured)
 	if len(profiles) == 0 {
 		return aether.Profile{}, errors.New("selected method is incompatible with this mode")
 	}
@@ -86,17 +109,23 @@ func nativeAutoCandidates(viaCarrier bool) ([]aether.Profile, error) {
 }
 
 func nativeAutoCandidatesWithECH(viaCarrier bool, ech, ip string) ([]aether.Profile, error) {
+	return nativeAutoCandidatesWithECHAndPrivateDir(viaCarrier, ech, ip, "")
+}
+
+func nativeAutoCandidatesWithECHAndPrivateDir(viaCarrier bool, ech, ip, privateDir string) ([]aether.Profile, error) {
 	profiles, err := aether.ParseProfiles(aether.DefaultProfiles, ech, ip)
 	if err != nil {
 		return nil, err
 	}
-	shape, _ := mobileTLSShape(context.Background(), "", false)
-	profiles = aether.ProfilesForMode(shapeProfiles(profiles, shape, nil), "aether")
+	profiles = aether.ProfilesForMode(profiles, "aether")
+	shape, measured := mobileTLSShape(context.Background(), privateDir, false)
+	profiles = shapeProfiles(profiles, shape, measured)
 	if viaCarrier {
 		// Auto must keep direct H3/WireGuard profiles eligible and add
 		// separate local-carrier variants only for compatible TCP/H2 methods.
 		profiles = aether.WithLocalCarriers(profiles)
 	}
+	profiles = tlsshape.Order(profiles, measured)
 	var candidates []aether.Profile
 	for _, p := range profiles {
 		if p.Psiphon() || p.Has("--tor-only") {
@@ -165,7 +194,7 @@ func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore
 		ech, ip = base64.StdEncoding.EncodeToString(cfg), address
 	}
 	stopDiscovery()
-	profiles, err := nativeAutoCandidatesWithECH(o.carrier != "", ech, ip)
+	profiles, err := nativeAutoCandidatesWithECHAndPrivateDir(o.carrier != "", ech, ip, o.privateDir)
 	if err != nil {
 		return nil, observedExit{}, err
 	}
@@ -197,7 +226,7 @@ func launchVerifiedNativeAuto(ctx context.Context, o nativeOptions) (*nativeCore
 }
 
 func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCore, error) {
-	p, err := nativeProfile(mode, o.method, o.carrier != "")
+	p, err := nativeProfileWithPrivateDir(mode, o.method, o.carrier != "", o.privateDir)
 	if o.profile != nil {
 		p, err = *o.profile, nil
 	}

@@ -44,7 +44,7 @@ import org.json.JSONObject
 
 internal data class ConnectionMode(
     val id: String, val title: String, val subtitle: String, val available: Boolean,
-    val limitation: String
+    val limitation: String, val details: String
 )
 
 internal val nativeModes = setOf("aether", "tor", "psiphon")
@@ -59,12 +59,12 @@ internal val modes: List<ConnectionMode> by lazy {
             ConnectionMode(
                 item.getString("id"), item.getString("title"),
                 item.getString("subtitle"), item.getBoolean("available"),
-                item.optString("limitation")
+                item.optString("limitation"), item.optString("details")
             )
         }
     }.getOrElse {
         listOf(ConnectionMode("balanced", "Balanced", "Connection catalog unavailable", false,
-            "Cannot read the Go engine's mode definitions."))
+            "Cannot read the Go engine's mode definitions.", ""))
     }
 }
 
@@ -96,8 +96,7 @@ internal fun ConnectScreen(
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
-        if (activeMode.id == "balanced") Note("Recommended for first setup: when no external SOCKS upstream is set, Balanced starts independent WARP, Psiphon and Tor discovery in parallel. Psiphon/Tor do not wait for a WARP key, and only a verified working exit is promoted.")
-        if (activeMode.id == "fast") Note("Fast prioritizes quick local routes and WARP; it does not warm Psiphon/Tor fallback on startup. Choose Balanced for automatic cross-backend fallback.")
+        if (activeMode.details.isNotBlank()) Note(activeMode.details, Tone.Info)
         PublicIpPanel(state == LinkState.Active)
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
@@ -137,9 +136,9 @@ private fun Hero(
                 // One plain answer: what is covered.
                 val vpnMissing = coverage != "proxy" && !vpnActive
                 Text(when {
-                    vpnMissing -> "Apps pointed at the local proxy work, but device-wide VPN is not active. Check Settings for the packet-adapter error."
-                    coverage == "proxy" -> "Apps using the local proxy are connected."
-                    else -> "All apps are connected."
+                    vpnMissing -> "Apps configured for the local proxy can use it, but device-wide VPN is not active. Check Settings for the packet-adapter error."
+                    coverage == "proxy" -> "Apps configured to use the local proxy can use it."
+                    else -> "System VPN is active; destination access depends on the route selected for each connection."
                 }, color = if (vpnMissing) K.amber else K.muted,
                     fontSize = 12.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 22.dp))

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/tlsshape"
 )
 
@@ -36,17 +37,27 @@ func aetherTLSOptions(o connectOptions) (tlsshape.Options, error) {
 // a network; a network that answers takes a few seconds.
 const tlsCalibrationBudget = 15 * time.Second
 
+// sessionNeedsTLSCalibration reports whether this connection can use the
+// MASQUE handshake that calibration measures. A forced WireGuard/wiw or helper
+// backend must not spend up to 15 seconds probing unrelated MASQUE gateways.
+func sessionNeedsTLSCalibration(o connectOptions) bool {
+	if o.mode == ModePsiphon || o.mode == ModeTor || o.mode == ModeWindscribe {
+		return false
+	}
+	method := strings.ToLower(strings.TrimSpace(o.aetherMethod))
+	return method == "" || method == "auto" || aether.UsesMASQUE(method)
+}
+
 // sessionTLSShape returns the shape for a connection, calibrating this network
-// when its saved calibration is missing or stale. Psiphon and Tor sessions
-// have no MASQUE handshake to shape.
+// when its saved calibration is missing or stale. Explicit non-MASQUE methods
+// bypass calibration; saved MASQUE settings cannot improve a WireGuard handshake.
 func sessionTLSShape(ctx context.Context, o connectOptions, network string, u *term) tlsShape {
 	opts, err := aetherTLSOptions(o)
 	if err != nil {
 		return tlsShape{opts: tlsshape.Options{Fingerprint: tlsshape.Auto, SNI: tlsshape.Auto, Fragment: tlsshape.Auto}}
 	}
 	s := tlsShape{opts: opts}
-	if o.mode == ModePsiphon || o.mode == ModeTor || o.mode == ModeWindscribe ||
-		strings.HasPrefix(o.aetherMethod, "psiphon") || o.aetherMethod == "tor" {
+	if !sessionNeedsTLSCalibration(o) {
 		return s
 	}
 	if r, ok := tlsshape.Cached(tlsCalibrationFile(), network, opts); ok {

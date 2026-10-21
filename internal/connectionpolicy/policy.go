@@ -15,25 +15,33 @@ type Mode struct {
 	Subtitle   string `json:"subtitle"`
 	Available  bool   `json:"available"`
 	Limitation string `json:"limitation,omitempty"`
+	Details    string `json:"details,omitempty"`
 }
 
 // allModes is every CLI mode with its shared title, in terminal order.
 func allModes() []Mode {
 	return []Mode{
 		{"balanced", "Balanced", "Local routes first; automatic Aether / Psiphon / Tor fallback", true,
-			"Zapret2 is Windows-only."},
+			"Zapret2 is Windows-only.",
+			"Local routes first; on-demand Aether, Psiphon and Tor fallback. Every site, AI included, takes whichever route works."},
 		{"fast", "Fast", "Every local method, fronting and learned priors; native exits on demand", true,
-			"No Psiphon, Tor or unidentified external SOCKS."},
+			"No Psiphon, Tor or unidentified external SOCKS.",
+			"Local Go, ByeDPI, Xray, Zapret and fronting routes with learned priors; Aether exits on demand, no Psiphon or Tor."},
 		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
-			"Aether handles enrollment, scans and reconnect."},
+			"Aether handles enrollment, scans and reconnect.",
+			"Aether: search WARP MASQUE/WireGuard profiles only; registers missing keys over ECH first; every site uses any working WARP exit."},
 		{"tor", "Aether to Tor", "Tor alone (no WARP), dialing through Fast's local anti-DPI", true,
-			"Requires a verified Tor circuit and foreign exit. First connection can take several minutes."},
+			"Requires a verified Tor circuit and foreign exit. First connection can take several minutes.",
+			"Aether to Tor: Tor-only; no direct fallback for managed apps. Different Tor circuits can use different public IPs."},
 		{"windscribe", "Windscribe", "Local-only anti-DPI bridge", false,
-			"The desktop WStunnel, Xray and ByeDPI orchestration is not ported."},
+			"The desktop WStunnel, Xray and ByeDPI orchestration is not ported.",
+			"OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI, optional own Cloudflare hostname) plus IP-preserving local anti-DPI (Xray TCP fragmentation, ByeDPI, TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."},
 		{"psiphon", "Aether to Psiphon", "Psiphon alone (no WARP) through Fast's local anti-DPI, with CDN fronting on verified edges", true,
-			"No WARP needed; CDN mode uses edges this network verified first. No external SOCKS substitution."},
+			"No WARP needed; CDN mode uses edges this network verified first. No external SOCKS substitution.",
+			"Aether to Psiphon: Psiphon profiles only; verified foreign exit required; no WARP, Tor or direct fallback for managed apps."},
 		{"windscribe-aether", "Windscribe through Aether", "WARP carrier for Windscribe", false,
-			"Requires the genuine Aether carrier and Windscribe bridge; no Android port yet."},
+			"Requires the genuine Aether carrier and Windscribe bridge; no Android port yet.",
+			"WARP through Aether carries Windscribe OpenVPN TCP. Keep Aether running and exclude ktest/aether from Windscribe split tunneling. No direct, Psiphon or Tor fallback. Windscribe owns the final VPN exit."},
 	}
 }
 
@@ -51,7 +59,7 @@ func AndroidModes() []Mode {
 	return out
 }
 
-// Title is used by both clients; unknown modes never become made-up modes.
+// Title and Details are shared by both clients; unknown modes never become made-up modes.
 func Title(id string) string {
 	for _, m := range allModes() {
 		if m.ID == id {
@@ -59,6 +67,15 @@ func Title(id string) string {
 		}
 	}
 	return "Unknown"
+}
+
+func Details(id string) string {
+	for _, m := range allModes() {
+		if m.ID == id {
+			return m.Details
+		}
+	}
+	return ""
 }
 
 // Configure applies the exact CLI routing policies to a Go smart proxy.

@@ -56,8 +56,8 @@ class ProxyService : Service() {
         /** SystemClock.elapsedRealtime() when the current session became active; 0 otherwise. */
         @Volatile var connectedAt: Long = 0
 
-        /** Network handles change when Wi-Fi/cellular switches, without exposing SSIDs. */
-        internal fun prepareBalancedNetwork(context: Context) {
+        /** Set a per-network cache key before connecting or measuring; no SSID/BSSID is stored. */
+        internal fun prepareUnderlyingNetwork(context: Context) {
             val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
             val network = cm.activeNetwork ?: error("No underlying Android network available")
             val caps = cm.getNetworkCapabilities(network)
@@ -252,6 +252,8 @@ class ProxyService : Service() {
                     try {
                         mutex.withLock {
                             if (wanted) {
+                                // Set network identity before native profile selection and TLS-cache lookup.
+                                prepareUnderlyingNetwork(this@ProxyService)
                                 // The F&F and MASQUE SNI settings; a bad saved value falls back to auto.
                                 getSharedPreferences("ktest_android", MODE_PRIVATE).let { p ->
                                     runCatching { Mobilebridge.setDNSOverride(p.getString("dns_override", "").orEmpty()) }
@@ -279,7 +281,6 @@ class ProxyService : Service() {
                                         File(filesDir, "aether").absolutePath)
                                 } else if (mode == "balanced" || mode == "fast") {
                                     val privateDir = filesDir.canonicalPath
-                                    prepareBalancedNetwork(this@ProxyService)
                                     val net = getSystemService(ConnectivityManager::class.java).activeNetwork
                                         ?: error("Underlying network disappeared before connection")
                                     watchBalancedNetwork(net.networkHandle)

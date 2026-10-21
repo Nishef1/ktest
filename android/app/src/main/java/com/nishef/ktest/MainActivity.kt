@@ -339,7 +339,7 @@ private fun KTestApp() {
                                         try {
                                             routePlan.report = withContext(Dispatchers.IO) {
                                                 val fronting = ProxyService.checkedFrontingOptIn(context, privateDir)
-                                                ProxyService.prepareBalancedNetwork(context)
+                                                ProxyService.prepareUnderlyingNetwork(context)
                                                 Mobilebridge.startRouteTest(mode, testUpstream,
                                                     context.applicationInfo.nativeLibraryDir, privateDir, fronting)
                                                 JSONObject(Mobilebridge.routeTestStatus(privateDir, mode))

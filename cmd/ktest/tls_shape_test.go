@@ -8,6 +8,63 @@ import (
 	"github.com/Nishef1/ktest/internal/tlsshape"
 )
 
+func TestSessionTLSCalibrationFollowsSelectedTransport(t *testing.T) {
+	cases := []struct {
+		mode   ConnectionMode
+		method string
+		want   bool
+	}{
+		{ModeBalanced, "", true},
+		{ModeBalanced, "auto", true},
+		{ModeFast, "masque-h2", true},
+		{ModeBalanced, "gool-h3", true},
+		{ModeAether, "mim-h2", true},
+		{ModeBalanced, "wireguard", false},
+		{ModeAether, "wiw", false},
+		{ModeBalanced, "psiphon", false},
+		{ModeBalanced, "psiphon-cdn", false},
+		{ModeTor, "auto", false},
+		{ModePsiphon, "auto", false},
+		{ModeWindscribe, "auto", false},
+	}
+	for _, tc := range cases {
+		o := defaultConnectOptions(t.TempDir())
+		o.mode, o.aetherMethod = tc.mode, tc.method
+		if got := sessionNeedsTLSCalibration(o); got != tc.want {
+			t.Errorf("mode=%s method=%q: calibration=%v, want %v", tc.mode, tc.method, got, tc.want)
+		}
+	}
+}
+
+func TestAetherFragmentOffSkipsTCPExitNodeMasksButKeepsUDPNoise(t *testing.T) {
+	opts, err := tlsshape.ParseOptions("auto", "auto", "off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := loadAetherProfiles(t.TempDir(), "", "", ModeAether, tlsShape{opts: opts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var udpNoise, directH2 bool
+	for _, p := range profiles {
+		if p.ExitNode() == tlsshape.ExitNodeMask {
+			t.Fatalf("fragment=off retained a TCP TLS-hello exit-node: %s", p.Label)
+		}
+		if p.ExitNode() == "udp-noise" {
+			udpNoise = true
+		}
+		if p.Method() == "masque-h2" && p.ExitNode() == "" && !p.Has("--fragment") {
+			directH2 = true
+		}
+	}
+	if !udpNoise {
+		t.Fatal("fragment=off removed the distinct UDP-noise fallback")
+	}
+	if !directH2 {
+		t.Fatal("fragment=off removed all direct non-fragmented H2 profiles")
+	}
+}
+
 func TestAetherTLSOptionsValidated(t *testing.T) {
 	for _, bad := range []func(*connectOptions){
 		func(o *connectOptions) { o.aetherFingerprint = "safari" },

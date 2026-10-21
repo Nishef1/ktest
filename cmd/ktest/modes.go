@@ -64,21 +64,8 @@ func (m ConnectionMode) configure(cfg *smartproxy.Config) {
 }
 
 func (m ConnectionMode) message() string {
-	switch m {
-	case ModeBalanced:
-		return "Local routes first; on-demand Aether, Psiphon and Tor fallback. Every site, AI included, takes whichever route works."
-	case ModeFast:
-		return "Local Go, ByeDPI, Xray, Zapret and fronting routes with learned priors; Aether exits on demand, no Psiphon or Tor."
-	case ModeWindscribe:
-		return "OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI, optional own Cloudflare hostname) plus IP-preserving local anti-DPI (Xray TCP fragmentation, ByeDPI, TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."
-	case ModeWindscribeAether:
-		return "WARP through Aether carries Windscribe OpenVPN TCP. Keep Aether running and exclude ktest/aether from Windscribe split tunneling. No direct, Psiphon or Tor fallback. Windscribe owns the final VPN exit."
-	case ModeAether:
-		return "Aether: search WARP MASQUE/WireGuard profiles only; registers missing keys over ECH first; every site uses any working WARP exit."
-	case ModePsiphon:
-		return "Aether to Psiphon: Psiphon profiles only; verified foreign exit required; no WARP, Tor or direct fallback for managed apps."
-	case ModeTor:
-		return "Aether to Tor: Tor-only; no direct fallback for managed apps. Different Tor circuits can use different public IPs."
+	if details := connectionpolicy.Details(string(m)); details != "" {
+		return details
 	}
 	return "Unknown"
 }

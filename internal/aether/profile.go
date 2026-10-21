@@ -113,6 +113,18 @@ func ValidMethod(method string) bool {
 	return false
 }
 
+// UsesMASQUE reports whether a method negotiates its transport through MASQUE.
+// Keep this shared so the CLI and Android avoid measuring or applying MASQUE
+// TLS-shape options to WireGuard, Psiphon, or Tor selections.
+func UsesMASQUE(method string) bool {
+	switch method {
+	case "masque-h2", "masque-h3", "gool-h2", "gool-h3", "mim-h2", "mim-h3":
+		return true
+	default:
+		return false
+	}
+}
+
 func (p Profile) Method() string {
 	suffix := "-h3"
 	if p.Has("--h2") || p.Has("--http2") {
