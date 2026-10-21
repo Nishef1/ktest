@@ -248,6 +248,10 @@ class KTestVpnService : VpnService() {
     }
 
     @Synchronized private fun closeTunnel() {
+        // Normal stop already closed the tunnel on Dispatchers.IO before
+        // stopSelf(). Avoid repeating native process teardown in onDestroy's
+        // main-thread callback when there is no tunnel left to close.
+        if (tun == null && state == "disconnected") return
         Mobilebridge.stopVpnTun()
         runCatching { setUnderlyingNetworks(null) }
         runCatching { tun?.close() }

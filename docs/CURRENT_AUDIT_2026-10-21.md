@@ -1,7 +1,7 @@
 # Current source, CI and performance audit — 2026-10-21
 
 **Reviewed source:** [`978e0ab`](https://github.com/Nishef1/ktest/commit/978e0ab487e086ed5da61478f313db60bf272365) on `main`.
-**Scope:** source/documentation review, CI status inspection and the 2026-10-21 ECH DNS follow-up. The earlier documentation-only commit did not change runtime behavior. The latest follow-up adds two pinned-IP AliDNS RFC 8484 candidates to packet DNS and a configuration test; this is not yet a physical-device or ISP field test.
+**Scope:** source/documentation review, CI status inspection and the 2026-10-21 ECH DNS follow-up. The reviewed baseline predates the Android connection-lifecycle patch now recorded in the repository. The ECH follow-up adds two pinned-IP AliDNS RFC 8484 candidates to packet DNS; the Android lifecycle patch adds immediate UI state, bounded recovery and idempotent TUN teardown. CI and physical-device acceptance for these follow-ups remain pending.
 
 ## Verified CI at the reviewed source snapshot
 
@@ -30,6 +30,14 @@ These results do **not** prove end-to-end Android TUN traffic, current reachabil
 A report described filtering UDP DNS queries for HTTPS records (type 65) used to obtain ECH configurations, while AliDNS DoH worked on that reporter's network. This is not evidence of a nationwide block and is not the same as blocking ECH handshakes. KTest's direct ECH bootstrap already uses Cloudflare IP literals over TCP/443 with a dummy ECHConfig and accepts the current retry configuration returned by the edge; it does not require DNS and does not hardcode a permanent ECH key.
 
 The packet-DNS endpoint list now includes RFC 8484 DoH at `https://dns.alidns.com/dns-query`, pinned to `223.5.5.5:443` and `223.6.6.6:443`, with TLS certificate validation for `dns.alidns.com`. This can carry HTTPS/SVCB queries through HTTPS if the endpoint is reachable. A unit test verifies endpoint configuration, but real network acceptance and TLS/record-type compatibility on target ISPs remain open.
+
+## Android connection lifecycle follow-up (2026-10-21)
+
+The Android connect/disconnect report exposed two likely contributors: the UI's single 900 ms polling loop mixed connection state with slower VPN/route/CDN diagnostics, and a canceled startup could remove the foreground notification while the serialized reconnect worker was still shutting down the previous session. The follow-up separates fast connection-state polling from slower diagnostics, gives the button immediate local Connecting/Disconnecting states, and keeps the foreground service alive while STOP/RECONNECT owns teardown. The UI no longer calls Go status APIs synchronously during Compose initialization; button color and spinner transitions are shorter.
+
+Unexpected loss of an already-active Go proxy or Android packet adapter now uses the existing serialized reconnect path, bounded to two automatic recovery attempts per user-started session. Explicit user disconnect clears the active request and cancels pending recovery, so it must not reconnect itself. Go's `StopVpnTun` is now idempotent after its fd/adapter state is cleared, avoiding duplicate native process teardown when both proxy and Android service teardown call it.
+
+These changes are code-level corrections, not a claim that the original field failure has been reproduced or fully diagnosed. The Android APK/Go CI must pass, then a physical phone should be tested for rapid taps, connect/cancel during startup, 20 connect-disconnect cycles, Wi-Fi↔cellular handover, background/resume, VPN permission revocation and sustained traffic. Record the device, Android version, mode, network and logs for any remaining drops.
 
 ## Performance architecture observed in source
 

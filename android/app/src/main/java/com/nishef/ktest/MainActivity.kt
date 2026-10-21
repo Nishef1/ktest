@@ -92,9 +92,13 @@ private fun KTestApp() {
     var modeId by rememberSaveable { mutableStateOf(prefs.getString("mode", "balanced") ?: "balanced") }
     var upstream by remember { mutableStateOf(prefs.getString("upstream_$modeId", "") ?: "") }
     var nativeMethod by remember { mutableStateOf(validNativeMethod(modeId, prefs.getString("method_$modeId", "auto") ?: "auto")) }
-    var status by remember { mutableStateOf(JSONObject(Mobilebridge.proxyStatus())) }
-    var vpnCapability by remember { mutableStateOf(JSONObject(Mobilebridge.vpnCapability())) }
+    // Never call Go/JNI status APIs synchronously during composition: the VPN
+    // capability check may inspect or recover native packet adapters.
+    var status by remember { mutableStateOf(JSONObject()) }
+    var vpnCapability by remember { mutableStateOf(JSONObject()) }
     var connecting by remember { mutableStateOf(false) }
+    var disconnecting by remember { mutableStateOf(false) }
+    var connectRequestedAt by remember { mutableLongStateOf(0L) }
     var checkingRoute by remember { mutableStateOf(false) }
     var routeReport by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -105,10 +109,15 @@ private fun KTestApp() {
     val settings = remember { SettingsState() }
     val routePlan = remember { RoutePlanState() }
     val routeTargets = remember { RouteTargetsState() }
-    val running = status.optBoolean("running")
+    val serviceConnectionState = ProxyService.connectionState
+    val backendRunning = status.optBoolean("running")
+    val serviceTransitioning = serviceConnectionState in setOf("connecting", "recovering", "disconnecting")
+    val running = serviceConnectionState == "connected" ||
+        (backendRunning && serviceConnectionState !in setOf("connecting", "recovering", "disconnecting", "failed"))
     val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
     val manualTesting = routePlan.manualBusy
-    val offline = !running && !connecting && !connectAfterConsent && !routePlan.busy &&
+    val offline = !running && !connecting && !disconnecting && !connectAfterConsent && !routePlan.busy &&
+        !serviceTransitioning && serviceConnectionState != "connected" &&
         vpnState != "preparing" && vpnState != "tun_running_unverified"
     val routeStatusReady = routePlan.report != null && routePlan.readError == null
     val scanBusy = tools.cdnStarting || tools.cdnStatus.optBoolean("running")
@@ -120,6 +129,9 @@ private fun KTestApp() {
     val canTestRoutes = offline && routeStatusReady && !routeTargets.busy && !settings.caBusy &&
         !scanBusy && scanStatusReady && activeMode.id in listOf("balanced", "fast")
     val linkState = when {
+        disconnecting || serviceConnectionState == "disconnecting" -> LinkState.Disconnecting
+        serviceConnectionState in setOf("connecting", "recovering") -> LinkState.Connecting
+        serviceConnectionState == "failed" && !connecting -> if (activeMode.available) LinkState.Idle else LinkState.Unavailable
         running -> LinkState.Active
         (connecting || connectAfterConsent) && !manualTesting -> LinkState.Connecting
         !activeMode.available -> LinkState.Unavailable
@@ -149,6 +161,8 @@ private fun KTestApp() {
             notificationConsent.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         connecting = true
+        disconnecting = false
+        connectRequestedAt = android.os.SystemClock.elapsedRealtime()
         routeReport = null
         ProxyService.lastError = null
         try {
@@ -164,6 +178,7 @@ private fun KTestApp() {
         } catch (e: Exception) {
             error = e.message ?: "Unable to start the connection"
             connecting = false
+            connectRequestedAt = 0L
         }
     }
     val vpnConsent = rememberLauncherForActivityResult(
@@ -182,15 +197,88 @@ private fun KTestApp() {
         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     }
 
+    // Poll connection state separately from diagnostics. Slow route/CDN/VPN
+    // capability calls must not delay the connect-button animation or state.
     LaunchedEffect(Unit) {
         while (isActive) {
-            status = runCatching { withContext(Dispatchers.IO) { JSONObject(Mobilebridge.proxyStatus()) } }
-                .getOrElse { JSONObject() }
-            vpnCapability = runCatching { withContext(Dispatchers.IO) { JSONObject(Mobilebridge.vpnCapability()) } }
-                .getOrElse { JSONObject() }
+            val fresh = runCatching {
+                withContext(Dispatchers.IO) { JSONObject(Mobilebridge.proxyStatus()) }
+            }.getOrNull()
+            if (fresh != null) status = fresh
+
+            val phase = status.optString("phase")
+            val serviceState = ProxyService.connectionState
+            val backendActive = status.optBoolean("running")
+            vpnState = KTestVpnService.state
+            val now = android.os.SystemClock.elapsedRealtime()
+
+            when {
+                disconnecting || serviceState == "disconnecting" -> {
+                    connecting = false
+                    disconnecting = true
+                    if (serviceState in setOf("disconnected", "failed") && !backendActive &&
+                        vpnState in setOf("disconnected", "failed", "revoked")) {
+                        disconnecting = false
+                        connectRequestedAt = 0L
+                    }
+                }
+                serviceState in setOf("connecting", "recovering") -> {
+                    connecting = true
+                    disconnecting = false
+                }
+                connecting && connectRequestedAt > 0L &&
+                    now - connectRequestedAt < 15_000L &&
+                    serviceState in setOf("disconnected", "failed") &&
+                    ProxyService.lastError == null && !backendActive -> {
+                    // Keep immediate feedback while Android delivers ACTION_CONNECT;
+                    // a previous stopped/failed Go report may still be stale.
+                }
+                serviceState == "failed" || phase == "failed" -> {
+                    connecting = false
+                    disconnecting = false
+                    connectRequestedAt = 0L
+                    error = ProxyService.lastError
+                        ?: status.optString("error").takeIf { it.isNotBlank() }
+                        ?: "Connection failed"
+                }
+                backendActive || serviceState == "connected" -> {
+                    connecting = false
+                    disconnecting = false
+                    connectRequestedAt = 0L
+                }
+                phase in connectingPhases -> {
+                    connecting = true
+                    disconnecting = false
+                }
+                connecting && connectRequestedAt > 0L && now - connectRequestedAt >= 15_000L -> {
+                    connecting = false
+                    connectRequestedAt = 0L
+                    error = "The connection service did not acknowledge the request. Please try again."
+                }
+            }
+
+            if (ProxyService.lastError != null &&
+                ProxyService.connectionState !in setOf("recovering", "connecting", "disconnecting")) {
+                error = ProxyService.lastError
+            }
+            if (vpnState == "failed" && KTestVpnService.lastError != null &&
+                (backendActive || ProxyService.connectionState == "connected")) {
+                error = "VPN: ${KTestVpnService.lastError}"
+            }
+            delay(450)
+        }
+    }
+
+    // Diagnostics are valuable, but they are not on the connection feedback path.
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            vpnCapability = runCatching {
+                withContext(Dispatchers.IO) { JSONObject(Mobilebridge.vpnCapability()) }
+            }.getOrElse { JSONObject() }
             try {
-                val routeMode = "balanced"
-                routePlan.report = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.routeTestStatus(privateDir, routeMode)) }
+                routePlan.report = withContext(Dispatchers.IO) {
+                    JSONObject(Mobilebridge.routeTestStatus(privateDir, "balanced"))
+                }
                 routePlan.readError = null
             } catch (e: CancellationException) {
                 throw e
@@ -206,15 +294,7 @@ private fun KTestApp() {
             } catch (e: Exception) {
                 tools.cdnStatusError = e.message ?: "Could not read CDN scan status"
             }
-            connecting = status.optString("phase") in connectingPhases && !routePlan.manualBusy
-            if (status.optString("phase") == "failed" && !routePlan.manualBusy) {
-                connecting = false
-                error = status.optString("error")
-            }
-            if (ProxyService.lastError != null) error = ProxyService.lastError
-            vpnState = KTestVpnService.state
-            if (vpnState == "failed" && KTestVpnService.lastError != null && running) error = "VPN: ${KTestVpnService.lastError}"
-            delay(900)
+            delay(1_500)
         }
     }
     LaunchedEffect(status.optString("phase")) {
@@ -226,7 +306,7 @@ private fun KTestApp() {
         // Soft accent glow behind the header; tinted by connection state.
         val glow by animateColorAsState(
             when (linkState) { LinkState.Active -> K.mint; LinkState.Connecting -> K.cyan; else -> K.bgGlow },
-            tween(800), label = "glow"
+            tween(240), label = "glow"
         )
         Box(Modifier.fillMaxWidth().height(420.dp).background(
             Brush.verticalGradient(listOf(glow.copy(alpha = if (linkState == LinkState.Active || linkState == LinkState.Connecting) .14f else .9f), Color.Transparent))
@@ -318,17 +398,33 @@ private fun KTestApp() {
                             onCoverage = { coverage = it; prefs.edit().putString("coverage", it).apply() },
                             onPower = {
                                 error = null
-                                if (running || (connecting && !routePlan.manualBusy)) {
-                                    context.startService(Intent(context, ProxyService::class.java).apply {
-                                        action = ProxyService.ACTION_STOP
-                                    })
-                                    connecting = false
-                                } else if (activeMode.available && !connectBlocked) {
-                                    val consent = if (coverage != "proxy") VpnService.prepare(context) else null
-                                    if (consent != null) {
-                                        connectAfterConsent = true
-                                        vpnConsent.launch(consent)
-                                    } else launchConnect()
+                                when (linkState) {
+                                    LinkState.Active, LinkState.Connecting -> {
+                                        // Animate immediately; service teardown runs asynchronously.
+                                        disconnecting = true
+                                        connecting = false
+                                        connectRequestedAt = 0L
+                                        try {
+                                            context.startService(Intent(context, ProxyService::class.java).apply {
+                                                action = ProxyService.ACTION_STOP
+                                            })
+                                        } catch (e: Exception) {
+                                            disconnecting = false
+                                            error = e.message ?: "Unable to stop the connection"
+                                        }
+                                    }
+                                    LinkState.Disconnecting -> Unit
+                                    LinkState.Idle, LinkState.Unavailable -> {
+                                        if (activeMode.available && !connectBlocked) {
+                                            val consent = if (coverage != "proxy") VpnService.prepare(context) else null
+                                            if (consent != null) {
+                                                connectAfterConsent = true
+                                                vpnConsent.launch(consent)
+                                            } else launchConnect()
+                                        } else if (connectBlocked) {
+                                            error = "Finish the current route task before connecting."
+                                        }
+                                    }
                                 }
                             },
                             onCopy = copy
@@ -382,6 +478,7 @@ private fun Header(state: LinkState) {
         when (state) {
             LinkState.Active -> StatusPill("Connected", K.mint)
             LinkState.Connecting -> StatusPill("Connecting", K.cyan)
+            LinkState.Disconnecting -> StatusPill("Disconnecting", K.amber)
             LinkState.Unavailable -> StatusPill("Unavailable", K.amber)
             LinkState.Idle -> StatusPill("Offline", K.muted)
         }

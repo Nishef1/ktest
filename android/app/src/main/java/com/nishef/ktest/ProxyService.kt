@@ -40,6 +40,8 @@ class ProxyService : Service() {
         const val ACTION_CONNECT = "com.nishef.ktest.CONNECT"
         const val ACTION_STOP = "com.nishef.ktest.DISCONNECT"
         private const val ACTION_RECONNECT = "com.nishef.ktest.RECONNECT_AFTER_NETWORK_CHANGE"
+        private const val EXTRA_AUTOMATIC_RECOVERY = "automatic_recovery"
+        private const val MAX_AUTOMATIC_RECOVERIES = 2
         const val EXTRA_MODE = "mode"
         const val EXTRA_UPSTREAM = "upstream"
         const val EXTRA_METHOD = "method"
@@ -48,6 +50,9 @@ class ProxyService : Service() {
         private const val CHANNEL = "ktest_proxy"
         private const val NOTIFICATION_ID = 42
         @Volatile var lastError: String? = null
+        /** UI-safe lifecycle signal; distinct from the Go listener's running bit. */
+        @Volatile var connectionState: String = "disconnected"
+            private set
         /** SystemClock.elapsedRealtime() when the current session became active; 0 otherwise. */
         @Volatile var connectedAt: Long = 0
 
@@ -93,6 +98,7 @@ class ProxyService : Service() {
     @Volatile private var pendingUnderlyingNetwork: Network? = null
     @Volatile private var reconnectJob: Job? = null
     @Volatile private var reconnectEpoch = 0
+    private var automaticRecoveryAttempts = 0
 
     // Reconnect after a network handover to refresh DNS and transport state.
     private fun watchBalancedNetwork(expectedHandle: Long) {
@@ -135,7 +141,8 @@ class ProxyService : Service() {
             pendingUnderlyingNetwork = candidate
         }
         networkInvalidated = true
-        lastError = "Underlying network changed. KTest is recovering the connection automatically."
+        connectionState = "recovering"
+        lastError = null
         if (reconnectJob?.isActive == true) return
         reconnectJob = worker.launch {
             val manager = getSystemService(ConnectivityManager::class.java)
@@ -152,7 +159,12 @@ class ProxyService : Service() {
                         val stable = manager.allNetworks.any { it.networkHandle == network.networkHandle }
                         if (wanted && stable && stableCaps != null &&
                             stableCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-                            val request = activeRequest?.let { Intent(it).apply { action = ACTION_CONNECT } }
+                            val request = activeRequest?.let {
+                                Intent(it).apply {
+                                    action = ACTION_CONNECT
+                                    putExtra(EXTRA_AUTOMATIC_RECOVERY, true)
+                                }
+                            }
                             if (request != null) {
                                 pendingReconnect = request
                                 startService(Intent(this@ProxyService, ProxyService::class.java).apply {
@@ -172,6 +184,29 @@ class ProxyService : Service() {
                 startService(Intent(this@ProxyService, ProxyService::class.java).apply { action = ACTION_STOP })
             }
         }
+    }
+
+    /**
+     * Recover a session that was already active but lost its core or packet adapter.
+     * Reuse the serialized reconnect path at most twice per user-started session.
+     */
+    private fun requestAutomaticRecovery(): Boolean {
+        if (!wanted || stopping || networkInvalidated || reconnectJob?.isActive == true || pendingReconnect != null) {
+            return false
+        }
+        if (automaticRecoveryAttempts >= MAX_AUTOMATIC_RECOVERIES) return false
+        val request = activeRequest?.let {
+            Intent(it).apply {
+                action = ACTION_CONNECT
+                putExtra(EXTRA_AUTOMATIC_RECOVERY, true)
+            }
+        } ?: return false
+        automaticRecoveryAttempts++
+        pendingReconnect = request
+        connectionState = "recovering"
+        lastError = null
+        startService(Intent(this, ProxyService::class.java).apply { action = ACTION_RECONNECT })
+        return true
     }
 
     private fun clearNetworkWatch() {
@@ -195,6 +230,9 @@ class ProxyService : Service() {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 if (wanted || stopping) return START_NOT_STICKY
+                val automaticRecovery = intent.getBooleanExtra(EXTRA_AUTOMATIC_RECOVERY, false)
+                if (!automaticRecovery) automaticRecoveryAttempts = 0
+                connectionState = "connecting"
                 val mode = intent.getStringExtra(EXTRA_MODE) ?: "balanced"
                 val upstream = intent.getStringExtra(EXTRA_UPSTREAM).orEmpty()
                 val method = intent.getStringExtra(EXTRA_METHOD) ?: "auto"
@@ -279,18 +317,30 @@ class ProxyService : Service() {
                             }
                             if (!wanted) error("Connection stopped during VPN startup")
                             connectedAt = SystemClock.elapsedRealtime()
+                            connectionState = "connected"
                             getSystemService(NotificationManager::class.java)
                                 .notify(NOTIFICATION_ID, notification(title, true))
                         }
                         while (wanted && isActive) {
                             val status = JSONObject(Mobilebridge.proxyStatus())
                             if (!status.optBoolean("running")) {
-                                lastError = status.optString("error", "Connection stopped")
+                                val reason = status.optString("error").takeIf { it.isNotBlank() }
+                                    ?: "Connection stopped unexpectedly"
+                                // Network handover recovery already owns this failure if pending.
+                                if (networkInvalidated || reconnectJob?.isActive == true || pendingReconnect != null) break
+                                if (requestAutomaticRecovery()) break
+                                lastError = reason
+                                connectionState = "failed"
                                 wanted = false
                                 break
                             }
                             if (vpn && KTestVpnService.state != "tun_running_unverified") {
-                                lastError = KTestVpnService.lastError ?: "Android VPN stopped after startup"
+                                val reason = KTestVpnService.lastError
+                                    ?: "Android VPN stopped after startup (${KTestVpnService.state})"
+                                if (networkInvalidated || reconnectJob?.isActive == true || pendingReconnect != null) break
+                                if (requestAutomaticRecovery()) break
+                                lastError = reason
+                                connectionState = "failed"
                                 wanted = false
                                 break
                             }
@@ -298,12 +348,18 @@ class ProxyService : Service() {
                         }
                     } catch (e: TimeoutCancellationException) {
                         // withTimeout reports expiry as a cancellation; it is a real failure.
-                        if (wanted) lastError = "Android VPN did not start within 20 seconds"
+                        if (wanted) {
+                            lastError = "Android VPN did not start within 20 seconds"
+                            connectionState = "failed"
+                        }
                         wanted = false
                     } catch (_: CancellationException) {
                         // A user-initiated stop is not a connection failure.
                     } catch (e: Exception) {
-                        if (wanted) lastError = e.message ?: "Could not start connection"
+                        if (wanted) {
+                            lastError = e.message ?: "Could not start connection"
+                            connectionState = "failed"
+                        }
                         wanted = false
                     } finally {
                         if (!wanted) {
@@ -313,8 +369,13 @@ class ProxyService : Service() {
                             withContext(NonCancellable + Dispatchers.IO) {
                                 mutex.withLock { Mobilebridge.stopProxy() }
                                 withContext(Dispatchers.Main) {
-                                    stopForeground(STOP_FOREGROUND_REMOVE)
-                                    stopSelfResult(startId)
+                                    // STOP/RECONNECT own final teardown. A canceled startup must
+                                    // not remove their foreground notification or stop the service.
+                                    if (!stopping) {
+                                        if (connectionState != "failed") connectionState = "disconnected"
+                                        stopForeground(STOP_FOREGROUND_REMOVE)
+                                        stopSelfResult(startId)
+                                    }
                                 }
                             }
                         }
@@ -325,6 +386,7 @@ class ProxyService : Service() {
                 val request = pendingReconnect
                 if (request == null || stopping) return START_NOT_STICKY
                 pendingReconnect = null
+                connectionState = "recovering"
                 val epoch = ++reconnectEpoch
                 clearNetworkWatch()
                 reconnectJob?.cancel()
@@ -333,6 +395,7 @@ class ProxyService : Service() {
                 connectedAt = 0
                 stopVpn()
                 stopping = true
+                startForeground(NOTIFICATION_ID, notification(request.getStringExtra(EXTRA_TITLE) ?: "KTest"))
                 val oldStartup = startup
                 oldStartup?.cancel()
                 Mobilebridge.cancelProxyStart()
@@ -357,9 +420,7 @@ class ProxyService : Service() {
                     withContext(Dispatchers.Main) {
                         // A user disconnect or newer session invalidates this restart.
                         if (epoch != reconnectEpoch) {
-                            stopping = false
-                            stopForeground(STOP_FOREGROUND_REMOVE)
-                            stopSelfResult(startId)
+                            // A newer user action owns shutdown; preserve its service state.
                             return@withContext
                         }
                         stopping = false
@@ -371,6 +432,7 @@ class ProxyService : Service() {
                         } else {
                             stopForeground(STOP_FOREGROUND_REMOVE)
                             lastError = "The old VPN did not shut down cleanly; automatic reconnect was stopped."
+                            connectionState = "failed"
                             activeRequest = null
                             stopSelfResult(startId)
                         }
@@ -378,6 +440,7 @@ class ProxyService : Service() {
                 }
             }
             ACTION_STOP -> {
+                connectionState = "disconnecting"
                 val wasVpn = activeRequest?.getBooleanExtra(EXTRA_VPN, false) == true
                 reconnectEpoch++
                 clearNetworkWatch()
@@ -414,6 +477,7 @@ class ProxyService : Service() {
                     }
                     withContext(Dispatchers.Main) {
                         if (vpnStopped) {
+                            connectionState = "disconnected"
                             stopForeground(STOP_FOREGROUND_REMOVE)
                             stopping = false
                             stopSelfResult(startId)
@@ -421,6 +485,7 @@ class ProxyService : Service() {
                             // Fail closed: do not accept another session while
                             // Android may still have the old TUN interface open.
                             lastError = "The old VPN did not shut down cleanly; reconnect is blocked."
+                            connectionState = "failed"
                             stopping = true
                             getSystemService(NotificationManager::class.java)
                                 .notify(NOTIFICATION_ID, notification("VPN shutdown needs attention"))
@@ -435,7 +500,15 @@ class ProxyService : Service() {
 
     override fun onDestroy() {
         clearNetworkWatch()
+        val wasWanted = wanted
         wanted = false
+        if (wasWanted && connectionState !in setOf("disconnecting", "recovering", "failed")) {
+            connectionState = "failed"
+            if (lastError == null) lastError = "Connection service stopped unexpectedly"
+        } else if (!wasWanted && connectionState !in setOf("disconnecting", "recovering", "failed")) {
+            connectionState = "disconnected"
+        }
+        activeRequest = null
         connectedAt = 0
         stopVpn()
         startup?.cancel()

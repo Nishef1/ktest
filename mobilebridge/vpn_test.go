@@ -345,6 +345,29 @@ func TestStopVpnTunSerializesReattachmentUntilOldAdapterStops(t *testing.T) {
 	}
 }
 
+func TestStopVpnTunIsIdempotentAfterTunnelIsClosed(t *testing.T) {
+	resetVpnTestState()
+	defer resetVpnTestState()
+	adapter := &fakePacketAdapter{}
+	SetAndroidVpnPacketAdapter(adapter)
+	if _, err := StartProxy("balanced"); err != nil {
+		t.Fatal(err)
+	}
+	defer StopProxy()
+	if err := AttachVpnTun(5); err != nil {
+		t.Fatal(err)
+	}
+
+	StopVpnTun()
+	if adapter.stops != 1 {
+		t.Fatalf("first stop count = %d, want 1", adapter.stops)
+	}
+	StopVpnTun()
+	if adapter.stops != 1 {
+		t.Fatalf("repeated stop tore down an already stopped adapter: %d stops", adapter.stops)
+	}
+}
+
 func TestVpnPortDoesNotOwnAndroidFileDescriptor(t *testing.T) {
 	if err := AttachVpnTun(-1); err == nil {
 		t.Fatal("accepted invalid Android TUN fd")

@@ -335,6 +335,14 @@ func StopVpnTun() {
 	vpnMu.Lock()
 	defer vpnMu.Unlock()
 
+	// Android may call StopVpnTun from both proxy teardown and VpnService
+	// destruction. Once the fd and active adapter have been cleared, repeated
+	// calls must be cheap and must not stop a newly attached adapter.
+	if !vpnActive && vpnTunFD < 0 && vpnSOCKSEndpoint == "" &&
+		activePacketAdapter == nil && activeAdapterName == "" {
+		return
+	}
+
 	driver := activePacketAdapter
 	fallback := packetAdapter
 	xray := xrayTun

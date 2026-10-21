@@ -68,7 +68,7 @@ internal val modes: List<ConnectionMode> by lazy {
     }
 }
 
-internal enum class LinkState { Idle, Connecting, Active, Unavailable }
+internal enum class LinkState { Idle, Connecting, Disconnecting, Active, Unavailable }
 
 @Composable
 internal fun ConnectScreen(
@@ -82,7 +82,7 @@ internal fun ConnectScreen(
     coverage: String, vpnActive: Boolean, onCoverage: (String) -> Unit,
     onMode: (String) -> Unit, onPower: () -> Unit, onCopy: (String) -> Unit
 ) {
-    val locked = state == LinkState.Active || state == LinkState.Connecting || routePlan.busy || connectBlocked
+    val locked = state == LinkState.Active || state == LinkState.Connecting || state == LinkState.Disconnecting || routePlan.busy || connectBlocked
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Hero(activeMode, state, status, upstream, coverage, vpnActive, connectBlocked, routePlan.manualBusy, onPower)
         AnimatedVisibility(error != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
@@ -123,6 +123,7 @@ private fun Hero(
             when (state) {
                 LinkState.Active -> if (coverage != "proxy" && !vpnActive) "Connected · VPN inactive" else "Connected"
                 LinkState.Connecting -> "Connecting…"
+                LinkState.Disconnecting -> "Disconnecting…"
                 LinkState.Unavailable -> "Not available yet"
                 LinkState.Idle -> if (manualTesting) "Testing routes…" else "Tap to connect"
             },
@@ -149,6 +150,10 @@ private fun Hero(
                     "calibrating" -> "Calibrating routes before connection"
                     else -> "Preparing routes and listeners"
                 }, color = K.muted, fontSize = 13.sp, textAlign = TextAlign.Center
+            )
+            LinkState.Disconnecting -> Text(
+                "Stopping the tunnel and releasing network resources",
+                color = K.muted, fontSize = 13.sp, textAlign = TextAlign.Center
             )
             LinkState.Unavailable -> Text(mode.limitation.ifBlank { "This desktop core has not been ported." },
                 color = K.amber, fontSize = 13.sp, textAlign = TextAlign.Center,
@@ -232,27 +237,31 @@ private fun PhaseSteps(steps: List<Pair<String, String>>, phase: String) {
 @Composable
 private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> Unit) {
     val active = state == LinkState.Active
-    val busy = state == LinkState.Connecting
-    val enabled = active || busy || (state != LinkState.Unavailable && !connectBlocked)
+    val connecting = state == LinkState.Connecting
+    val busy = connecting || state == LinkState.Disconnecting
+    val enabled = active || connecting ||
+        (state != LinkState.Disconnecting && state != LinkState.Unavailable && !connectBlocked)
     val iconColor by animateColorAsState(
         when (state) {
             LinkState.Active -> K.mint
             LinkState.Connecting -> K.cyan
+            LinkState.Disconnecting -> K.amber
             LinkState.Idle -> if (connectBlocked) K.faint else K.text
-            else -> K.faint
+            LinkState.Unavailable -> K.faint
         },
-        tween(400), label = "orbIcon"
+        tween(120), label = "orbIcon"
     )
     // Do not keep an infinite animation alive while disconnected.
     val motion = if (active || busy) {
         val transition = rememberInfiniteTransition(label = "orb")
         transition.animateFloat(0f, 1f, infiniteRepeatable(
-            tween(if (busy) 1300 else 2600, easing = LinearEasing)), label = "orbMotion").value
+            tween(if (busy) 760 else 2200, easing = LinearEasing)), label = "orbMotion").value
     } else 0f
     Box(
         Modifier.size(228.dp)
             .semantics { contentDescription = when (state) {
                 LinkState.Active -> "Disconnect"; LinkState.Connecting -> "Cancel connection"
+                LinkState.Disconnecting -> "Disconnecting"
                 LinkState.Unavailable -> "Mode unavailable"
                 LinkState.Idle -> if (connectBlocked) "Connect unavailable while route work is pending" else "Connect"
             } }
@@ -262,7 +271,12 @@ private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> U
     ) {
         Canvas(Modifier.fillMaxSize()) {
             val r = size.minDimension / 2
-            val glow = when (state) { LinkState.Active -> K.mint; LinkState.Connecting -> K.cyan; else -> K.strokeStrong }
+            val glow = when (state) {
+                LinkState.Active -> K.mint
+                LinkState.Connecting -> K.cyan
+                LinkState.Disconnecting -> K.amber
+                else -> K.strokeStrong
+            }
             drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = if (active || busy) .22f else .10f), Color.Transparent),
                 center, r), r)
             if (active) for (k in 0..1) {
@@ -276,7 +290,8 @@ private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> U
             when {
                 active -> drawCircle(Brush.sweepGradient(listOf(K.mint, K.cyan, K.mint), center), ringR, style = Stroke(6.dp.toPx()))
                 busy -> rotate(motion * 360f) {
-                    drawArc(Brush.sweepGradient(listOf(Color.Transparent, K.cyan, K.mint), center),
+                    val progressColor = if (state == LinkState.Disconnecting) K.amber else K.cyan
+                    drawArc(Brush.sweepGradient(listOf(Color.Transparent, progressColor, K.mint), center),
                         0f, 300f, false, ringTopLeft, ringSize, style = Stroke(6.dp.toPx(), cap = StrokeCap.Round))
                 }
             }
