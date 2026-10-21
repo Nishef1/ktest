@@ -18,9 +18,18 @@ Reviewed against the KTest source baseline on 2026-10-21. This document describe
 - Android native profile selection filters the requested mode and transport before applying MASQUE-only TLS shaping, so unrelated profile variants are not processed for an explicit method.
 - The native Android path passes the app's private directory into profile construction and consumes saved TLS calibration for both explicit and Auto profiles. The per-network cache key is set before all connection modes and before the manual calibration action; previously the native path passed an empty directory and discarded the calibration result.
 
-## Acceptance still required
+## Validation status
 
-- Run Go unit/race tests, formatting checks and Android source/APK CI on this branch.
+Automated CI passed for the code at commit `1a8474f40725c5c8266121d7a663ba14b0844483`:
+- Go unit tests on Linux and Windows.
+- Go race tests and gofmt.
+- Android source compilation and Android debug APK smoke build.
+- Windows portable package build.
+
+The successful checks are available at [verify](https://github.com/Nishef1/ktest/actions/runs/39680852294), [Android APK smoke](https://github.com/Nishef1/ktest/actions/runs/39680852335), and [Windows portable](https://github.com/Nishef1/ktest/actions/runs/39680852214).
+
+## Physical-device acceptance still required
+
 - On a physical Android device, test fast repeated taps, connect/cancel during startup, 20 connect/disconnect cycles, process background/termination, Wi-Fi-to-cellular handover, VPN permission revocation, DNS and IPv6 leak checks, UDP, sustained HTTPS traffic, and confirm saved MASQUE calibration is used on the next native connection.
 - Confirm that Android's UI says “VPN active” only for a live packet adapter and never equates that with successful HTTPS to every destination.
 - On Windows, verify the same mode details and route policy in TUI, explicit WireGuard startup without MASQUE calibration, and `aether-fragment=off` with H2 and WireGuard profiles.
