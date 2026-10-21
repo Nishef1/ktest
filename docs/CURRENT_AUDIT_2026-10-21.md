@@ -1,7 +1,7 @@
 # Current source, CI and performance audit — 2026-10-21
 
-**Reviewed source:** [`978e0ab`](https://github.com/Nishef1/ktest/commit/978e0ab487e086ed5da61478f313db60bf272365) on `main`.
-**Scope:** source/documentation review, CI status inspection and the 2026-10-21 ECH DNS follow-up. The reviewed baseline predates the Android connection-lifecycle patch now recorded in the repository. The ECH follow-up adds two pinned-IP AliDNS RFC 8484 candidates to packet DNS; the Android lifecycle patch adds immediate UI state, bounded recovery and idempotent TUN teardown. CI and physical-device acceptance for these follow-ups remain pending.
+**Review basis:** main after PR #11 was merged at [`2bf66e0`](https://github.com/Nishef1/ktest/commit/2bf66e0a4b716b4d9370266bbb4ef0ff7ba42a65).
+**Scope:** source review of Android/terminal parity, ECH filtering reports and the latest PattNG ISP field summary. This follow-up adds non-ECH IPv6 WARP profiles, same-method IPv4/IPv6 scanning on Android, bounded/shared ECH lookup, and non-ECH registration fallbacks. Fresh CI and physical-device acceptance for this follow-up remain pending.
 
 ## Verified CI at the reviewed source snapshot
 
@@ -25,12 +25,22 @@ These results do **not** prove end-to-end Android TUN traffic, current reachabil
 | Windscribe | Desktop local-only anti-DPI/bootstrap bridge | Does not itself provide a foreign exit; Android does not expose this mode. |
 | Windscribe through Aether | Explicit WARP carrier for Windscribe OpenVPN TCP; Windscribe owns final VPN IP | Carrier may be Iran-geolocated; a ready carrier or HTTP CONNECT 200 is not authenticated VPN success. Android mode unavailable. |
 
-## ECH DNS follow-up (2026-10-21)
+## ECH and ISP field reports (2026-10-21)
 
-A report described filtering UDP DNS queries for HTTPS records (type 65) used to obtain ECH configurations, while AliDNS DoH worked on that reporter's network. This is not evidence of a nationwide block and is not the same as blocking ECH handshakes. KTest's direct ECH bootstrap already uses Cloudflare IP literals over TCP/443 with a dummy ECHConfig and accepts the current retry configuration returned by the edge; it does not require DNS and does not hardcode a permanent ECH key.
+Community reports describe filtering UDP DNS HTTPS-record queries (type 65) and blocking the visible `cloudflare-ech.com` SNI on at least one network. AliDNS DoH reportedly worked on one network, but DoH cannot fix a separately blocked SNI. These are field reports, not a nationwide measurement and not a KTest reproduction.
 
-The packet-DNS endpoint list now includes RFC 8484 DoH at `https://dns.alidns.com/dns-query`, pinned to `223.5.5.5:443` and `223.6.6.6:443`, with TLS certificate validation for `dns.alidns.com`. This can carry HTTPS/SVCB queries through HTTPS if the endpoint is reachable. A unit test verifies endpoint configuration, but real network acceptance and TLS/record-type compatibility on target ISPs remain open.
+KTest's ECH bootstrap is DNS-independent but not SNI-independent: it dials built-in Cloudflare IP hints over TCP/443 with a deliberately unusable ECH configuration and uses the current retry configuration returned by the edge. The outer public name remains visible, so bootstrap may fail under SNI filtering. Desktop now shares the cached bootstrap result and bounds the caller wait; native Android already uses the same shared cache. Failure does not remove non-ECH profiles.
 
+The packet-DNS endpoint list includes RFC 8484 DoH at `https://dns.alidns.com/dns-query`, pinned to `223.5.5.5:443` and `223.6.6.6:443`, with TLS certificate validation for `dns.alidns.com`. Unit tests verify endpoint configuration; real-network TLS/record-type compatibility remains open.
+
+**PattNG's latest field summary (2026-10-21; not independently reproduced):**
+
+| Reported firewall family | Candidate paths |
+| --- | --- |
+| MCI-like | CDN/Worker with IPv6 and an unfiltered personal domain or `workers.dev`; WARP WireGuard over IPv6; MASQUE HTTP/2 |
+| Irancell-like | CDN/Worker F&F using a candidate Cloudflare IP, `tlshello-0-len`, semi-python cipher suites, Xray `unsafe` fingerprint and matching ALPN; WARP with either IP family; MASQUE HTTP/2 |
+
+The report warns that SIM operator and actual firewall can differ by region. KTest's shared profile catalog now includes non-ECH IPv6 variants for MASQUE H2 and WireGuard; the terminal and Android quick-pass logic treats IPv4 and IPv6 as separate candidate families. Explicit Android protocol selection now scans all profiles for that transport instead of taking only the first. Generic Xray CDN/Worker WS/XHTTP profiles are not implemented by KTest's current CDN scanner/fronting feature; Xray's `unsafe` fingerprint and ALPN settings must not be copied into Aether's native TLS settings. Provider IP examples are not pinned in code because addresses can change.
 ## Android connection lifecycle follow-up (2026-10-21)
 
 The Android connect/disconnect report exposed two likely contributors: the UI's single 900 ms polling loop mixed connection state with slower VPN/route/CDN diagnostics, and a canceled startup could remove the foreground notification while the serialized reconnect worker was still shutting down the previous session. The follow-up separates fast connection-state polling from slower diagnostics, gives the button immediate local Connecting/Disconnecting states, and keeps the foreground service alive while STOP/RECONNECT owns teardown. The UI no longer calls Go status APIs synchronously during Compose initialization; button color and spinner transitions are shorter.
@@ -53,9 +63,9 @@ The Go/Android CI build and physical-device acceptance for these changes remain 
 
 - Balanced/Fast Go SmartProxy uses a maximum of six simultaneous route attempts. The initial preferred-path head start is 200 ms for Balanced and 125 ms for Fast; these are policy constants, not measured end-to-end latency.
 - Android Balanced/Fast launch nine ByeDPI strategy processes and can launch one additional official Xray local core. ByeDPI listeners are checked concurrently with a bounded readiness wait. The design increases available candidates but may increase idle resource use; **RAM, CPU, thermal and battery costs have not been measured**.
-- Aether MASQUE TLS-shape/F&F calibration has a 15-second caller budget when its per-network/options cache is missing or stale. It is independent of the website-target diagnostic sweep. The current guard skips Psiphon/Tor but does not skip an explicitly selected WireGuard method, so a WireGuard-only selection can pay for irrelevant MASQUE calibration.
+- Aether MASQUE TLS-shape/F&F calibration has a 15-second budget when its per-network/options cache is missing or stale. It is independent of website-target diagnostics. The merged parity change skips MASQUE-only calibration for explicit non-MASQUE methods such as WireGuard; the new profile follow-up keeps non-ECH IPv4/IPv6 variants early in the candidate order.
 - The calibration uses uTLS to compare TLS handshakes against candidate WARP HTTP/2 gateways. A gateway response means the ClientHello reached that gateway; it does not prove the Aether tunnel, CONNECT-IP, foreign egress or application HTTPS works. Aether uses its own native TLS implementation, so the measured fingerprint is a ranking proxy, not a byte-identical native ClientHello.
-- `fragment=off` removes Aether's built-in `--fragment` option in `internal/tlsshape/apply.go`, but `aether.WithExitNodes(...)` can subsequently add `tlshello-0-len` variants. The current setting does not guarantee that every fragmentation mechanism is disabled.
+`fragment=off` now removes Aether's built-in `--fragment` option and excludes TCP TLS-hello exit-node masks in both terminal and Android profile paths. UDP-noise exit-node variants and independent local-carrier shaping remain by design.
 - The Android UI/service can report local proxy/TUN readiness (`tun_running_unverified`). That is not an end-to-end Internet check. Keep listener, packet-adapter, verified-exit and destination HTTPS states separate.
 - ECH bootstrap is shared across callers and caches a successful configuration for ten minutes or a definite failure for five minutes; automatic native startup waits only a short caller budget for it and can continue with non-ECH profiles. A failed ECH lookup is not proof that all ECH or all Internet paths are blocked.
 
@@ -63,9 +73,10 @@ The Go/Android CI build and physical-device acceptance for these changes remain 
 
 | Priority | Issue | Required follow-up |
 | --- | --- | --- |
-| P1 | MASQUE calibration can run for a forced WireGuard method | Fixed in the Android/terminal parity candidate: explicit non-MASQUE methods skip calibration; regression tests cover WireGuard, wiw and helper backends. Go tests, race, Windows tests, formatting and Android build checks passed at code commit `1a8474f40725c5c8266121d7a663ba14b0844483`; physical-device validation remains. |
-| P1 | `fragment=off` did not suppress TCP TLS-hello exit-node masks | Semantics are now explicit in the parity candidate: `off` disables Aether's native TLS fragmentation and excludes TCP TLS-hello exit-node variants in both CLI and Android automatic-exit profiles; independent UDP-noise and local-carrier strategies remain. Go tests, race, Windows tests, formatting and Android build checks passed at code commit `1a8474f40725c5c8266121d7a663ba14b0844483`; physical-device validation remains. |
-| P1 | Android native Aether profiles did not consume saved MASQUE calibration | Fixed in the parity candidate: pass the private directory into explicit/Auto profile selection, use the cached result for shaping and ordering, and set the network cache key before native startup and manual measurement. Regression test added; Go tests, race, Windows tests, formatting and Android build checks passed at code commit `1a8474f40725c5c8266121d7a663ba14b0844483`; physical-device validation remains. |
+| P1 | MASQUE calibration can run for a forced WireGuard method | Fixed and merged to main via PR #11. Fresh CI for the IPv6/ECH follow-up is pending; physical-device validation remains. |
+| P1 | `fragment=off` did not suppress TCP TLS-hello exit-node masks | Fixed and merged to main via PR #11; independent UDP-noise and local-carrier strategies remain. Fresh CI for the IPv6/ECH follow-up is pending; physical-device validation remains. |
+| P1 | Android native Aether profiles did not consume saved MASQUE calibration | Fixed and merged to main via PR #11. The current follow-up adds same-method IPv4/IPv6 profile scanning; fresh CI and physical-device validation remain. |
+| P2 | IPv6 fallback and latest ECH-SNI report not validated on a physical device | Shared profile candidates and bounded ECH fallback are implemented, but must be tested on IPv4-only, dual-stack and IPv6-capable networks with the reported SNI block; no bypass is guaranteed. |
 | P2 | No quantitative performance evidence | Benchmark cold/warm startup P50/P95, first HTTPS, verified exit, CPU/RAM, thermal behavior and 30–60 minute battery drain on representative physical Android devices; compare with previous release on the same device/network. |
 | P2 | Readiness can be mistaken for Internet availability | Add/retain distinct states for proxy listener, TUN adapter, verified carrier/foreign exit and destination HTTPS. Do not label a listener or `tun_running_unverified` as Internet verified. |
 | P2 | Current-commit live network acceptance incomplete | Test 20 disconnect/reconnect cycles, Wi-Fi↔cellular handover, DNS including HTTPS RR/ECHConfig over AliDNS DoH, UDP/IPv6, ECH, TUN failover, DNS/IPv6 leaks, and authenticated page/API/media flows on a physical phone. Record commit, network, method and exact result. |

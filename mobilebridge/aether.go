@@ -72,7 +72,7 @@ func AetherProfileCatalog(mode, method string) (string, error) {
 		Methods  []aether.Method `json:"methods"`
 		Profiles []entry         `json:"profiles"`
 		Note     string          `json:"note"`
-	}{methods, entries, "Built-in profiles (including core-managed ECH fallback) without independently fetched ECH-dependent variants. Only Aether Auto retries independent WARP transports; Psiphon and Tor are separate modes. Native availability and foreign egress require runtime verification."})
+	}{methods, entries, "Built-in profiles try non-ECH IPv4/IPv6 fallbacks before ECH-dependent variants. Auto retries independent WARP transports; a selected method tries only variants of that transport, including IPv6. Psiphon and Tor are separate modes. Native availability and foreign egress require runtime verification."})
 	return string(raw), err
 }
 

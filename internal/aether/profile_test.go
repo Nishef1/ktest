@@ -19,6 +19,31 @@ func TestUsesMASQUEMatchesOnlyMASQUETransportMethods(t *testing.T) {
 	}
 }
 
+func TestDefaultProfilesIncludeNonECHIPv6Fallbacks(t *testing.T) {
+	profiles, err := ParseProfiles(DefaultProfiles, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h2IPv6, wireGuardIPv6 bool
+	var firstH2, firstWireGuard Profile
+	for _, p := range profiles {
+		switch p.Method() {
+		case "masque-h2":
+			if firstH2.Label == "" { firstH2 = p }
+			if p.Has("-6") && !p.Has("--ech") { h2IPv6 = true }
+		case "wireguard":
+			if firstWireGuard.Label == "" { firstWireGuard = p }
+			if p.Has("-6") && !p.Has("--ech") { wireGuardIPv6 = true }
+		}
+	}
+	if !h2IPv6 || !wireGuardIPv6 {
+		t.Fatalf("non-ECH IPv6 fallback missing: MASQUE H2=%v WireGuard=%v", h2IPv6, wireGuardIPv6)
+	}
+	if firstH2.Has("--ech") || firstWireGuard.Has("--ech") {
+		t.Fatalf("first profiles for H2/WireGuard should not depend on ECH: H2=%+v WG=%+v", firstH2, firstWireGuard)
+	}
+}
+
 func TestFastNeverLaunchesForeignHelperBackends(t *testing.T) {
 	profiles, err := ParseProfiles(DefaultProfiles, "ech", "1.1.1.1")
 	if err != nil {

@@ -17,20 +17,24 @@ import (
 // WARP API (the key) possible where the API's name is filtered. A line that uses
 // them is skipped when they could not be fetched.
 const DefaultProfiles = `# Aether profiles, one per line:  label | flags
-# Two at a time; fresh measurements for this network/core take priority.
-# ktest adds the loopback bind address, the identity files and the prompts' answers.
-# Plain MASQUE H2 first: on a filtered Iranian ISP (2026-10-20) it found
-# gateways on 162.159.198.x:443 at once, while ECH inside the tunnel found none.
+# ktest adds the loopback bind address, identity files and registration answers.
+# Community reports on 2026-10-21 say cloudflare-ech.com SNI is filtered on some
+# Iranian networks. Keep non-ECH paths first; this is a fallback inventory, not
+# a claim that the same firewall applies to every SIM or region.
 WARP, MASQUE over HTTP/2 | --masque --h2
-WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --fragment --ech {ECH} --api-address {ECHIP}
-WARP, MASQUE over HTTP/3 (QUIC) with ECH | --masque --h3 --ech {ECH} --api-address {ECHIP}
-WARP, WireGuard | --wg --noize balanced --ech {ECH} --api-address {ECHIP}
+WARP, MASQUE over HTTP/2, IPv6 | --masque --h2 -6
 WARP, MASQUE over HTTP/2, fragmented | --masque --h2 --fragment
 WARP, MASQUE over HTTP/3 | --masque --h3
 WARP, WireGuard without ECH enrollment | --wg --noize balanced
-# Runtime ECH fallback: PattNG's Aether can fetch its own ECH key when
-# our independent Cloudflare ECH bootstrap is filtered. This is not an
-# extra always-on layer: it runs only when selected as another profile.
+WARP, WireGuard IPv6 | --wg --noize balanced -6
+# ECH-dependent variants remain as later fallbacks when the visible public name works.
+WARP, MASQUE over HTTP/2 with ECH | --masque --h2 --fragment --ech {ECH} --api-address {ECHIP}
+WARP, MASQUE over HTTP/2 with ECH, IPv6 | --masque --h2 -6 --ech {ECH} --api-address {ECHIP}
+WARP, MASQUE over HTTP/3 with ECH | --masque --h3 --ech {ECH} --api-address {ECHIP}
+WARP, WireGuard with ECH enrollment | --wg --noize balanced --ech {ECH} --api-address {ECHIP}
+WARP, WireGuard IPv6 with ECH enrollment | --wg --noize balanced -6 --ech {ECH} --api-address {ECHIP}
+# Runtime ECH fallback: Aether can fetch its own key when the independent
+# bootstrap is filtered. It is attempted only after ordinary profiles.
 WARP, MASQUE HTTP/2 with core-managed ECH | --masque --h2 --fragment --ech auto
 WARP, MASQUE HTTP/3 with core-managed ECH | --masque --h3 --ech auto
 WARP, Gool WireGuard over MASQUE H2 | --gool --h2
@@ -39,7 +43,6 @@ WARP, MASQUE-in-MASQUE H2 | --mim --h2
 WARP, MASQUE-in-MASQUE H3 | --mim --h3
 WARP, classic WireGuard-in-WireGuard | --gool-classic
 WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --api-address {ECHIP}
-WARP, MASQUE over HTTP/2 with ECH, IPv6 | --masque --h2 -6 --ech {ECH} --api-address {ECHIP}
 Psiphon | --psiphon-only
 Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
 WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --fragment --scan thorough --startup-secs 100 --ech {ECH} --api-address {ECHIP}

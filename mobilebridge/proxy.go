@@ -307,12 +307,10 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}()
 			native.carrier = carrier.address
 		}
-		if mode == "aether" && native.profile == nil && (native.method == "" || native.method == "auto") {
+		if mode == "aether" && native.profile == nil {
 			var verified observedExit
-			managed, verified, err = launchVerifiedNativeAuto(startContext, *native)
-			if err == nil {
-				verifiedNative = &verified
-			}
+			managed, verified, err = launchVerifiedNativeProfiles(startContext, *native)
+			if err == nil { verifiedNative = &verified }
 		} else {
 			managed, err = launchNative(startContext, mode, *native)
 		}

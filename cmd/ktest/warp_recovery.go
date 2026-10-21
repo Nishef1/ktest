@@ -42,6 +42,9 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 	seen := map[string]bool{}
 	for _, p := range unknown {
 		method := p.Method()
+		if p.Has("-6") {
+			method += "/ipv6"
+		}
 		if p.LocalCarrier() {
 			method += "/local"
 		} else if p.ExitNode() != "" {

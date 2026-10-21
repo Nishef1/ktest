@@ -42,8 +42,19 @@ func fastEnrollmentRoutes(routes []enrollmentRoute) []enrollmentRoute {
 // route costs about a minute of retries before the next one runs.
 func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enrollmentRoute {
 	var routes []enrollmentRoute
+	// An explicitly supplied/working local proxy is the first choice. The
+	// latest field report says cloudflare-ech.com SNI is filtered on some
+	// networks, so try non-ECH registration routes before ECH fallback.
+	if proxy != "" {
+		c, err := (&net.Dialer{Timeout: 300 * time.Millisecond}).DialContext(ctx, "tcp", proxy)
+		if err == nil {
+			c.Close()
+			routes = append(routes, enrollmentRoute{"local proxy", []string{"--upstream", "socks5://" + proxy}})
+		}
+	}
+	routes = append(routes, enrollmentRoute{"fragmented API HTTPS", []string{"--fragment"}})
 	if ech == "" {
-		fctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		fctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		if cfg, addr, err := front.SharedCloudflareECH(fctx); err == nil {
 			ech, ip = base64.StdEncoding.EncodeToString(cfg), addr
 		}
@@ -52,13 +63,6 @@ func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enroll
 	if ech != "" && ip != "" {
 		routes = append(routes, enrollmentRoute{"ECH", []string{"--ech", ech, "--api-address", ip}})
 	}
-	if proxy != "" {
-		c, err := (&net.Dialer{Timeout: 300 * time.Millisecond}).DialContext(ctx, "tcp", proxy)
-		if err == nil {
-			c.Close()
-			routes = append(routes, enrollmentRoute{"local proxy", []string{"--upstream", "socks5://" + proxy}})
-		}
-	}
 	if fileOK(psiphonCore(base)) {
 		bin, _ := filepath.Abs(psiphonCore(base))
 		routes = append(routes, enrollmentRoute{"Psiphon CDN bootstrap", []string{
@@ -66,7 +70,7 @@ func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enroll
 			"--psiphon-bind", "127.0.0.1:0",
 		}})
 	}
-	return append(routes, enrollmentRoute{"fragmented API HTTPS", []string{"--fragment"}})
+	return routes
 }
 
 type enrollmentRunner func(context.Context, string, []string) error

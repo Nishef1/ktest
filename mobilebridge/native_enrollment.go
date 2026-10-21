@@ -16,13 +16,11 @@ import (
 // filtered path ends after two gateways without TLS (8s each).
 const identityCheckBudget = 30 * time.Second
 
-// bootstrapAndroidWARP gives a phone with no VPN an initial path to Cloudflare
-// registration: ECH with a key ktest fetched itself, then a local Fast
-// anti-DPI SOCKS carrier when available, fragmented HTTPS and a Psiphon CDN
-// reverse bootstrap using the same
-// signed Android executable bundle. The last-resort native Aether startup can
-// still attempt its own registration; a failed bootstrap never deletes keys.
-// Registration output is discarded (it can contain access tokens).
+// bootstrapAndroidWARP gives a phone with no VPN several bounded paths to
+// Cloudflare registration. A working local Fast carrier and fragmented HTTPS
+// are tried before ECH because the visible cloudflare-ech.com SNI has been
+// reported filtered on some networks. Psiphon CDN remains an independent
+// fallback. Failure never deletes saved keys; registration output is discarded.
 func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.AndroidPaths, p aether.Profile) error {
 	if p.Psiphon() || p.Has("--tor-only") {
 		return nil
@@ -55,18 +53,6 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 		return err
 	}
 	routes := []aether.EnrollmentRoute{}
-	// ECH first, never with --fragment: where the API name itself is
-	// filtered it is the route that registers (desktop, 2026-10-20).
-	echCtx, stopECH := context.WithTimeout(ctx, 15*time.Second)
-	if config, edge, err := front.SharedCloudflareECH(echCtx); err == nil {
-		routes = append(routes, aether.EnrollmentRoute{
-			Label: "ECH registration", Args: []string{"--ech", base64.StdEncoding.EncodeToString(config), "--api-address", edge},
-			// Succeeds within seconds where it works; a stalled attempt must
-			// leave time for the independent routes below.
-			Timeout: 25 * time.Second,
-		})
-	}
-	stopECH()
 	if o.carrier != "" {
 		routes = append(routes, aether.EnrollmentRoute{
 			Label: "local Fast anti-DPI", Args: []string{"--upstream", "socks5://" + o.carrier},
@@ -77,6 +63,14 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 		Label: "fragmented registration TLS", Args: []string{"--fragment"},
 		Timeout: 30 * time.Second,
 	})
+	echCtx, stopECH := context.WithTimeout(ctx, 3*time.Second)
+	if config, edge, err := front.SharedCloudflareECH(echCtx); err == nil {
+		routes = append(routes, aether.EnrollmentRoute{
+			Label: "ECH registration", Args: []string{"--ech", base64.StdEncoding.EncodeToString(config), "--api-address", edge},
+			Timeout: 25 * time.Second,
+		})
+	}
+	stopECH()
 	if paths.Psiphon != "" {
 		routes = append(routes, aether.EnrollmentRoute{
 			Label: "Psiphon CDN registration", Args: []string{

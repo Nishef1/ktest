@@ -812,12 +812,12 @@ func (m *warpManager) prepareIdentityFile(ctx context.Context, protocol, path st
 		}
 		m.enrollRoutes = enrollmentRoutes(ctx, m.o.base, proxyAddr, m.ech, m.echIP)
 		if m.o.mode == ModeFast || m.o.mode == ModeBalanced || m.o.mode == ModeAether {
-			// PattNG sends the WARP API registration through the same
-			// exit-node as the tunnel. Where the API name is filtered by a
-			// reassembling DPI that does not help, so ECH stays first.
+			// Recent reports say the visible cloudflare-ech.com SNI is
+			// filtered on some networks. Prefer a working user proxy, then the
+			// owned F&F exit-node, and retain ECH as a later fallback.
 			if node, err := m.exitNode(ctx, aether.ExitNodePreset("masque-h2")); err == nil {
 				at := 0
-				if len(m.enrollRoutes) > 0 && m.enrollRoutes[0].label == "ECH" {
+				if len(m.enrollRoutes) > 0 && m.enrollRoutes[0].label == "local proxy" {
 					at = 1
 				}
 				node := enrollmentRoute{"PattNG exit-node", []string{"--upstream", "socks5://" + node}}

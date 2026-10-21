@@ -67,8 +67,8 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	}
 	ech, ip := "", ""
 	if needECH {
-		fctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		if cfg, addr, err := front.FetchCloudflareECH(fctx); err == nil {
+		fctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		if cfg, addr, err := front.SharedCloudflareECH(fctx); err == nil {
 			ech, ip = base64.StdEncoding.EncodeToString(cfg), addr
 		}
 		cancel()

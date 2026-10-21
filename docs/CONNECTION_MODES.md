@@ -33,20 +33,40 @@ carry data and pass independent HTTPS/foreign-exit verification. The sampled
 2026-10-19 network reached ECH-capable gateways but also returned CONNECT-IP
 400 responses, certificate rejection or timeout; that test did not establish
 a usable native WARP exit. These failures are not promoted as working routes.
-Reports posted on 2026-10-21 describe filtering UDP DNS queries for HTTPS
-records (type 65) used to obtain ECH configurations on at least one Iranian
-network; the same report says AliDNS DoH worked there. This is not a nationwide
-measurement and does not establish that the ECH TLS handshake or the public SNI
-`cloudflare-ech.com` is blocked.
+Community reports posted on 2026-10-21 describe filtering UDP DNS HTTPS-record
+queries (type 65) and, on at least one network, blocking the visible SNI
+`cloudflare-ech.com`. These are network-specific reports, not a nationwide
+measurement. AliDNS DoH reportedly worked on one network, but DoH cannot fix a
+separately blocked SNI used by the ECH bootstrap.
 
-KTest's ECH bootstrap is DNS-independent: it dials built-in Cloudflare IP hints
-over TCP/443 with a deliberately unusable ECH configuration, then uses the
-current retry configuration returned by the edge. Do not hardcode a copied key:
-the live HTTPS record observed through Google Public DNS differs from Cloudflare's
-older blog example. Packet DNS also offers RFC 8484 DoH at
+KTest's ECH bootstrap is DNS-independent but not SNI-independent: it dials
+built-in Cloudflare IP hints over TCP/443 with a deliberately unusable ECH
+configuration, then uses the current retry configuration returned by the edge.
+The outer public name `cloudflare-ech.com` remains visible, so this bootstrap
+can fail when that SNI is filtered. KTest now keeps non-ECH profiles first and
+bounds the caller wait; a failed ECH attempt does not suppress IPv4/IPv6
+MASQUE H2 or WireGuard candidates. Packet DNS also offers RFC 8484 DoH at
 `https://dns.alidns.com/dns-query`, pinned to `223.5.5.5` and `223.6.6.6`
 while validating the certificate for `dns.alidns.com`. This is an alternate
 resolver path, not proof of access on every ISP.
+
+**PattNG field report (2026-10-21; not independently reproduced by KTest).**
+The report describes these candidates:
+- MCI/MCI-like firewall: CDN/Worker with IPv6 and an unfiltered personal domain or
+  `workers.dev`; WARP/WireGuard over IPv6; or MASQUE HTTP/2.
+- Irancell/Irancell-like firewall: CDN/Worker F&F with a candidate Cloudflare IP,
+  `tlshello-0-len`, semi-python cipher suites, the Xray `unsafe` fingerprint,
+  and ALPN matching the selected WS/XHTTP transport; WARP with either IP family;
+  or MASQUE HTTP/2. The report warns that SIM operator and actual firewall can
+  differ by region.
+
+KTest now has non-ECH IPv6 candidates for native MASQUE H2 and WireGuard, and
+both terminal and Android try IPv4/IPv6 variants within the selected protocol.
+The generic CDN/Worker recipe is **not** implemented as a KTest tunnel mode:
+CDN scanning tests provider reachability, and its current fronting feature is
+not an arbitrary Xray Worker/WS/XHTTP profile importer. Do not apply Xray's
+`unsafe` fingerprint or ALPN settings to Aether's native TLS profiles. The
+example IP is a candidate, not a permanent endpoint.
 
 ECH registration and ECH-dependent profiles are skipped when the direct
 bootstrap itself fails (rechecked every five minutes); use another app's local

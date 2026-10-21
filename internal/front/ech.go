@@ -158,11 +158,12 @@ func shuffled(s []string) []string {
 }
 
 // The bootstrap result is shared by every automatic caller for a while.
-// Reports from 2026-10-21 describe filtering of UDP DNS HTTPS-record queries
-// used to obtain ECHConfig on at least one network. That is distinct from this
-// DNS-independent TCP/443 ECH retry-config bootstrap. Cache definite outcomes
-// so a failed direct bootstrap does not cost every connection another handshake;
-// a caller's own deadline expiring says nothing about the network.
+// Reports from 2026-10-21 describe both filtering of UDP DNS HTTPS-record
+// queries and blocking the visible cloudflare-ech.com SNI on at least one
+// network. This bootstrap is DNS-independent, not SNI-independent: the public
+// name remains visible in the outer ClientHello. Cache definite outcomes so a
+// failed bootstrap does not cost every connection another handshake; a caller's
+// own deadline expiring says nothing about the network.
 const (
 	echBootstrapOK   = 10 * time.Minute
 	echBootstrapFail = 5 * time.Minute

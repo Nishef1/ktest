@@ -525,7 +525,7 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
             }
         }
-        Note(if (mode == "aether") "Auto retries independent WARP transports; with the local carrier enabled, H2 carrier variants are added without removing direct H3/WireGuard attempts. This Aether-only mode does not silently switch to Psiphon/Tor. An exit located in Iran works for sites but not for AI or TikTok. First-time setup can take several minutes."
+        Note(if (mode == "aether") "Auto tries independent WARP transports; a selected method tries its own IPv4/IPv6 and ECH/non-ECH variants without switching protocols. With the local carrier enabled, compatible H2 carrier variants are added without removing direct H3/WireGuard attempts in Auto. This Aether-only mode does not silently switch to Psiphon/Tor. An exit located in Iran may not work for every destination. First-time setup can take several minutes."
              else if (mode == "psiphon") "Psiphon-only avoids WARP. Use the separate CDN method if the direct Psiphon path is filtered."
              else "Tor-only does not use WARP. Circuit bootstrap and independently verified foreign exit may take several minutes.")
     }

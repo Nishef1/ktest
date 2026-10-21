@@ -1,6 +1,6 @@
 # Android and terminal parity
 
-Reviewed against the KTest source baseline on 2026-10-21. This document describes the shared contract and the follow-up fixes in the Android/terminal parity branch; it does not claim physical-device acceptance.
+Reviewed against KTest main on 2026-10-21 after PR #11 merged. This document describes the shared contract and the IPv6/ECH follow-up; it does not claim physical-device acceptance.
 
 ## What is already shared
 
@@ -17,10 +17,13 @@ Reviewed against the KTest source baseline on 2026-10-21. This document describe
 - Android no longer claims that “all apps are connected” just because its local proxy and TUN adapter are active. It distinguishes system VPN readiness from per-destination reachability.
 - Android native profile selection filters the requested mode and transport before applying MASQUE-only TLS shaping, so unrelated profile variants are not processed for an explicit method.
 - The native Android path passes the app's private directory into profile construction and consumes saved TLS calibration for both explicit and Auto profiles. The per-network cache key is set before all connection modes and before the manual calibration action; previously the native path passed an empty directory and discarded the calibration result.
+- The shared Aether profile list now includes non-ECH IPv6 variants for MASQUE H2 and WireGuard. IPv4 and IPv6 are separate quick-pass candidates, so an unavailable IPv4 path does not need to finish a full scan before IPv6 is attempted.
+- Explicit Android method selection scans every profile in that transport family (including IPv4/IPv6 and ECH/non-ECH variants), while never switching from a selected method to a different protocol. This matches the terminal's filtered profile inventory.
+- ECH bootstrap results are shared and caller waits are bounded. Registration now tries a working local proxy, the F&F exit-node/fragmentation routes, then ECH and Psiphon fallback rather than assuming the visible ECH SNI is always reachable.
 
 ## Validation status
 
-Automated CI passed for the code at commit `1a8474f40725c5c8266121d7a663ba14b0844483`:
+The pre-follow-up parity code passed automated CI before PR #11 was merged. The IPv6/ECH follow-up commit is subject to a fresh CI run:
 - Go unit tests on Linux and Windows.
 - Go race tests and gofmt.
 - Android source compilation and Android debug APK smoke build.
