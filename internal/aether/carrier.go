@@ -84,12 +84,21 @@ func ExitNodePreset(method string) string {
 // Aether's own --fragment is dropped: in PattNG it is off unless asked for,
 // and the exit-node shapes the complete first flight itself.
 func WithExitNodes(profiles []Profile) []Profile {
+	return WithExitNodesOptions(profiles, false)
+}
+
+// WithExitNodesOptions adds owned exit-node variants. When fragmentOff is true,
+// TCP TLS-hello masks are excluded to honor the user's explicit fragmentation
+// opt-out; UDP-noise variants remain because they are a distinct transport
+// strategy, not TLS fragmentation.
+func WithExitNodesOptions(profiles []Profile, fragmentOff bool) []Profile {
 	var out []Profile
 	remaining := 64 - len(profiles)
 	for _, p := range profiles {
 		out = append(out, p)
 		preset := ExitNodePreset(p.Method())
-		if preset == "" || remaining <= 0 || p.Has("--upstream") || p.Psiphon() || p.Has("--tor-only") ||
+		if preset == "" || (fragmentOff && preset == "tlshello-0-len") ||
+			remaining <= 0 || p.Has("--upstream") || p.Psiphon() || p.Has("--tor-only") ||
 			p.Has("--tor") || p.Has("--tor-reverse") || p.Has("--psiphon") || p.Has("--psiphon-reverse") {
 			continue
 		}

@@ -61,9 +61,15 @@ func nativeProfile(mode, method string, viaFast bool) (aether.Profile, error) {
 	if err != nil {
 		return aether.Profile{}, err
 	}
-	// An explicit method uses the saved calibration only; Auto measures.
+	// Filter the requested backend before applying MASQUE-only TLS shaping.
+	// Android's connection path uses saved calibration only; measuring is an
+	// explicit Settings action, never an implicit startup delay.
+	profiles = aether.FilterMethod(aether.ProfilesForMode(profiles, mode), method)
+	if len(profiles) == 0 {
+		return aether.Profile{}, errors.New("selected method is incompatible with this mode")
+	}
 	shape, measured := mobileTLSShape(context.Background(), "", false)
-	profiles = aether.FilterMethod(aether.ProfilesForMode(shapeProfiles(profiles, shape, measured), mode), method)
+	profiles = shapeProfiles(profiles, shape, measured)
 	if viaFast && mode == "aether" {
 		profiles = tcpCarriedProfiles(profiles)
 		if len(profiles) == 0 {

@@ -11,11 +11,7 @@ func overMasque(p aether.Profile) bool {
 	if p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") {
 		return false
 	}
-	switch p.Method() {
-	case "masque-h2", "masque-h3", "gool-h2", "gool-h3", "mim-h2", "mim-h3":
-		return true
-	}
-	return false
+	return aether.UsesMASQUE(p.Method())
 }
 
 // chosenSNI is the name the profiles carry: the user's single name, else the

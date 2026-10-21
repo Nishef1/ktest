@@ -66,7 +66,7 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
         )
         OutlinedTextField(
             value = fragment, onValueChange = { fragment = it }, modifier = Modifier.fillMaxWidth(),
-            label = { Text("Fragment: auto, off, or size/delay (e.g. 8-16/2-10)") },
+            label = { Text("Aether TLS fragmentation: auto, off, or size/delay (e.g. 8-16/2-10)") },
             singleLine = true, enabled = !busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
         )
         SecondaryButton("Save", {
@@ -92,7 +92,8 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
         if (!canMeasure) Note("Disconnect to measure: it must see this network, not the tunnel.", Tone.Warn)
         if (message.isNotBlank()) Note(message, Tone.Good)
         if (error.isNotBlank()) Note(error, Tone.Danger)
-        Note("Auto keeps Chrome's hello and adds an F&F twin (Patterniha's semi-python with tlshello-0-len), " +
-            "and measures names and fragment ranges on each network, saved for 6 hours.")
+        Note("Off disables Aether's own TLS fragmentation. On desktop, KTest also excludes TCP TLS-hello exit-node masks; " +
+            "independent local anti-DPI carrier strategies may still shape the outer connection. Auto uses a saved MASQUE " +
+            "measurement when available; use Measure this network now to refresh it.")
     }
 }

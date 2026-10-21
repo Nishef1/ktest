@@ -60,7 +60,7 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode, shape ...tlsS
 	}
 	profiles = tlsshape.Apply(profiles, s.opts, s.result)
 	if mode == ModeFast || mode == ModeBalanced || mode == ModeAether {
-		profiles = aether.WithLocalCarriers(aether.WithExitNodes(profiles))
+		profiles = aether.WithLocalCarriers(aether.WithExitNodesOptions(profiles, s.opts.Fragment == "off"))
 	}
 	return tlsshape.Order(profilesForMode(profiles, mode), s.result), nil
 }

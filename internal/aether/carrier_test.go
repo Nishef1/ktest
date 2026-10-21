@@ -32,6 +32,29 @@ func TestLocalCarrierVariantsPreserveDirectUDPAndIndependentBackends(t *testing.
 	}
 }
 
+func TestExitNodeFragmentOffDisablesOnlyTCPHelloMasks(t *testing.T) {
+	profiles := []Profile{
+		{Label: "H2", Args: []string{"--masque", "--h2", "--fragment"}},
+		{Label: "WG", Args: []string{"--wg", "--noize", "balanced"}},
+	}
+	variants := WithExitNodesOptions(profiles, true)
+	var udpNoise bool
+	for _, p := range variants {
+		if p.ExitNode() == "tlshello-0-len" {
+			t.Fatalf("fragment=off retained a TLS-hello mask: %s", p.Label)
+		}
+		if p.ExitNode() == "udp-noise" && p.Method() == "wireguard" {
+			udpNoise = true
+		}
+	}
+	if !udpNoise {
+		t.Fatal("fragment=off incorrectly removed the independent UDP-noise fallback")
+	}
+	if !variants[0].Has("--fragment") {
+		t.Fatal("exit-node policy mutated the caller's direct profile")
+	}
+}
+
 func TestExitNodeVariantsFollowPattNG(t *testing.T) {
 	original := []Profile{
 		{Label: "H2", Args: []string{"--masque", "--h2", "--fragment"}},

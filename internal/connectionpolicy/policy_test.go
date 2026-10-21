@@ -14,7 +14,7 @@ func TestModeCatalogIsUniqueAndFaithfulToCLI(t *testing.T) {
 		t.Fatalf("expected %d modes, got %d", len(expected), len(modes))
 	}
 	for i, m := range modes {
-		if m.ID != expected[i] || m.Title == "" || m.Subtitle == "" {
+		if m.ID != expected[i] || m.Title == "" || m.Subtitle == "" || m.Details == "" {
 			t.Fatalf("mode %d mismatches CLI: %+v", i, m)
 		}
 		if m.Available && m.Limitation == "" {

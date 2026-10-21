@@ -6,6 +6,19 @@ import (
 	"time"
 )
 
+func TestUsesMASQUEMatchesOnlyMASQUETransportMethods(t *testing.T) {
+	for _, method := range []string{"masque-h2", "masque-h3", "gool-h2", "gool-h3", "mim-h2", "mim-h3"} {
+		if !UsesMASQUE(method) {
+			t.Errorf("%s should use MASQUE", method)
+		}
+	}
+	for _, method := range []string{"", "auto", "wireguard", "wiw", "psiphon", "psiphon-cdn", "tor", "unknown"} {
+		if UsesMASQUE(method) {
+			t.Errorf("%s must not use MASQUE calibration", method)
+		}
+	}
+}
+
 func TestFastNeverLaunchesForeignHelperBackends(t *testing.T) {
 	profiles, err := ParseProfiles(DefaultProfiles, "ech", "1.1.1.1")
 	if err != nil {
