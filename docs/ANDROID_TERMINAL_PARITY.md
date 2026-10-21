@@ -23,13 +23,12 @@ Reviewed against KTest main on 2026-10-21 after PR #11 merged. This document des
 
 ## Validation status
 
-The pre-follow-up parity code passed automated CI before PR #11 was merged. The IPv6/ECH follow-up commit is subject to a fresh CI run:
-- Go unit tests on Linux and Windows.
-- Go race tests and gofmt.
-- Android source compilation and Android debug APK smoke build.
-- Windows portable package build.
+The IPv6/ECH follow-up code at commit `4d28f1d` passed all three current CI workflows:
+- [Verify: Linux/Windows Go tests, race, formatting and Android source](https://github.com/Nishef1/ktest/actions/runs/39688045168).
+- [Android APK build and signature verification](https://github.com/Nishef1/ktest/actions/runs/39688045156).
+- [Windows portable package](https://github.com/Nishef1/ktest/actions/runs/39688045166).
 
-The successful checks are available at [verify](https://github.com/Nishef1/ktest/actions/runs/39680852294), [Android APK smoke](https://github.com/Nishef1/ktest/actions/runs/39680852335), and [Windows portable](https://github.com/Nishef1/ktest/actions/runs/39680852214).
+Physical-device network acceptance remains outstanding.
 
 ## Physical-device acceptance still required
 

@@ -62,18 +62,24 @@ The report describes these candidates:
 
 KTest now has non-ECH IPv6 candidates for native MASQUE H2 and WireGuard, and
 both terminal and Android try IPv4/IPv6 variants within the selected protocol.
-KTest's CDN scanner is not a Worker tunnel builder. The repository has a
-separate Xray-profile path, but the field summary lacks a complete
-server-specific configuration (domain, transport/path, UUID and origin), so it
-is not enough to generate a working Worker WS/XHTTP profile. Do not apply
-Xray's `unsafe` fingerprint or ALPN settings to Aether's native TLS profiles.
-The example IP is a candidate, not a permanent endpoint.
+KTest's CDN scanner is not a Worker tunnel builder, and the report lacks enough
+server-specific details (domain, transport/path, UUID and origin) to generate a
+working Worker WS/XHTTP or REALITY configuration. Xray's `unsafe` fingerprint
+and ALPN settings are Xray-specific, not Aether-native TLS settings. A
+separately configured Worker/REALITY client that exposes local SOCKS5 can be
+chained through desktop `-exit-socks` or Android's `Upstream SOCKS5` field in
+supported modes; KTest does not create the remote service/config. The example
+IP is a candidate, not a permanent endpoint.
 
-Related X thread: https://x.com/SarinaNeverDies/status/2112978692473311299
+The linked X thread's advice to consider a transport independent of the same
+CDN path is treated as a field suggestion, not a reproduced result. Related X
+thread: https://x.com/SarinaNeverDies/status/2112978692473311299
 
-ECH registration and ECH-dependent profiles are skipped when the direct
-bootstrap itself fails (rechecked every five minutes); use another app's local
-proxy or another VPN if that specific path fails (see USAGE.md).
+Profiles requiring an independently fetched ECHConfig are omitted after a
+definite bootstrap failure; core-managed `--ech auto` profiles remain as later
+fallbacks. A caller timeout alone is not proof of a permanent block. The shared
+cache retries a definite failure after five minutes; use another app's local
+proxy or another VPN if that path fails (see USAGE.md).
 The saved-key check treats only credential-specific refusals (a TLS
 access-denied/certificate alert after the handshake, or CONNECT-IP 401/403)
 from two gateways as a refused key; CONNECT-IP 400 and 5xx are gateway or
