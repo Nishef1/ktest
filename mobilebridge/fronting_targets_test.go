@@ -19,6 +19,7 @@ func TestFrontingPresetUsesRealFamilyStrategies(t *testing.T) {
 		{"https://api.x.com/2/users/me", "cloudflare", front.CloudflareECH, true},
 		{"https://api.twitter.com/1.1/help/configuration.json", "cloudflare", front.CloudflareECH, true},
 		{"https://www.youtube.com/generate_204", "google", "www.google.com", false},
+		{"https://www.instagram.com/", "meta", "www.microsoft.com", false},
 		{"https://pbs.twimg.com/media/test.jpg", "twimg", "pypi.org", false},
 	} {
 		raw, err := FrontingPreset(tc.url)

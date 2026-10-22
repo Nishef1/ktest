@@ -479,7 +479,7 @@ private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -
         val provider = status.optString("provider")
         val compatible = preset?.optBoolean("supported") == true && when (preset.optString("family")) {
             "fastly" -> provider == "fastly"
-            "cloudflare", "google", "akamai" -> provider == preset.optString("family")
+            "cloudflare", "google", "akamai", "meta" -> provider == preset.optString("family")
             else -> false
         }
         val candidates = results.filter {

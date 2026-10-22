@@ -117,9 +117,9 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
         }
     }
 
-    // cloudflare-ech.com is blocked (2026-10-21), so ECH can no longer fetch a
-    // first key. Register once through another app's local proxy, or with
-    // another VPN turned on, while KTest is disconnected.
+    // Field reports from 2026-10-21 indicate cloudflare-ech.com may be filtered
+    // on some Iranian networks. If ECH bootstrap fails, register through another
+    // app's local proxy or another VPN while KTest is disconnected.
     fun register() {
         if (busy) return
         val proxy = via.trim()
@@ -153,7 +153,7 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
         SectionLabel("WARP identity recovery")
         Text("Valid saved Aether keys: $valid", color = K.text)
         if (valid == 0) {
-            Note("No WARP key yet. ECH registration is blocked on Iranian networks since 2026-10-21. " +
+            Note("No WARP key yet. ECH bootstrap may be filtered on some Iranian networks. " +
                 "Get a key once: enter another app's local proxy (e.g. 127.0.0.1:10808 or http://127.0.0.1:10809), " +
                 "or leave it empty and turn on another VPN first. Then turn that VPN off and connect.", Tone.Warn)
         }
