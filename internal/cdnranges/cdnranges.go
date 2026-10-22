@@ -273,6 +273,104 @@ func (s *Set) Iterator(provider string, budget int, seed uint64) func(context.Co
 	}
 }
 
+// IteratorIPv6 samples public IPv6 addresses from a provider's announced
+// prefixes. Small prefixes (up to 16 host bits) are enumerated without
+// duplicates; broad provider prefixes are sampled randomly so an unlimited
+// scan does not attempt to enumerate an effectively infinite address space.
+func (s *Set) IteratorIPv6(provider string, budget int, seed uint64) func(context.Context) (string, bool, error) {
+	type block struct {
+		prefix   netip.Prefix
+		hostBits int
+		total    uint64
+		start    uint64
+		cursor   uint64
+	}
+	if seed == 0 {
+		seed = rand.Uint64() | 1
+	}
+	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
+	var blocks []block
+	if r := s.Providers[provider]; r != nil {
+		for _, raw := range r.V6 {
+			p, err := netip.ParsePrefix(raw)
+			if err != nil || !p.Addr().Is6() || p.Addr().Is4In6() {
+				continue
+			}
+			p = p.Masked()
+			b := block{prefix: p, hostBits: 128 - p.Bits()}
+			if b.hostBits <= 16 {
+				b.total = uint64(1) << uint(b.hostBits)
+				b.start = rng.Uint64() % b.total
+			}
+			blocks = append(blocks, b)
+		}
+	}
+	rng.Shuffle(len(blocks), func(i, j int) { blocks[i], blocks[j] = blocks[j], blocks[i] })
+	position, emitted := 0, 0
+	seen := make(map[string]struct{})
+	return func(ctx context.Context) (string, bool, error) {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
+		if budget > 0 && emitted >= budget {
+			return "", false, nil
+		}
+		if len(blocks) == 0 {
+			return "", false, nil
+		}
+		for attempt := 0; attempt < 128; attempt++ {
+			b := &blocks[position]
+			position = (position + 1) % len(blocks)
+			if b.hostBits <= 16 && b.cursor >= b.total {
+				continue
+			}
+			raw := b.prefix.Addr().As16()
+			if b.hostBits <= 16 {
+				offset := (b.start + b.cursor) % b.total
+				b.cursor++
+				for j := 0; j < b.hostBits; j++ {
+					bit := 127 - j
+					mask := byte(1 << uint(7-bit%8))
+					if offset&(uint64(1)<<uint(j)) != 0 {
+						raw[bit/8] |= mask
+					} else {
+						raw[bit/8] &^= mask
+					}
+				}
+			} else {
+				var randomBits [16]byte
+				binary.BigEndian.PutUint64(randomBits[:8], rng.Uint64())
+				binary.BigEndian.PutUint64(randomBits[8:], rng.Uint64())
+				for bit := b.prefix.Bits(); bit < 128; bit++ {
+					mask := byte(1 << uint(7-bit%8))
+					if randomBits[bit/8]&mask != 0 {
+						raw[bit/8] |= mask
+					} else {
+						raw[bit/8] &^= mask
+					}
+				}
+			}
+			ip := netip.AddrFrom16(raw)
+			if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
+				continue
+			}
+			key := ip.String()
+			if _, duplicate := seen[key]; duplicate {
+				continue
+			}
+			// Broad prefixes have an enormous candidate space. Bound memory in
+			// continuous scans; duplicates are already vanishingly unlikely.
+			if budget == 0 && len(seen) >= 4096 {
+				clear(seen)
+			}
+			seen[key] = struct{}{}
+			emitted++
+			return key, true, nil
+		}
+		return "", false, nil
+	}
+}
+
 // Sample returns up to n addresses spread over a provider's inventory.
 func (s *Set) Sample(provider string, n int) []string {
 	if n <= 0 {

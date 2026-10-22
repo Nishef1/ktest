@@ -3,6 +3,7 @@ package edges
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"net/url"
@@ -48,8 +49,9 @@ func ScanCandidates(ctx context.Context, provider string, limit int) (Preset, er
 	}
 }
 
-// prefixOverride replaces a provider's inventory in tests.
+// prefixOverride replaces a provider's IPv4 inventory in tests.
 var prefixOverride map[string][]string
+var prefixOverrideV6 map[string][]string
 
 // prefixesFor is the provider's complete IPv4 inventory: the refreshed
 // cdnranges cache or its embedded snapshot.
@@ -62,6 +64,22 @@ func prefixesFor(provider string) []string {
 	}
 	if provider == "cloudflare" {
 		return cloudflareIPv4
+	}
+	return nil
+}
+
+func prefixesForFamily(provider, family string) []string {
+	if family == "ipv4" {
+		return prefixesFor(provider)
+	}
+	if family != "ipv6" {
+		return nil
+	}
+	if p, ok := prefixOverrideV6[provider]; ok {
+		return p
+	}
+	if r := cdnranges.Current().Providers[provider]; r != nil {
+		return r.V6
 	}
 	return nil
 }
@@ -85,10 +103,15 @@ func inventorySize(prefixes []string) int {
 	return inventory
 }
 
-// ScanCandidateSource streams a provider's candidates lazily: first the
-// source-attributed seeds (known edges, fresh DNS answers), then every
-// address of the provider's own published or ASN-announced inventory.
+// ScanCandidateSource preserves the original IPv4-only API.
 func ScanCandidateSource(ctx context.Context, provider string, budget int) (Preset, CandidateIterator, error) {
+	return ScanCandidateSourceFamily(ctx, provider, budget, "ipv4")
+}
+
+// ScanCandidateSourceFamily streams candidates from one IP family. IPv6
+// inventories are sampled rather than enumerated because provider prefixes
+// contain far more addresses than a practical scan can exhaust.
+func ScanCandidateSourceFamily(ctx context.Context, provider string, budget int, family string) (Preset, CandidateIterator, error) {
 	if budget < 0 {
 		return Preset{}, nil, errors.New("candidate budget must be nonnegative")
 	}
@@ -96,20 +119,50 @@ func ScanCandidateSource(ctx context.Context, provider string, budget int) (Pres
 		return Preset{}, nil, err
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	preset, err := PresetCandidates(ctx, provider)
+	family = strings.ToLower(strings.TrimSpace(family))
+	if family != "ipv4" && family != "ipv6" {
+		return Preset{}, nil, errors.New("IP family must be ipv4 or ipv6")
+	}
+	preset, err := PresetCandidatesFamily(ctx, provider, family)
 	if err != nil {
 		return Preset{}, nil, err
 	}
-	prefixes := prefixesFor(provider)
-	ranges, err := prefixIterator(prefixes, 0)
+	prefixes := prefixesForFamily(provider, family)
+	if family == "ipv6" && len(prefixes) == 0 {
+		return Preset{}, nil, errors.New("provider has no IPv6 prefix inventory")
+	}
+	var ranges CandidateIterator
+	if family == "ipv4" {
+		ranges, err = prefixIterator(prefixes, 0)
+	} else {
+		rangeSet := &cdnranges.Set{Version: 1, Providers: map[string]*cdnranges.Range{
+			provider: {V6: prefixes},
+		}}
+		ranges = rangeSet.IteratorIPv6(provider, budget, rand.Uint64()|1)
+	}
 	if err != nil {
 		return Preset{}, nil, err
 	}
 	seeds := preset.IPs
 	preset.IPs = nil
-	preset.InventorySize = len(seeds) + inventorySize(prefixes)
+	if family == "ipv4" {
+		preset.InventorySize = len(seeds) + inventorySize(prefixes)
+	} else {
+		size := inventorySizeV6(prefixes)
+		maxInt := int(^uint(0) >> 1)
+		if size > maxInt-len(seeds) {
+			size = maxInt
+		} else {
+			size += len(seeds)
+		}
+		preset.InventorySize = size
+	}
 	if len(prefixes) > 0 {
-		preset.Source = strings.TrimPrefix(preset.Source+"; ", "; ") + rangeSource(provider)
+		source := rangeSource(provider)
+		if family == "ipv6" {
+			source = "IPv6 " + source
+		}
+		preset.Source = strings.TrimPrefix(preset.Source+"; ", "; ") + source
 	}
 	seen := map[string]bool{}
 	emitted := 0
@@ -143,6 +196,27 @@ func ScanCandidateSource(ctx context.Context, provider string, budget int) (Pres
 	}, nil
 }
 
+func inventorySizeV6(prefixes []string) int {
+	maxInt := int(^uint(0) >> 1)
+	total := 0
+	for _, raw := range prefixes {
+		p, err := netip.ParsePrefix(raw)
+		if err != nil || !p.Addr().Is6() || p.Addr().Is4In6() {
+			continue
+		}
+		hostBits := 128 - p.Bits()
+		if hostBits > 30 {
+			return maxInt
+		}
+		size := 1 << uint(hostBits)
+		if total > maxInt-size {
+			return maxInt
+		}
+		total += size
+	}
+	return total
+}
+
 func rangeSource(provider string) string {
 	if r := cdnranges.Current().Providers[provider]; r != nil && r.Source != "" {
 		return r.Source + " (updated " + r.Updated.Format("2006-01-02") + ")"
@@ -160,11 +234,19 @@ var presetURLs = map[string]string{
 	"gcore":      "https://gcore.com/robots.txt",
 }
 
-// PresetCandidates selects the small source-backed seed set that is tried
-// before the provider's inventory. Reachability, TLS trust, CDN routing and
-// filtering outcomes are established separately.
+// PresetCandidates preserves the original IPv4 source policy.
 func PresetCandidates(ctx context.Context, provider string) (Preset, error) {
+	return PresetCandidatesFamily(ctx, provider, "ipv4")
+}
+
+// PresetCandidatesFamily selects source-backed seeds for one IP family. A
+// resolver failure costs only the DNS seeds; the provider inventory remains.
+func PresetCandidatesFamily(ctx context.Context, provider, family string) (Preset, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+	family = strings.ToLower(strings.TrimSpace(family))
+	if family != "ipv4" && family != "ipv6" {
+		return Preset{}, errors.New("IP family must be ipv4 or ipv6")
+	}
 	target, ok := presetURLs[provider]
 	if !ok {
 		return Preset{}, errors.New("choose " + strings.Join(cdnranges.Providers, ", "))
@@ -176,21 +258,22 @@ func PresetCandidates(ctx context.Context, provider string) (Preset, error) {
 		preset.Source = "https://www.cloudflare.com/ips/"
 		return preset, nil
 	case "akamai":
-		preset.IPs = []string{
-			"92.123.102.43", "23.215.0.206", "23.215.0.203",
-			"23.212.250.91", "23.212.250.78", "23.12.147.13",
-			"23.12.147.29", "23.73.207.8",
-		}
-		preset.UpdatedUTC = "2026-10-05"
 		preset.Source = "https://github.com/KNG7-P/Se7en-Pro/blob/master/Se7enPro/Services/CdnFrontingBuilder.cs"
-		return preset, nil
+		preset.UpdatedUTC = "2026-10-05"
+		if family == "ipv4" {
+			preset.IPs = []string{
+				"92.123.102.43", "23.215.0.206", "23.215.0.203",
+				"23.212.250.91", "23.212.250.78", "23.12.147.13",
+				"23.12.147.29", "23.73.207.8",
+			}
+			return preset, nil
+		}
 	}
 	u, _ := url.Parse(target)
 	lookup, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupIPAddr(lookup, u.Hostname())
 	if err != nil {
-		// A filtered resolver only costs the seeds; the inventory remains.
 		return preset, nil
 	}
 	seen := map[string]bool{}
@@ -201,16 +284,16 @@ func PresetCandidates(ctx context.Context, provider string) (Preset, error) {
 		}
 		ip = ip.Unmap()
 		key := ip.String()
-		// Only answers inside the provider's own inventory are seeds: a
-		// poisoned resolver cannot inject a block-page address.
-		if !ip.Is4() || !ip.IsGlobalUnicast() || ip.IsPrivate() || seen[key] || !inPrefixes(prefixesFor(provider), ip) {
+		familyMatch := family == "ipv4" && ip.Is4() || family == "ipv6" && ip.Is6() && !ip.Is4In6()
+		if !familyMatch || !ip.IsGlobalUnicast() || ip.IsPrivate() || seen[key] ||
+			!inPrefixes(prefixesForFamily(provider, family), ip) {
 			continue
 		}
 		seen[key] = true
 		preset.IPs = append(preset.IPs, key)
 	}
 	sort.Strings(preset.IPs)
-	preset.Source = "local DNS resolver for " + u.Hostname()
+	preset.Source = "local DNS resolver for " + u.Hostname() + " (" + family + ")"
 	return preset, nil
 }
 

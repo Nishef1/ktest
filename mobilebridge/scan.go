@@ -33,6 +33,7 @@ type cdnScan struct {
 	Error         string          `json:"error,omitempty"`
 	Note          string          `json:"note"`
 	Provider      string          `json:"provider"`
+	Family        string          `json:"family"`
 	Source        string          `json:"source,omitempty"`
 	Results       []cdnScanResult `json:"results"`
 	TotalVerified int             `json:"total_verified"`
@@ -53,6 +54,10 @@ func StartCDNScan(budget, goal int) error {
 }
 
 func StartCDNScanForProvider(provider string, budget, goal int) error {
+	return StartCDNScanForProviderFamily(provider, "ipv4", budget, goal)
+}
+
+func StartCDNScanForProviderFamily(provider, family string, budget, goal int) error {
 	if !proxyStartMu.TryLock() {
 		return errors.New("disconnect or finish startup before scanning CDN routes")
 	}
@@ -60,7 +65,7 @@ func StartCDNScanForProvider(provider string, budget, goal int) error {
 	if routeWorkActive() {
 		return errors.New("disconnect before scanning CDN routes")
 	}
-	return startCDNScan(provider, budget, goal, "", nil, nil)
+	return startCDNScan(provider, budget, goal, "", nil, nil, family)
 }
 
 // StartCDNScanToFile streams all started attempts to an app-private CSV. Budget
@@ -68,6 +73,13 @@ func StartCDNScanForProvider(provider string, budget, goal int) error {
 // must copy the completed snapshot through its document save picker. It does not
 // change routing: provider HTTPS is not proof of fronting to another target.
 func StartCDNScanToFile(provider string, budget int, privateFilesDir string) error {
+	return StartCDNScanToFileFamily(provider, "ipv4", budget, privateFilesDir)
+}
+
+// StartCDNScanToFileFamily scans only the selected IP family. IPv6 mode does
+// not silently fall back to IPv4, so the result remains useful for dual-stack
+// firewall diagnosis.
+func StartCDNScanToFileFamily(provider, family string, budget int, privateFilesDir string) error {
 	if !proxyStartMu.TryLock() {
 		return errors.New("disconnect or finish startup before scanning CDN routes")
 	}
@@ -78,13 +90,20 @@ func StartCDNScanToFile(provider string, budget int, privateFilesDir string) err
 	if privateFilesDir == "" {
 		return errors.New("scan export needs an absolute private files directory")
 	}
-	return startCDNScan(provider, budget, 0, privateFilesDir, nil, nil)
+	return startCDNScan(provider, budget, 0, privateFilesDir, nil, nil, family)
 }
 
 type cdnScanSource func(context.Context, string, int) (edges.Preset, edges.CandidateIterator, error)
 
-func startCDNScan(provider string, budget, goal int, privateDir string, discover cdnScanSource, runner edges.Runner) error {
+func startCDNScan(provider string, budget, goal int, privateDir string, discover cdnScanSource, runner edges.Runner, familyOption ...string) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+	family := "ipv4"
+	if len(familyOption) > 0 {
+		family = strings.ToLower(strings.TrimSpace(familyOption[0]))
+	}
+	if family != "ipv4" && family != "ipv6" {
+		return errors.New("IP family must be ipv4 or ipv6")
+	}
 	if !cdnProvider(provider) {
 		return errors.New("choose " + strings.Join(cdnranges.Providers, ", "))
 	}
@@ -119,18 +138,23 @@ func startCDNScan(provider string, budget, goal int, privateDir string, discover
 		}
 	}
 	if discover == nil {
-		discover = edges.ScanCandidateSource
+		discover = func(ctx context.Context, provider string, budget int) (edges.Preset, edges.CandidateIterator, error) {
+			return edges.ScanCandidateSourceFamily(ctx, provider, budget, family)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	scanCancel, scanStarted = cancel, time.Now()
-	scanState = cdnScan{Running: true, Budget: budget, Goal: goal, Provider: provider, Unlimited: budget == 0,
-		VerifiedHTTP: []string{}, Results: []cdnScanResult{},
-		Note: "Verified HTTPS to the provider's test host only; target fronting, VPN access, and DNS resolver functionality remain unverified. Discovery/DNS and HTTPS can be blocked independently."}
-	go runCDNScan(ctx, cancel, provider, budget, goal, dir, file, writer, discover, runner)
+	note := "Verified HTTPS to the provider's test host only; target fronting, VPN access, and DNS resolver functionality remain unverified. Discovery/DNS and HTTPS can be blocked independently."
+	if family == "ipv6" {
+		note += " IPv6-only scan: the device needs a working IPv6 route; no IPv4 fallback is attempted."
+	}
+	scanState = cdnScan{Running: true, Budget: budget, Goal: goal, Provider: provider, Family: family, Unlimited: budget == 0,
+		VerifiedHTTP: []string{}, Results: []cdnScanResult{}, Note: note}
+	go runCDNScan(ctx, cancel, provider, family, budget, goal, dir, file, writer, discover, runner)
 	return nil
 }
 
-func runCDNScan(ctx context.Context, cancel context.CancelFunc, provider string, budget, goal int, dir string, file *os.File, writer *csv.Writer, discover cdnScanSource, runner edges.Runner) {
+func runCDNScan(ctx context.Context, cancel context.CancelFunc, provider, family string, budget, goal int, dir string, file *os.File, writer *csv.Writer, discover cdnScanSource, runner edges.Runner) {
 	defer cancel()
 	if file != nil {
 		defer func() { file.Close(); os.Remove(file.Name()) }()
@@ -142,7 +166,11 @@ func runCDNScan(ctx context.Context, cancel context.CancelFunc, provider string,
 	cacheFailed := false
 	failure := ""
 	if err != nil {
-		failure = "provider candidate discovery failed"
+		if family == "ipv6" {
+			failure = "provider IPv6 inventory unavailable"
+		} else {
+			failure = "provider candidate discovery failed"
+		}
 	} else {
 		scanMu.Lock()
 		scanState.Source = preset.Source

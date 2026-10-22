@@ -58,6 +58,7 @@ internal class ToolsState {
     var dnsMessage by mutableStateOf<String?>(null)
 
     var cdnProvider by mutableStateOf("cloudflare")
+    var cdnFamily by mutableStateOf("ipv4")
     var cdnBudget by mutableFloatStateOf(120f)
     var cdnStarting by mutableStateOf(false)
     var cdnError by mutableStateOf<String?>(null)
@@ -375,6 +376,10 @@ private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -
         s.cdnProvider, { s.cdnProvider = it }, enabled = !controlsBusy)
     Segmented(listOf("meta" to "Meta", "cloudfront" to "CloudFront", "gcore" to "Gcore"),
         s.cdnProvider, { s.cdnProvider = it }, enabled = !controlsBusy)
+    Segmented(listOf("ipv4" to "IPv4", "ipv6" to "IPv6"), s.cdnFamily,
+        { s.cdnFamily = it }, enabled = !controlsBusy)
+    Note(if (s.cdnFamily == "ipv6") "IPv6-only scan. Requires a working IPv6 route; no IPv4 fallback is attempted."
+        else "IPv4-only scan. Choose IPv6 to test the provider's IPv6 inventory.")
     // Complete provider inventories (official lists or RIPEstat ASN data),
     // refreshed automatically while connected; this updates them now.
     var rangesInfo by remember { mutableStateOf<JSONObject?>(null) }
@@ -415,10 +420,11 @@ private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -
             s.cdnStarting = true; s.cdnError = null
             s.cdnExportMessage = null
             val provider = s.cdnProvider
+            val family = s.cdnFamily
             scope.launch {
                 try {
                     s.cdnStatus = withContext(Dispatchers.IO) {
-                        Mobilebridge.startCDNScanToFile(provider, budget, context.filesDir.canonicalPath)
+                        Mobilebridge.startCDNScanToFileFamily(provider, family, budget, context.filesDir.canonicalPath)
                         JSONObject(Mobilebridge.cdnScanStatus())
                     }
                     s.cdnStatusLoaded = true

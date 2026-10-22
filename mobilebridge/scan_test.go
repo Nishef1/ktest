@@ -57,6 +57,35 @@ func readScanCSV(t *testing.T) [][]string {
 	return rows
 }
 
+func TestCDNIPv6ScanReportsFamilyAndDialsIPv6Literal(t *testing.T) {
+	dir := t.TempDir()
+	discover := func(context.Context, string, int) (edges.Preset, edges.CandidateIterator, error) {
+		emitted := false
+		return edges.Preset{Provider: "cloudflare", URL: "https://www.cloudflare.com/cdn-cgi/trace", Source: "IPv6 test inventory"},
+			func(ctx context.Context) (string, bool, error) {
+				if err := ctx.Err(); err != nil {
+					return "", false, err
+				}
+				if emitted {
+					return "", false, nil
+				}
+				emitted = true
+				return "2606:4700::1", true, nil
+			}, nil
+	}
+	var dialAddress string
+	if err := startCDNScan("cloudflare", 1, 0, dir, discover, func(_ context.Context, cfg probe.Config) (probe.Result, error) {
+		dialAddress = cfg.ConnectAddr
+		return probe.Result{Reachable: true, Success: true, TLSVersion: "TLS 1.3", Status: 204, ElapsedMS: 5}, nil
+	}, "ipv6"); err != nil {
+		t.Fatal(err)
+	}
+	state := waitCDNScan(t)
+	if state.Family != "ipv6" || state.Attempted != 1 || dialAddress != "[2606:4700::1]:443" {
+		t.Fatalf("IPv6 scan did not preserve family/address: state=%+v dial=%q", state, dialAddress)
+	}
+}
+
 func TestCDNFileScanExportsEntireBudgetAndBoundsStatus(t *testing.T) {
 	dir := t.TempDir()
 	var calls atomic.Int32
@@ -237,6 +266,9 @@ func TestCDNFileAPIRejectsUnsafeDirectoryBeforeNetwork(t *testing.T) {
 	}
 	if err := StartCDNScanToFile("cloudflare", 30, file); err == nil {
 		t.Fatal("regular file accepted as directory")
+	}
+	if err := startCDNScan("cloudflare", 1, 0, "", nil, nil, "auto"); err == nil {
+		t.Fatal("invalid IP family accepted")
 	}
 	for _, tc := range []struct {
 		p string

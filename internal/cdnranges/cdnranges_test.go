@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +98,41 @@ func TestIteratorSpreadsAndSkipsNetworkAddresses(t *testing.T) {
 	if !s.Contains("akamai", "23.32.0.9") || s.ProviderOf("2.16.1.4") != "akamai" || s.ProviderOf("8.8.8.8") != "" {
 		t.Fatal("membership")
 	}
+}
+
+func TestIPv6IteratorSamplesUniqueAddressesAndExhaustsSmallPrefixes(t *testing.T) {
+	s := &Set{Version: 1, Providers: map[string]*Range{
+		"cloudflare": {V6: []string{"2606:4700::/126"}},
+	}}
+	next := s.IteratorIPv6("cloudflare", 0, 7)
+	prefix := mustPrefix(t, "2606:4700::/126")
+	seen := map[string]bool{}
+	for {
+		ip, ok, err := next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			break
+		}
+		addr := netip.MustParseAddr(ip)
+		if addr.Is4() || !prefix.Contains(addr) || seen[ip] || !addr.IsGlobalUnicast() {
+			t.Fatalf("invalid IPv6 candidate %q", ip)
+		}
+		seen[ip] = true
+	}
+	if len(seen) != 4 {
+		t.Fatalf("sampled %d unique IPv6 hosts, want all 4", len(seen))
+	}
+}
+
+func mustPrefix(t *testing.T, raw string) netip.Prefix {
+	t.Helper()
+	p, err := netip.ParsePrefix(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func TestEmbeddedSnapshotCoversEveryProvider(t *testing.T) {

@@ -98,6 +98,41 @@ func TestCloudflareStreamIsLazyUniqueCancelableAndFinite(t *testing.T) {
 	}
 }
 
+func TestIPv6StreamingCandidatesStayInsideIPv6ProviderInventory(t *testing.T) {
+	prefixOverrideV6 = map[string][]string{"cloudflare": {"2606:4700::/126"}}
+	t.Cleanup(func() { prefixOverrideV6 = nil })
+
+	preset, next, err := ScanCandidateSourceFamily(context.Background(), "cloudflare", 0, "ipv6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := netip.MustParsePrefix("2606:4700::/126")
+	seen := map[string]bool{}
+	for {
+		ip, ok, err := next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			break
+		}
+		addr := netip.MustParseAddr(ip)
+		if addr.Is4() || !prefix.Contains(addr) || seen[ip] {
+			t.Fatalf("invalid IPv6 candidate %q", ip)
+		}
+		seen[ip] = true
+	}
+	if len(seen) != 4 || preset.InventorySize != 4 {
+		t.Fatalf("IPv6 inventory yielded %d candidates with size %d", len(seen), preset.InventorySize)
+	}
+}
+
+func TestIPv6SourceRejectsInvalidFamily(t *testing.T) {
+	if _, _, err := ScanCandidateSourceFamily(context.Background(), "cloudflare", 1, "auto"); err == nil {
+		t.Fatal("unsupported family accepted")
+	}
+}
+
 func TestUnknownPresetRejectedWithoutNetwork(t *testing.T) {
 	if _, err := PresetCandidates(context.Background(), "unknown"); err == nil {
 		t.Fatal("unknown provider accepted")
