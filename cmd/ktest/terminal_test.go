@@ -89,6 +89,34 @@ func (c *countingReader) count() int {
 
 // A console read pending while the menu leaves the alternate screen fails on
 // the next keypress and closes the program, so stdin is only read on request.
+func TestLineSourceCanRequestNextLineImmediately(t *testing.T) {
+	const count = 1000
+	var input strings.Builder
+	for i := 0; i < count; i++ {
+		fmt.Fprintf(&input, "line-%d\n", i)
+	}
+	src := newLineSource()
+	finished := make(chan struct{})
+	defer close(finished)
+	go scanMenuInput(strings.NewReader(input.String()), src, finished, make(chan struct{}), false)
+
+	deadline := time.After(3 * time.Second)
+	for i := 0; i < count; i++ {
+		src.request()
+		select {
+		case line, ok := <-src.lines:
+			if !ok {
+				t.Fatalf("input closed after %d lines", i)
+			}
+			if want := fmt.Sprintf("line-%d", i); line != want {
+				t.Fatalf("line %d = %q, want %q", i, line, want)
+			}
+		case <-deadline:
+			t.Fatalf("line source lost a back-to-back request at line %d", i)
+		}
+	}
+}
+
 func TestStdinIsOnlyReadWhenALineIsRequested(t *testing.T) {
 	reader := &countingReader{r: strings.NewReader("1\n2\n3\n")}
 	src := newLineSource()

@@ -404,12 +404,17 @@ func scanMenuInput(reader io.Reader, src *lineSource, finished <-chan struct{}, 
 	read:
 		for {
 			if scanner.Scan() {
+				line := scanner.Text()
+				// Clear the outstanding request before publishing the line. With an
+				// unbuffered channel, the receiver may immediately request its next
+				// line as soon as this send unblocks; clearing pending after the send
+				// can lose that request and deadlock the interactive menu.
+				src.pending.Store(false)
 				select {
-				case src.lines <- scanner.Text():
+				case src.lines <- line:
 				case <-finished:
 					return
 				}
-				src.pending.Store(false)
 				break read
 			}
 			if err := scanner.Err(); err != nil {
