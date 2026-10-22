@@ -1,15 +1,15 @@
-# Current source, CI and performance audit — 2026-10-21
+# Current source, CI and performance audit — 2026-10-22
 
-**Review basis:** main after PR #11 was merged at [`2bf66e0`](https://github.com/Nishef1/ktest/commit/2bf66e0a4b716b4d9370266bbb4ef0ff7ba42a65).
-**Scope:** source review of Android/terminal parity, ECH filtering reports and the latest PattNG ISP field summary. This follow-up adds non-ECH IPv6 WARP profiles, same-method IPv4/IPv6 scanning on Android, bounded/shared ECH lookup, and non-ECH registration fallbacks. Fresh CI passed at commit `4d28f1d` (Verify, Android APK and Windows portable); physical-device acceptance remains pending.
+**Review basis:** `main` at [`b489217`](https://github.com/Nishef1/ktest/commit/b489217a141e02da7a453816062292749506ce1e).
+**Scope:** source review of Android/terminal parity, ECH filtering reports and the latest PattNG ISP field summary. This update adds explicit IPv4/IPv6 selection to Android's provider CDN scanner, fixes Meta fronting-family compatibility, qualifies ECH bootstrap messaging as network-specific, and fixes a lost-request race in the terminal input reader. Verify, Android APK and Windows portable workflows all passed at `b489217`; physical-device and live-network acceptance remain pending.
 
 ## Verified CI at the reviewed source snapshot
 
 | Workflow | Result | What it establishes |
 | --- | --- | --- |
-| [Verify](https://github.com/Nishef1/ktest/actions/runs/39688045168) | Passed | Ubuntu/Windows Go tests, formatting, race tests and Android source checks |
-| [Android APK build](https://github.com/Nishef1/ktest/actions/runs/39688045156) | Passed | The workflow produced the configured APK build |
-| [Windows portable build](https://github.com/Nishef1/ktest/actions/runs/39688045166) | Passed | The workflow packaged the Windows portable artifact |
+| [Verify](https://github.com/Nishef1/ktest/actions/runs/39740660654) | Passed | Ubuntu/Windows Go tests, formatting, race tests and Android source checks |
+| [Android APK build](https://github.com/Nishef1/ktest/actions/runs/39740660796) | Passed | The workflow produced the configured APK build |
+| [Windows portable build](https://github.com/Nishef1/ktest/actions/runs/39740660738) | Passed | The workflow packaged the Windows portable artifact |
 
 These results do **not** prove end-to-end Android TUN traffic, current reachability on a particular Iranian ISP, authenticated application access, feeds/media playback, zero leaks, or good CPU/RAM/battery efficiency. The current source snapshot still needs the physical-device and live-network acceptance tests below.
 
@@ -40,9 +40,9 @@ The packet-DNS endpoint list includes RFC 8484 DoH at `https://dns.alidns.com/dn
 | MCI-like | CDN/Worker with IPv6 and an unfiltered personal domain or `workers.dev`; WARP WireGuard over IPv6; MASQUE HTTP/2 |
 | Irancell-like | CDN/Worker F&F using a candidate Cloudflare IP, `tlshello-0-len`, semi-python cipher suites, Xray `unsafe` fingerprint and matching ALPN; WARP with either IP family; MASQUE HTTP/2 |
 
-The report warns that SIM operator and actual firewall can differ by region. KTest's shared profile catalog now includes non-ECH IPv6 variants for MASQUE H2 and WireGuard; the terminal and Android quick-pass logic treats IPv4 and IPv6 as separate candidate families. Explicit Android protocol selection now scans all profiles for that transport instead of taking only the first. The CDN scanner is not a Worker tunnel builder, and the report lacks enough server-specific details to generate a working Worker WS/XHTTP or REALITY configuration. Xray's `unsafe` fingerprint and ALPN settings must not be copied into Aether's native TLS settings. A separately configured Worker/REALITY client that exposes local SOCKS5 can be chained through desktop `-exit-socks` or Android's `Upstream SOCKS5` field in supported modes; KTest does not create the remote service/config. Provider IP examples are not pinned in code because addresses can change.
+The report warns that SIM operator and actual firewall can differ by region. KTest's shared profile catalog now includes non-ECH IPv6 variants for MASQUE H2 and WireGuard; the terminal and Android quick-pass logic treats IPv4 and IPv6 as separate candidate families. Explicit Android protocol selection now scans all profiles for that transport instead of taking only the first. Android Tools now has an explicit IPv4-only/IPv6-only provider CDN scan that samples addresses from published/ASN-announced prefixes and verifies HTTPS to a provider-owned test host. It does not verify a custom Worker origin or create a Worker tunnel. The report lacks enough server-specific details to generate a working Worker WS/XHTTP or REALITY configuration. Xray's `unsafe` fingerprint and ALPN settings must not be copied into Aether's native TLS settings. A separately configured Worker/REALITY client that exposes local SOCKS5 can be chained through desktop `-exit-socks` or Android's `Upstream SOCKS5` field in supported modes; KTest does not create the remote service/config. Provider IP examples are not pinned in code because addresses can change.
 
-The linked X thread recommends considering a transport independent of the same CDN path (it mentions REALITY); this is a field suggestion, not a KTest-reproduced result. Related X thread: https://x.com/SarinaNeverDies/status/2112978692473311299
+The original X post could not be independently retrieved in this follow-up. The earlier interpretation that it recommends considering a transport independent of the same CDN path (e.g. REALITY) remains unverified and is not treated as a reproduced result. Related X thread: https://x.com/SarinaNeverDies/status/2112978692473311299
 
 ## Android connection lifecycle follow-up (2026-10-21)
 
@@ -60,7 +60,7 @@ A selected IP resolver is stored in app preferences and applied on the next conn
 
 Aether Auto with the local anti-DPI carrier now retains direct H3/WireGuard attempts while adding separate H2 carrier variants. Only compatible TCP/H2 profiles are carried; UDP/H3 profiles are not silently forced through TCP SOCKS. The dedicated Aether mode remains WARP-only. When no external SOCKS upstream is configured, Balanced is the recommended first-run policy: it warms independent WARP, Psiphon and Tor discovery in parallel, so Psiphon/Tor bootstrap does not wait for a WARP identity/key. Fast intentionally remains the lower-latency WARP/local-route policy and does not warm Psiphon/Tor on startup.
 
-The Go/Android CI build and physical-device acceptance for these changes remain pending. Device checks should cover resolver scans with blocked/working UDP and TCP, automatic resolver reset, selected DNS on the next Balanced/Fast connection, strict-mode DNS isolation, first-run with missing WARP identity, and Auto with H2 blocked but H3/WireGuard available.
+The Go/Android CI, APK and Windows portable workflows passed at code commit `b489217`; physical-device acceptance remains pending. Device checks should cover resolver scans with blocked/working UDP and TCP, automatic resolver reset, selected DNS on the next Balanced/Fast connection, strict-mode DNS isolation, first-run with missing WARP identity, and Auto with H2 blocked but H3/WireGuard available.
 
 ## Performance architecture observed in source
 
@@ -76,9 +76,9 @@ The Go/Android CI build and physical-device acceptance for these changes remain 
 
 | Priority | Issue | Required follow-up |
 | --- | --- | --- |
-| P1 | MASQUE calibration can run for a forced WireGuard method | Fixed and merged to main via PR #11. Fresh CI passed at commit `4d28f1d`; physical-device validation remains. |
-| P1 | `fragment=off` did not suppress TCP TLS-hello exit-node masks | Fixed and merged to main via PR #11; independent UDP-noise and local-carrier strategies remain. Fresh CI passed at commit `4d28f1d`; physical-device validation remains. |
-| P1 | Android native Aether profiles did not consume saved MASQUE calibration | Fixed and merged to main via PR #11. The current follow-up adds same-method IPv4/IPv6 profile scanning; fresh CI and physical-device validation remain. |
+| P1 | MASQUE calibration can run for a forced WireGuard method | Fixed and merged to main via PR #11. Verify, Android APK and Windows portable CI passed at `b489217`; physical-device validation remains. |
+| P1 | `fragment=off` did not suppress TCP TLS-hello exit-node masks | Fixed and merged to main via PR #11; independent UDP-noise and local-carrier strategies remain. Verify, Android APK and Windows portable CI passed at `b489217`; physical-device validation remains. |
+| P1 | Android native Aether profiles did not consume saved MASQUE calibration | Fixed and merged to main via PR #11. The current follow-up adds same-method IPv4/IPv6 profile scanning; CI passed at `b489217`, while physical-device validation remains. |
 | P2 | IPv6 fallback and latest ECH-SNI report not validated on a physical device | Shared profile candidates and bounded ECH fallback are implemented, but must be tested on IPv4-only, dual-stack and IPv6-capable networks with the reported SNI block; no bypass is guaranteed. |
 | P2 | No quantitative performance evidence | Benchmark cold/warm startup P50/P95, first HTTPS, verified exit, CPU/RAM, thermal behavior and 30–60 minute battery drain on representative physical Android devices; compare with previous release on the same device/network. |
 | P2 | Readiness can be mistaken for Internet availability | Add/retain distinct states for proxy listener, TUN adapter, verified carrier/foreign exit and destination HTTPS. Do not label a listener or `tun_running_unverified` as Internet verified. |
@@ -87,7 +87,7 @@ The Go/Android CI build and physical-device acceptance for these changes remain 
 
 ## Acceptance checklist
 
-- [ ] Current `main` CI passes after documentation updates.
+- [x] Latest code commit `b489217` passed Verify, Android APK and Windows portable CI.
 - [ ] Physical Android test on at least one ARM64 device and Android 10+; include Android 16 KiB page-size device if available.
 - [ ] Confirm local readiness and end-to-end HTTPS are reported separately.
 - [ ] Run the same benchmark on the previous release and current candidate with the same network and device.
@@ -106,5 +106,11 @@ The Go/Android CI build and physical-device acceptance for these changes remain 
 - [`android/app/src/main/java/com/nishef/ktest/ProxyService.kt`](../android/app/src/main/java/com/nishef/ktest/ProxyService.kt)
 - [`internal/connectionpolicy/policy.go`](../internal/connectionpolicy/policy.go)
 - [`internal/smartproxy/udp.go`](../internal/smartproxy/udp.go)
+- [`internal/cdnranges/cdnranges.go`](../internal/cdnranges/cdnranges.go)
+- [`internal/edges/catalog.go`](../internal/edges/catalog.go)
+- [`mobilebridge/scan.go`](../mobilebridge/scan.go)
+- [`android/app/src/main/java/com/nishef/ktest/DiagnosticsTools.kt`](../android/app/src/main/java/com/nishef/ktest/DiagnosticsTools.kt)
+- [`android/app/src/main/java/com/nishef/ktest/AetherIdentityBackupPanel.kt`](../android/app/src/main/java/com/nishef/ktest/AetherIdentityBackupPanel.kt)
+- [`cmd/ktest/terminal.go`](../cmd/ktest/terminal.go)
 
 No runtime code is changed by this audit document.

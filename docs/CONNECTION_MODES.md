@@ -62,18 +62,24 @@ The report describes these candidates:
 
 KTest now has non-ECH IPv6 candidates for native MASQUE H2 and WireGuard, and
 both terminal and Android try IPv4/IPv6 variants within the selected protocol.
-KTest's CDN scanner is not a Worker tunnel builder, and the report lacks enough
-server-specific details (domain, transport/path, UUID and origin) to generate a
-working Worker WS/XHTTP or REALITY configuration. Xray's `unsafe` fingerprint
+Android Tools also offers IPv4-only or IPv6-only provider-edge scanning; it
+samples published/ASN-announced provider prefixes and verifies HTTPS to the
+provider-owned test host. That scanner is not a Worker tunnel builder and does
+not prove a custom Worker origin or fronting path. The general provider scanner
+UI is Android-only for now; the terminal's CDN submenu remains Windscribe-focused.
+The report lacks enough server-specific details (domain, transport/path, UUID
+and origin) to generate a working Worker WS/XHTTP or REALITY configuration. Xray's `unsafe` fingerprint
 and ALPN settings are Xray-specific, not Aether-native TLS settings. A
 separately configured Worker/REALITY client that exposes local SOCKS5 can be
 chained through desktop `-exit-socks` or Android's `Upstream SOCKS5` field in
 supported modes; KTest does not create the remote service/config. The example
 IP is a candidate, not a permanent endpoint.
 
-The linked X thread's advice to consider a transport independent of the same
-CDN path is treated as a field suggestion, not a reproduced result. Related X
-thread: https://x.com/SarinaNeverDies/status/2112978692473311299
+The original X post could not be independently retrieved during the 2026-10-22
+follow-up. The earlier interpretation that it recommends considering a
+transport independent of the same CDN path (e.g. REALITY) remains unverified;
+it is not treated as a reproduced result. Related X thread:
+https://x.com/SarinaNeverDies/status/2112978692473311299
 
 Profiles requiring an independently fetched ECHConfig are omitted after a
 definite bootstrap failure; core-managed `--ech auto` profiles remain as later

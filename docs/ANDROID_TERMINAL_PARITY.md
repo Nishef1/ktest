@@ -1,6 +1,6 @@
 # Android and terminal parity
 
-Reviewed against KTest main on 2026-10-21 after PR #11 merged. This document describes the shared contract and the IPv6/ECH follow-up; it does not claim physical-device acceptance.
+Reviewed against KTest main at code commit `b489217` on 2026-10-22. This document describes shared mode behavior, the IPv6/ECH follow-up and the IPv6 provider scanner; it does not claim physical-device acceptance.
 
 ## What is already shared
 
@@ -20,13 +20,15 @@ Reviewed against KTest main on 2026-10-21 after PR #11 merged. This document des
 - The shared Aether profile list now includes non-ECH IPv6 variants for MASQUE H2 and WireGuard. IPv4 and IPv6 are separate quick-pass candidates, so an unavailable IPv4 path does not need to finish a full scan before IPv6 is attempted.
 - Explicit Android method selection scans every profile in that transport family (including IPv4/IPv6 and ECH/non-ECH variants), while never switching from a selected method to a different protocol. This matches the terminal's filtered profile inventory.
 - ECH bootstrap results are shared and caller waits are bounded. Registration now tries a working local proxy, the F&F exit-node/fragmentation routes, then ECH and Psiphon fallback rather than assuming the visible ECH SNI is always reachable.
+- Android Tools exposes explicit IPv4-only and IPv6-only provider CDN scans through the shared Go candidate-source policy. This tests HTTPS to a provider-owned hostname; it does not prove custom-domain fronting or create a Worker tunnel.
+- The terminal input reader now clears its pending-request state before publishing an input line, preventing a lost back-to-back request; a regression test exercises 1,000 consecutive line requests.
 
 ## Validation status
 
-The IPv6/ECH follow-up code at commit `4d28f1d` passed all three current CI workflows:
-- [Verify: Linux/Windows Go tests, race, formatting and Android source](https://github.com/Nishef1/ktest/actions/runs/39688045168).
-- [Android APK build and signature verification](https://github.com/Nishef1/ktest/actions/runs/39688045156).
-- [Windows portable package](https://github.com/Nishef1/ktest/actions/runs/39688045166).
+The latest code commit `b489217` passed all three CI workflows:
+- [Verify: Linux/Windows Go tests, race, formatting and Android source](https://github.com/Nishef1/ktest/actions/runs/39740660654).
+- [Android APK build and signature verification](https://github.com/Nishef1/ktest/actions/runs/39740660796).
+- [Windows portable package](https://github.com/Nishef1/ktest/actions/runs/39740660738).
 
 Physical-device network acceptance remains outstanding.
 
@@ -39,6 +41,7 @@ Physical-device network acceptance remains outstanding.
 
 ## Remaining platform-specific responsibilities
 
+- The general provider CDN scanner UI currently exists on Android only; the terminal's CDN menu is Windscribe-focused. The candidate-source logic is shared, but a matching general CDN scan screen/command remains a parity gap.
 - Android: foreground service lifecycle, VPN permission, TUN fd, underlying-network binding, notifications, app UID exclusion and OS process death.
 - Windows: console capabilities, administrator elevation, Wintun/TUN, child-process jobs and external Windscribe integration.
 - Both: Go route policy, profile filtering, DNS/DoH, verified exit handling, failure classification and mode semantics.
