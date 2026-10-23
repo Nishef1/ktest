@@ -96,16 +96,6 @@ func splitRecords(f []byte, cuts []int) ([][]byte, error) {
 	return out, nil
 }
 
-// SplitHelloInSNI re-encodes a ClientHello record as two TLS records cut inside
-// the host name (RFC 8446 section 5.1), or returns nil when it cannot.
-func SplitHelloInSNI(flight []byte) [][]byte {
-	recs, err := splitRecords(flight, cutsInSNI(flight, 1))
-	if err != nil || len(recs) < 2 {
-		return nil
-	}
-	return recs
-}
-
 // cutsInSNI picks n distinct random offsets strictly inside the host name,
 // falling back to early offsets when no SNI is present.
 func cutsInSNI(f []byte, n int) []int {
