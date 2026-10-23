@@ -19,8 +19,13 @@ func TestSetPsiphonRegionValidates(t *testing.T) {
 
 func TestLadderProfilesAutoIsCDNOnly(t *testing.T) {
 	profiles, err := ladderProfiles("psiphon", "auto")
-	if err != nil || len(profiles) != 1 || profiles[0].Method() != "psiphon-cdn" {
-		t.Fatalf("Auto must use only the CDN profile: %v, %v", profiles, err)
+	if err != nil || len(profiles) < 2 {
+		t.Fatalf("Auto must try several CDN variants: %v, %v", profiles, err)
+	}
+	for _, p := range profiles {
+		if p.Method() != "psiphon-cdn" {
+			t.Fatalf("Auto must use only CDN profiles, got %s", p.Method())
+		}
 	}
 	only, err := ladderProfiles("psiphon", "psiphon")
 	if err != nil || len(only) != 1 || only[0].Method() != "psiphon" {
