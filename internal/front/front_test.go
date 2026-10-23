@@ -582,3 +582,28 @@ func TestEdgeDefaultCertificateOfTheFamilyIsAccepted(t *testing.T) {
 		t.Fatal("a certificate for another owner was accepted")
 	}
 }
+
+func TestMediaFrontingPausesAfterRepeatedEmptyResponses(t *testing.T) {
+	f := New(Config{})
+	fam := Lookup(DefaultFamilies(), "rr1---sn-x.googlevideo.com")
+	if fam == nil {
+		t.Fatal("googlevideo is not a fronted family")
+	}
+	host := "rr1---sn-x.googlevideo.com"
+	for i := 0; i < mediaFailLimit-1; i++ {
+		f.noteMedia(fam, host, false)
+	}
+	if f.mediaPaused(fam, host) {
+		t.Fatal("paused before the failure limit")
+	}
+	f.noteMedia(fam, host, true) // a good response resets the run
+	for i := 0; i < mediaFailLimit; i++ {
+		f.noteMedia(fam, host, false)
+	}
+	if !f.mediaPaused(fam, host) {
+		t.Fatal("fronting did not step aside for a failing media cache")
+	}
+	if f.mediaPaused(fam, "www.youtube.com") {
+		t.Fatal("pages and thumbnails must keep their fronting")
+	}
+}

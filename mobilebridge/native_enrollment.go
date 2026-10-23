@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -52,10 +53,21 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	routes := []aether.EnrollmentRoute{}
-	if o.carrier != "" {
+	// First registration: the plain network first (cheap where it works), then
+	// anti-DPI carriers, then Psiphon, which needs nothing from Cloudflare.
+	routes := []aether.EnrollmentRoute{{Label: "current network", Timeout: 15 * time.Second}}
+	carrier := o.carrier
+	if carrier == "" && o.libraryDir != "" {
+		// The Fast carrier is otherwise optional for Aether; without a key it is
+		// the best way to reach the registration API, so start one just for this.
+		if temp, err := startFastCarrier(ctx, o.libraryDir, o.privateDir); err == nil {
+			defer temp.stop()
+			carrier = temp.address
+		}
+	}
+	if carrier != "" {
 		routes = append(routes, aether.EnrollmentRoute{
-			Label: "local Fast anti-DPI", Args: []string{"--upstream", "socks5://" + o.carrier},
+			Label: "local Fast anti-DPI", Args: []string{"--upstream", "socks5://" + carrier},
 			Timeout: 30 * time.Second,
 		})
 	}
@@ -72,12 +84,19 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	}
 	stopECH()
 	if paths.Psiphon != "" {
-		routes = append(routes, aether.EnrollmentRoute{
-			Label: "Psiphon CDN registration", Args: []string{
-				"--psiphon-reverse", "--psiphon-mode", "cdn",
-				"--psiphon-bin", paths.Psiphon, "--psiphon-dir", filepath.Join(o.stateDir, "psiphon-enrollment"), "--psiphon-bind", "127.0.0.1:0",
-			},
-		})
+		psiphon := func(label string, extra ...string) aether.EnrollmentRoute {
+			args := append([]string{"--psiphon-reverse", "--psiphon-bin", paths.Psiphon,
+				"--psiphon-dir", filepath.Join(o.stateDir, "psiphon-enrollment"), "--psiphon-bind", "127.0.0.1:0"}, extra...)
+			return aether.EnrollmentRoute{Label: label, Args: args, Timeout: 150 * time.Second}
+		}
+		if carrier != "" {
+			routes = append(routes,
+				psiphon("Psiphon CDN through anti-DPI", "--psiphon-mode", "cdn", "--upstream", "socks5://"+carrier))
+		}
+		routes = append(routes, psiphon("Psiphon CDN registration", "--psiphon-mode", "cdn"))
+		if carrier != "" {
+			routes = append(routes, psiphon("Psiphon through anti-DPI", "--upstream", "socks5://"+carrier))
+		}
 	}
 	// Each route has its own bound; the whole transaction gets their sum so
 	// the last fallback (Psiphon) is always reached.
@@ -99,6 +118,9 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 		// still-usable key when a particular reverse route is blocked.
 		if errors.Is(err, os.ErrNotExist) {
 			return err
+		}
+		if aether.CheckIdentity(path, identity.Protocol) != nil {
+			return fmt.Errorf("could not obtain the first WARP key over the plain network, anti-DPI, ECH or Psiphon: %w", err)
 		}
 		return nil
 	}

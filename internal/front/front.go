@@ -80,7 +80,8 @@ type Fronter struct {
 
 	mu       sync.Mutex
 	scores   map[string]*score
-	ech      map[string]echEntry // ECH configurations an edge accepted, by public name
+	media    map[string]*mediaHealth // fronted media caches that keep failing, by family+domain
+	ech      map[string]echEntry     // ECH configurations an edge accepted, by public name
 	accepted int
 	refused  int // total application refusals
 	disabled string
@@ -110,7 +111,7 @@ func New(cfg Config) *Fronter {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 		}
 	}
-	return &Fronter{cfg: cfg, scores: map[string]*score{}}
+	return &Fronter{cfg: cfg, scores: map[string]*score{}, media: map[string]*mediaHealth{}}
 }
 
 func (f *Fronter) logf(format string, args ...any) {
@@ -163,7 +164,7 @@ func (f *Fronter) Upstreams() []smartproxy.Upstream {
 			seen[method] = true
 			allowed := func(host string) bool {
 				return f.cfg.CA != nil && f.cfg.CA.ValidAt(time.Now()) && f.cfg.CA.Permits(host) && fam.Match(host) &&
-					!(fr.Dial != "" && fam.noStandIn(host)) && f.Disabled() == ""
+					!(fr.Dial != "" && fam.noStandIn(host)) && f.Disabled() == "" && !f.mediaPaused(&fam, host)
 			}
 			out = append(out, smartproxy.Upstream{
 				Name: method, Rank: 1, Match: allowed,
@@ -191,6 +192,65 @@ func (f *Fronter) Upstreams() []smartproxy.Upstream {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// A media cache (googlevideo) can accept the fronted TLS connection and then
+// return nothing or an error for every video request. Such a connection looks
+// like a success, so no other route is ever tried and only the video fails while
+// pages and thumbnails work. After a few failures in a row, fronting steps aside
+// for that cache for a while and the ordinary routes (and exits) take over.
+const (
+	mediaFailLimit = 3
+	mediaPause     = 10 * time.Minute
+)
+
+type mediaHealth struct {
+	bad   int
+	until time.Time
+}
+
+func mediaKey(fam *Family, host string) string {
+	host = normalize(host)
+	for _, d := range fam.NoStandIn {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return fam.Name + "|" + d
+		}
+	}
+	return ""
+}
+
+func (f *Fronter) mediaPaused(fam *Family, host string) bool {
+	key := mediaKey(fam, host)
+	if key == "" {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.media[key]
+	return h != nil && time.Now().Before(h.until)
+}
+
+func (f *Fronter) noteMedia(fam *Family, host string, ok bool) {
+	key := mediaKey(fam, host)
+	if key == "" {
+		return
+	}
+	f.mu.Lock()
+	h := f.media[key]
+	if h == nil {
+		h = &mediaHealth{}
+		f.media[key] = h
+	}
+	paused := false
+	if ok {
+		h.bad = 0
+	} else if h.bad++; h.bad >= mediaFailLimit {
+		h.bad, h.until, paused = 0, time.Now().Add(mediaPause), true
+	}
+	f.mu.Unlock()
+	if paused {
+		f.logf("front: %s returned no usable data %d times; fronting paused for %s", key, mediaFailLimit, mediaPause)
+	}
 }
 
 func (f *Fronter) handles(host string) bool {
@@ -318,6 +378,9 @@ func (f *Fronter) prepare(ctx context.Context, host, port string, flight []byte)
 	fams := LookupAll(f.cfg.Families, name)
 	if len(fams) == 0 || !f.cfg.CA.Permits(name) {
 		return nil, fmt.Errorf("%s is not a fronted site", name)
+	}
+	if f.mediaPaused(fams[0], name) {
+		return nil, fmt.Errorf("%s: fronting paused after repeated empty media responses", name)
 	}
 	protos, err := chooseALPN(fams[0], name, offered)
 	if err != nil {
@@ -761,11 +824,18 @@ func (s *session) Serve(client net.Conn, flight []byte) error {
 	_ = client.SetDeadline(time.Time{})
 	s.f.acceptedOne()
 	began := time.Now()
+	firstStatus := 0
 	up, down, _ := relayObserved(srv, s.up, func(status int) {
 		// This callback fires only after an HTTP/1 response prefix was
 		// transferred to the local TLS client, not on upstream TLS success.
+		if firstStatus == 0 {
+			firstStatus = status
+		}
 		s.f.note(s.fam, s.fr, status >= 200 && status < 400)
 	})
+	if up > 0 {
+		s.f.noteMedia(s.fam, s.name, down > 0 && (firstStatus == 0 || firstStatus < 400 || firstStatus == 416))
+	}
 	if s.f.cfg.OnSession != nil {
 		s.f.cfg.OnSession(SessionInfo{Host: s.name, Front: s.fr.String(), Up: up, Down: down, Took: time.Since(began)})
 	}
