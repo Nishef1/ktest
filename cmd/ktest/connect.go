@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/connectiondns"
 	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/dnscheck"
@@ -111,6 +112,7 @@ type connectOptions struct {
 	verbose             bool
 	stopHint            string
 	aetherMethod        string
+	psiphonCountry      string
 	aetherFingerprint   string
 	masqueSNI           string
 	aetherFragment      string
@@ -158,6 +160,7 @@ func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs.BoolVar(&o.noDirect, "no-direct", o.noDirect, "do not race the plain, uncut connection")
 	fs.BoolVar(&o.noFront, "no-front", o.noFront, "do not use domain fronting even if the ktest CA is trusted")
 	fs.BoolVar(&o.noWarp, "no-warp", o.noWarp, "do not start Aether's WARP/Psiphon exit search even if it is enabled")
+	fs.StringVar(&o.psiphonCountry, "psiphon-country", o.psiphonCountry, "Psiphon exit country, two letters such as DE (default: Psiphon chooses)")
 	fs.StringVar(&o.aetherMethod, "aether-method", o.aetherMethod, "auto, masque-h2, masque-h3, wireguard, gool-h2, gool-h3, wiw, mim-h2, mim-h3, psiphon, psiphon-cdn")
 	fs.StringVar(&o.aetherFingerprint, "aether-fingerprint", o.aetherFingerprint, "MASQUE ClientHello (F&F fingerprint): auto (measured per network), chrome, firefox, semi-python or go")
 	fs.StringVar(&o.masqueSNI, "masque-sni", o.masqueSNI, "MASQUE server name: auto (measured per network), a name, or comma-separated names to measure among")
@@ -226,6 +229,9 @@ func validateConnectOptions(o connectOptions) error {
 	}
 	if o.mode.isWindscribe() && o.noHTTP {
 		return errors.New("Windscribe OpenVPN TCP needs the local HTTP CONNECT bridge; remove -no-http")
+	}
+	if _, err := aether.NormalizeRegion(o.psiphonCountry); err != nil {
+		return fmt.Errorf("-psiphon-country: %w", err)
 	}
 	if o.mode == ModePsiphon && o.aetherMethod != "" && o.aetherMethod != "auto" && !strings.HasPrefix(o.aetherMethod, "psiphon") {
 		return errors.New("Psiphon mode requires a Psiphon method or auto")

@@ -2,7 +2,6 @@ package mobilebridge
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,13 +18,11 @@ var (
 )
 
 // SetPsiphonRegion asks Psiphon to leave from one country (for example DE).
-// An empty value lets Psiphon choose. Anything else than two letters is refused.
+// An empty value lets Psiphon choose.
 func SetPsiphonRegion(code string) error {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	if code != "" {
-		if len(code) != 2 || code[0] < 'A' || code[0] > 'Z' || code[1] < 'A' || code[1] > 'Z' {
-			return errors.New("Psiphon country must be a two-letter code such as DE")
-		}
+	code, err := aether.NormalizeRegion(code)
+	if err != nil {
+		return err
 	}
 	nativeSettingsMu.Lock()
 	psiphonRegion = code
@@ -62,27 +59,6 @@ const (
 	ladderWarpVariants  = 2
 )
 
-// ladderProfiles are the Psiphon or Tor profiles to try for a mode. Auto used to
-// try only Psiphon's automatic shape, so a network that blocks everything but
-// CDNs never reached the fronted path.
-func ladderProfiles(mode, method string) ([]aether.Profile, error) {
-	if mode == "tor" {
-		if method != "" && method != "auto" {
-			return nil, errors.New("Tor uses its dedicated Aether backend")
-		}
-		return []aether.Profile{{Label: "Tor-only", Args: []string{"--tor-only"}}}, nil
-	}
-	profiles, err := aether.ParseProfiles(aether.DefaultProfiles, "", "")
-	if err != nil {
-		return nil, err
-	}
-	profiles = aether.FilterMethodForMode(aether.ProfilesForMode(profiles, mode), method, mode)
-	if len(profiles) == 0 {
-		return nil, errors.New("selected method is incompatible with this mode")
-	}
-	return profiles, nil
-}
-
 // launchPsiphonTorLadder connects Psiphon or Tor in this order:
 //  1. a verified Aether (WARP) tunnel, then Psiphon/Tor dialing through it;
 //  2. Psiphon/Tor on their own (through the local anti-DPI carrier if enabled).
@@ -90,7 +66,7 @@ func ladderProfiles(mode, method string) ([]aether.Profile, error) {
 // Every rung must pass the foreign-exit verification of the mode. A rung that
 // fails is stopped completely before the next one starts.
 func launchPsiphonTorLadder(ctx context.Context, mode string, o nativeOptions) (*nativeCore, observedExit, error) {
-	profiles, err := ladderProfiles(mode, o.method)
+	profiles, err := aether.StandaloneProfiles(mode, o.method)
 	if err != nil {
 		return nil, observedExit{}, err
 	}
@@ -163,13 +139,4 @@ func launchPsiphonTorLadder(ctx context.Context, mode string, o nativeOptions) (
 		failures = append(failures, fmt.Sprintf("%s: %v", p.Label, err))
 	}
 	return nil, observedExit{}, fmt.Errorf("%s did not connect: %s", mode, strings.Join(failures, "; "))
-}
-
-// withPsiphonRegion adds the selected exit country to a Psiphon profile.
-func withPsiphonRegion(p aether.Profile) aether.Profile {
-	region := currentPsiphonRegion()
-	if region == "" || !p.Psiphon() || p.Has("--psiphon-region") {
-		return p
-	}
-	return aether.Profile{Label: p.Label, Args: append(append([]string(nil), p.Args...), "--psiphon-region", region)}
 }

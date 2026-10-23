@@ -1,6 +1,10 @@
 package mobilebridge
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Nishef1/ktest/internal/aether"
+)
 
 func TestSetPsiphonRegionValidates(t *testing.T) {
 	t.Cleanup(func() { _ = SetPsiphonRegion("") })
@@ -18,7 +22,7 @@ func TestSetPsiphonRegionValidates(t *testing.T) {
 }
 
 func TestLadderProfilesAutoIsCDNOnly(t *testing.T) {
-	profiles, err := ladderProfiles("psiphon", "auto")
+	profiles, err := aether.StandaloneProfiles("psiphon", "auto")
 	if err != nil || len(profiles) < 2 {
 		t.Fatalf("Auto must try several CDN variants: %v, %v", profiles, err)
 	}
@@ -27,14 +31,14 @@ func TestLadderProfilesAutoIsCDNOnly(t *testing.T) {
 			t.Fatalf("Auto must use only CDN profiles, got %s", p.Method())
 		}
 	}
-	only, err := ladderProfiles("psiphon", "psiphon")
+	only, err := aether.StandaloneProfiles("psiphon", "psiphon")
 	if err != nil || len(only) != 1 || only[0].Method() != "psiphon" {
 		t.Fatalf("explicit method = %v, %v", only, err)
 	}
-	if tor, err := ladderProfiles("tor", "auto"); err != nil || len(tor) != 1 || !tor[0].Has("--tor-only") {
+	if tor, err := aether.StandaloneProfiles("tor", "auto"); err != nil || len(tor) != 1 || !tor[0].Has("--tor-only") {
 		t.Fatalf("tor = %v, %v", tor, err)
 	}
-	if _, err := ladderProfiles("tor", "masque-h2"); err == nil {
+	if _, err := aether.StandaloneProfiles("tor", "masque-h2"); err == nil {
 		t.Fatal("Tor accepted a WARP method")
 	}
 }
@@ -42,12 +46,12 @@ func TestLadderProfilesAutoIsCDNOnly(t *testing.T) {
 func TestPsiphonRegionOnlyAppliesToPsiphon(t *testing.T) {
 	t.Cleanup(func() { _ = SetPsiphonRegion("") })
 	_ = SetPsiphonRegion("NL")
-	profiles, _ := ladderProfiles("psiphon", "auto")
-	if got := withPsiphonRegion(profiles[0]).Value("--psiphon-region"); got != "NL" {
+	profiles, _ := aether.StandaloneProfiles("psiphon", "auto")
+	if got := aether.WithPsiphonRegion(profiles[0], "NL").Value("--psiphon-region"); got != "NL" {
 		t.Fatalf("region flag = %q", got)
 	}
-	tor, _ := ladderProfiles("tor", "auto")
-	if withPsiphonRegion(tor[0]).Has("--psiphon-region") {
+	tor, _ := aether.StandaloneProfiles("tor", "auto")
+	if aether.WithPsiphonRegion(tor[0], "NL").Has("--psiphon-region") {
 		t.Fatal("Tor must not get a Psiphon region")
 	}
 }

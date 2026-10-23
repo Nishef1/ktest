@@ -305,7 +305,7 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	if err := bootstrapAndroidWARP(ctx, o, paths, p); err != nil {
 		return nil, fmt.Errorf("WARP identity setup: %w", err)
 	}
-	if region := withPsiphonRegion(p); region.Has("--psiphon-region") && !p.Has("--psiphon-region") {
+	if region := aether.WithPsiphonRegion(p, currentPsiphonRegion()); region.Has("--psiphon-region") && !p.Has("--psiphon-region") {
 		if ok, inspectErr := aether.InspectProfiles(ctx, paths.Aether, []aether.Profile{region}); inspectErr == nil && len(ok) > 0 {
 			p = ok[0]
 		}

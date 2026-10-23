@@ -604,6 +604,9 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 		}
 	}
 	args = withPsiphonEdges(args, p, m.psiphonEdges)
+	if region, _ := aether.NormalizeRegion(m.o.psiphonCountry); region != "" && p.Psiphon() && !p.Has("--psiphon-region") {
+		args = append(args, "--psiphon-region", region)
+	}
 	go func() {
 		defer close(rc.done)
 		if logFile != nil {
