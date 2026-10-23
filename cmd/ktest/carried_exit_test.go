@@ -3,13 +3,11 @@ package main
 import (
 	"context"
 	"net"
-	"net/netip"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Nishef1/ktest/internal/aether"
-	"github.com/Nishef1/ktest/internal/cdnranges"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -68,36 +66,6 @@ func TestCarriedExitArgs(t *testing.T) {
 		if got := withPsiphonEdges(p.Args, p, edges); !slices.Equal(got, p.Args) {
 			t.Fatalf("%v must keep its args, got %v", p.Args, got)
 		}
-	}
-}
-
-func TestPsiphonCDNEdgesSpreadAcrossProviders(t *testing.T) {
-	set := cdnranges.Current()
-	edges := psiphonCDNEdges(set)
-	if len(edges) == 0 || len(edges) > maxPsiphonEdges {
-		t.Fatalf("got %d edges, want 1..%d", len(edges), maxPsiphonEdges)
-	}
-	seen := map[string]bool{}
-	providers := map[string]int{}
-	for _, ip := range edges {
-		if _, err := netip.ParseAddr(ip); err != nil || seen[ip] {
-			t.Fatalf("bad or duplicate edge %q", ip)
-		}
-		seen[ip] = true
-		for _, p := range psiphonEdgeProviders {
-			if set.Contains(p, ip) {
-				providers[p]++
-				break
-			}
-		}
-	}
-	for _, p := range psiphonEdgeProviders {
-		if set.Size(p) > 0 && providers[p] == 0 {
-			t.Errorf("no %s edges in %v", p, edges)
-		}
-	}
-	if psiphonCDNEdges(nil) != nil {
-		t.Fatal("nil inventory must give no edges")
 	}
 }
 

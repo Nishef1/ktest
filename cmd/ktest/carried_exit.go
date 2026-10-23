@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/Nishef1/ktest/internal/aether"
-	"github.com/Nishef1/ktest/internal/cdnranges"
 	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
@@ -66,35 +65,13 @@ func withPsiphonEdges(args []string, p aetherProfile, edges []string) []string {
 	return append(append([]string(nil), args...), "--psiphon-cdn-ips", strings.Join(edges, ","))
 }
 
-// psiphonCDNEdges samples the known inventories evenly across providers. These
-// are unverified samples; Psiphon tests each one itself and falls back to its
-// own lists. Edges `ktest scan` verified on this network go ahead of them.
-func psiphonCDNEdges(set *cdnranges.Set) []string {
-	if set == nil {
-		return nil
-	}
-	per := maxPsiphonEdges / len(psiphonEdgeProviders)
-	samples := make([][]string, len(psiphonEdgeProviders))
-	for i, provider := range psiphonEdgeProviders {
-		samples[i] = set.Sample(provider, per)
-	}
-	seen := map[string]bool{}
-	var out []string
-	for i := 0; i < per; i++ {
-		for _, s := range samples {
-			if i < len(s) && !seen[s[i]] && len(out) < maxPsiphonEdges {
-				seen[s[i]] = true
-				out = append(out, s[i])
-			}
-		}
-	}
-	return out
-}
-
 // supportedPsiphonEdges returns edges only when this Aether build documents
 // --psiphon-cdn-ips; an unknown flag would stop Psiphon from starting at all.
 func supportedPsiphonEdges(ctx context.Context, bin string) []string {
-	edges := withSavedPsiphonEdges(networkSignature(ctx), psiphonCDNEdges(cdnranges.Current()))
+	// Only edges measured on this network: the inventory samples are guessed
+	// addresses (a scan of 120 Akamai ones on an Iranian line verified none) and
+	// pushed Psiphon's own, better lists behind them.
+	edges := withSavedPsiphonEdges(networkSignature(ctx), nil)
 	if len(edges) == 0 {
 		return nil
 	}
