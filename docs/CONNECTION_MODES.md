@@ -16,6 +16,8 @@ Balanced and Fast connect without a representative website sweep or periodic web
 
 **Current policy (2026-10-21):** there is no AI/TikTok-specific routing rule. Balanced/Fast treat those hosts like other destinations and may use direct/local paths or on-demand exits. Aether sends managed traffic through WARP even if its IP geolocates to Iran. Psiphon/Tor require a separately verified non-Iran/non-Russia exit. The earlier Android cold-start failures remain historical evidence; current-commit physical-device recovery, authenticated APIs, feeds, media playback and universal service access have not been validated.
 
+**Android Psiphon/Tor ladder (2026-10-23).** In Aether to Psiphon / Aether to Tor, Android first brings up a verified Aether (WARP) tunnel (bounded to 90 s) and runs Psiphon or Tor through it with `--upstream`; if that fails or "Connect Aether first" is off, Psiphon/Tor run on their own (through Fast's local anti-DPI carrier when enabled). Psiphon's CDN-fronted profile is tried before its automatic profile in both rungs; before this, Auto only ever tried the automatic profile. Android can choose the Psiphon exit country (`--psiphon-region`); an unavailable country fails rather than using another. Every rung still needs the foreign-exit verification. The desktop modes have not changed. Pinned core: Aether v2.3.5.
+
 CLI policy options:
 
 For TCP-based Aether transports, Fast/Balanced can use an independent private

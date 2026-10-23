@@ -35,6 +35,7 @@ type nativeCore struct {
 	err                  error // read only after done closes
 	log                  *stageLog
 	advanceOnScanFailure bool // automatic MASQUE attempts yield after a full native scan fails
+	parents              []*nativeCore // tunnels this core dials through; stopped after it
 }
 
 // StartNativeProxy runs the packaged Aether core, including its existing Tor
@@ -304,6 +305,11 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	if err := bootstrapAndroidWARP(ctx, o, paths, p); err != nil {
 		return nil, fmt.Errorf("WARP identity setup: %w", err)
 	}
+	if region := withPsiphonRegion(p); region.Has("--psiphon-region") && !p.Has("--psiphon-region") {
+		if ok, inspectErr := aether.InspectProfiles(ctx, paths.Aether, []aether.Profile{region}); inspectErr == nil && len(ok) > 0 {
+			p = ok[0]
+		}
+	}
 	if edges := psiphonEdges(p, o.privateDir); len(edges) > 0 {
 		// Edges this network verified in CDN scans are tried first by
 		// Psiphon's fronting; its own built-in lists still follow.
@@ -376,6 +382,9 @@ func psiphonEdges(p aether.Profile, privateDir string) []string {
 func (n *nativeCore) stop() {
 	n.cancel()
 	<-n.done // shared runner bounds Wait and terminates owned descendants
+	for _, parent := range n.parents {
+		parent.stop()
+	}
 }
 
 func verifyModeUpstream(ctx context.Context, mode, address string) (observedExit, error) {

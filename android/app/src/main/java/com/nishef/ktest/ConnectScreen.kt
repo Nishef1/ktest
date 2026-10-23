@@ -509,6 +509,49 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
             if (viaFast && method != "auto" && method !in setOf("masque-h2", "gool-h2", "mim-h2"))
                 Note("This explicitly selected method cannot use the TCP carrier. Turn the carrier off to use it directly, or choose Auto to try all compatible transports.", Tone.Warn)
         }
+        if (mode == "psiphon" || mode == "tor") {
+            val prefs = androidx.compose.ui.platform.LocalContext.current
+                .getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
+            var viaAether by remember { mutableStateOf(prefs.getBoolean("native_via_aether", true)) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Connect Aether first", color = K.text, fontSize = 14.sp)
+                    Text("Brings up a verified WARP tunnel and runs ${if (mode == "psiphon") "Psiphon" else "Tor"} through it. If that fails, it connects on its own.",
+                        color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+                Switch(viaAether, { viaAether = it; prefs.edit().putBoolean("native_via_aether", it).apply() }, enabled = enabled,
+                    colors = SwitchDefaults.colors(checkedThumbColor = K.bg, checkedTrackColor = K.mint,
+                        uncheckedThumbColor = K.muted, uncheckedTrackColor = K.surfaceHigh, uncheckedBorderColor = K.strokeStrong))
+            }
+        }
+        if (mode == "psiphon") {
+            val prefs = androidx.compose.ui.platform.LocalContext.current
+                .getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
+            var region by remember { mutableStateOf(prefs.getString("psiphon_region", "").orEmpty()) }
+            var open by remember { mutableStateOf(false) }
+            val countries = listOf("" to "Automatic", "US" to "United States", "DE" to "Germany", "NL" to "Netherlands",
+                "GB" to "United Kingdom", "FR" to "France", "CA" to "Canada", "SE" to "Sweden", "CH" to "Switzerland",
+                "AT" to "Austria", "BE" to "Belgium", "DK" to "Denmark", "ES" to "Spain", "IT" to "Italy", "NO" to "Norway",
+                "FI" to "Finland", "PL" to "Poland", "JP" to "Japan", "SG" to "Singapore", "IN" to "India", "BR" to "Brazil",
+                "AU" to "Australia", "HK" to "Hong Kong", "CZ" to "Czechia", "RO" to "Romania", "BG" to "Bulgaria")
+            Box {
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(enabled = enabled) { open = true }) {
+                    Text("Psiphon exit country", color = K.muted, fontSize = 12.sp)
+                    Text(countries.firstOrNull { it.first == region }?.let { if (it.first.isEmpty()) it.second else "${it.second} (${it.first})" }
+                        ?: region, color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                }
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = K.surfaceHigh) {
+                    countries.forEach { (code, name) ->
+                        DropdownMenuItem(
+                            text = { Text(if (code.isEmpty()) name else "$name ($code)", color = if (code == region) K.mint else K.text) },
+                            trailingIcon = { if (code == region) Icon(KIcons.Check, null, tint = K.mint) },
+                            onClick = { region = code; prefs.edit().putString("psiphon_region", code).apply(); open = false })
+                    }
+                }
+            }
+            Text("Psiphon is asked to leave from this country. If it has no server there, the connection fails instead of using another country.",
+                color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
+        }
         var coreLog by remember { mutableStateOf("") }
         LaunchedEffect(Unit) {
             while (true) {
@@ -526,8 +569,8 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
             }
         }
         Note(if (mode == "aether") "Auto tries independent WARP transports; a selected method tries its own IPv4/IPv6 and ECH/non-ECH variants without switching protocols. With the local carrier enabled, compatible H2 carrier variants are added without removing direct H3/WireGuard attempts in Auto. This Aether-only mode does not silently switch to Psiphon/Tor. An exit located in Iran may not work for every destination. First-time setup can take several minutes."
-             else if (mode == "psiphon") "Psiphon-only avoids WARP. Use the separate CDN method if the direct Psiphon path is filtered."
-             else "Tor-only does not use WARP. Circuit bootstrap and independently verified foreign exit may take several minutes.")
+             else if (mode == "psiphon") "Auto tries Aether then Psiphon through it (CDN fronting first), then Psiphon alone (CDN first). A selected method limits which Psiphon shape is tried."
+             else "Auto tries Aether then Tor through it, then Tor alone. Circuit bootstrap and independently verified foreign exit may take several minutes.")
     }
 }
 

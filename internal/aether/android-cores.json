@@ -1,10 +1,10 @@
 {
-  "version": "v2.3.2",
+  "version": "v2.3.5",
   "repository": "https://github.com/patterniha/Aether",
   "abis": {
     "arm64-v8a": {
       "archive": "aether-android-arm64.tar.gz",
-      "sha256": "b5877d2b9f2b50304c6c999f3e3be2de7f137d90f6c6f3b2c07ae2e67c462280",
+      "sha256": "7c78b0c2e184dd0543ebcf0299414ba929bfccc8547443c7a159e57b5253591a",
       "machine": 183,
       "bits": 64,
       "min_load_alignment": 16384,
@@ -12,7 +12,7 @@
         {
           "source": "aether",
           "name": "libaether.so",
-          "sha256": "00dadb5464248d68ff125f1ad51ebc594fd6a5a90d10bdffd38463fbc489a72a"
+          "sha256": "01a498727a0cc3dff16f85258fb46baa9b09918b5962c67f147158b6fd52bc66"
         },
         {
           "source": "pt/psiphon-tunnel-core",
@@ -28,7 +28,7 @@
     },
     "armeabi-v7a": {
       "archive": "aether-android-armv7.tar.gz",
-      "sha256": "ec0724332e0564712009d5d58ddeac3d30ee36405aa5e2e1334ae37491632c5b",
+      "sha256": "05bd9248847894e47e452e124443bed89750fb38324aef1db9a5052a32a1db0f",
       "machine": 40,
       "bits": 32,
       "min_load_alignment": 4096,
@@ -36,7 +36,7 @@
         {
           "source": "aether",
           "name": "libaether.so",
-          "sha256": "2764b73a3d5ba1633effe743c150cacea23b106faa2fb40642a35fcccb55e502"
+          "sha256": "c2348cc9ae9cb2270bbef371ea577823b5c0954fa15e0b2f3ce739760c15c0fd"
         },
         {
           "source": "pt/psiphon-tunnel-core",
@@ -52,7 +52,7 @@
     },
     "x86_64": {
       "archive": "aether-android-x86_64.tar.gz",
-      "sha256": "b15f5b4d8550255eee09c73489802d9e2cdb39dfef7e7428b75ca306cf77d8d8",
+      "sha256": "1ec2d5eff57ac67ea9ccc3d441cd7a09b0eb6cb1e03e449b64df9d91dbd0a9dd",
       "machine": 62,
       "bits": 64,
       "min_load_alignment": 4096,
@@ -60,7 +60,7 @@
         {
           "source": "aether",
           "name": "libaether.so",
-          "sha256": "46c3697e6f9b1d31951ad7a8ac6673c575b84e514ce153e0fe9ceed1bdec8f99"
+          "sha256": "f873f071ae535c51389862a65129a1e2001f029d3f4bb2110a794b2c6742bc68"
         },
         {
           "source": "pt/psiphon-tunnel-core",

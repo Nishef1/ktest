@@ -7,6 +7,10 @@ source control, and the Windows portable and Android builds independently
 verify the artifacts they distribute. KTest never fetches an unsigned
 "latest" Aether binary at connection time.
 
+## Aether v2.3.5 (2026-10-23)
+
+v2.3.3 adds licence files; v2.3.4 holds all listening ports from start (Psiphon/Tor now sit behind a port Aether holds) and ends Aether when an in-tunnel Tor/Psiphon stops; v2.3.5 fixes port-0 binds and wildcard listeners. CLI options are unchanged, so profiles are unchanged. Both locks were regenerated with `update-aether-release.py --write`.
+
 ## Aether v2.3.2 (2026-10-21)
 
 Release source: https://github.com/patterniha/Aether/releases/tag/v2.3.2

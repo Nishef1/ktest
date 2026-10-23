@@ -265,6 +265,9 @@ class ProxyService : Service() {
                                         Mobilebridge.setAetherTLS(p.getString("aether_fingerprint", "auto"),
                                             p.getString("masque_sni", "auto"), p.getString("aether_fragment", "auto"))
                                     }.onFailure { Mobilebridge.setAetherTLS("auto", "auto", "auto") }
+                                    runCatching { Mobilebridge.setPsiphonRegion(p.getString("psiphon_region", "").orEmpty()) }
+                                        .onFailure { p.edit().remove("psiphon_region").apply() }
+                                    Mobilebridge.setNativeViaAether(p.getBoolean("native_via_aether", true))
                                 }
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {
