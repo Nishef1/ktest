@@ -8,10 +8,10 @@ import (
 )
 
 func overMasque(p aether.Profile) bool {
-	if p.Psiphon() || p.Has("--tor-only") || p.Has("--tor") || p.Has("--psiphon") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") {
+	if p.Psiphon() || p.Has("--tor-only") || p.Has("--tor-reverse") || p.Has("--psiphon-reverse") {
 		return false
 	}
-	return aether.UsesMASQUE(p.Method())
+	return aether.UsesMASQUE(p.Transport())
 }
 
 // chosenSNI is the name the profiles carry: the user's single name, else the
@@ -125,7 +125,7 @@ const (
 // shapeOf is the measured shape a profile's MASQUE hello would have, or false
 // when the calibration does not model it (HTTP/3, ECH, KTest's own carrier).
 func shapeOf(p aether.Profile) (Shape, bool) {
-	switch p.Method() {
+	switch p.Transport() {
 	case "masque-h2", "gool-h2", "mim-h2":
 	default:
 		return Shape{}, false

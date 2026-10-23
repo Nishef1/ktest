@@ -43,6 +43,10 @@ WARP, MASQUE-in-MASQUE H2 | --mim --h2
 WARP, MASQUE-in-MASQUE H3 | --mim --h3
 WARP, classic WireGuard-in-WireGuard | --gool-classic
 WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --api-address {ECHIP}
+Psiphon through WARP, MASQUE over HTTP/2 | --masque --h2 --psiphon
+Psiphon through WARP, WireGuard | --wg --noize balanced --psiphon
+Psiphon through WARP, MASQUE over HTTP/3 | --masque --h3 --psiphon
+Tor through WARP, MASQUE over HTTP/2 | --masque --h2 --tor
 Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
 Psiphon CDN, Cloudflare edges | --psiphon-only --psiphon-mode cdn --psiphon-cdn-sets cloudflare
 Psiphon CDN, Fastly and CloudFront edges | --psiphon-only --psiphon-mode cdn --psiphon-cdn-sets fastly,cloudfront
@@ -68,6 +72,20 @@ func (p Profile) Has(flag string) bool {
 }
 
 func (p Profile) Psiphon() bool { return p.Has("--psiphon-only") }
+
+// ChainFlag is "--psiphon" or "--tor" for a profile that runs Psiphon or Tor
+// inside its WARP tunnel (Aether first, as Oblivion's "psiphon" mode does), or
+// "" for every other profile. The chain's exit is its own bind address, not the
+// WARP proxy on --bind.
+func (p Profile) ChainFlag() string {
+	switch {
+	case p.Has("--psiphon") && !p.Psiphon():
+		return "--psiphon"
+	case p.Has("--tor") && !p.Has("--tor-only"):
+		return "--tor"
+	}
+	return ""
+}
 
 // ParseProfiles reads "label | flags" lines, substituting the ECH
 // placeholders and dropping lines that need what is not available.
@@ -132,7 +150,20 @@ func UsesMASQUE(method string) bool {
 	}
 }
 
+// Method is the profile's method id. A chain (Psiphon or Tor inside WARP) has
+// its own id; Transport is the WARP transport underneath it.
 func (p Profile) Method() string {
+	switch p.ChainFlag() {
+	case "--psiphon":
+		return "psiphon-warp"
+	case "--tor":
+		return "tor-warp"
+	}
+	return p.Transport()
+}
+
+// Transport is the tunnel, Psiphon or Tor transport the profile starts with.
+func (p Profile) Transport() string {
 	suffix := "-h3"
 	if p.Has("--h2") || p.Has("--http2") {
 		suffix = "-h2"
@@ -234,17 +265,18 @@ func (p Profile) ID() string {
 }
 
 // FilterMethodForMode is FilterMethod plus the Psiphon rule: plain Psiphon does
-// not connect from Iran, so Auto in Psiphon mode uses only the CDN-fronted
-// profiles. The plain profile stays reachable as an explicit method.
+// not connect from Iran, so Auto in Psiphon mode uses Psiphon through WARP
+// (checked from an Iranian line: up in about 3 s) and the CDN-fronted profiles.
+// The plain profile stays reachable as an explicit method.
 func FilterMethodForMode(profiles []Profile, method, mode string) []Profile {
 	if mode == "psiphon" && (method == "" || method == "auto") {
-		var cdn []Profile
+		var auto []Profile
 		for _, p := range profiles {
-			if p.Method() == "psiphon-cdn" {
-				cdn = append(cdn, p)
+			if m := p.Method(); m == "psiphon-warp" || m == "psiphon-cdn" {
+				auto = append(auto, p)
 			}
 		}
-		return cdn
+		return auto
 	}
 	return FilterMethod(profiles, method)
 }
@@ -293,11 +325,15 @@ func ProfilesForMode(profiles []Profile, mode string) []Profile {
 			// the core's documented default. Reject helper backends above,
 			// but do not reject a deliberate implicit MASQUE configuration.
 		case "psiphon":
-			if !psiphon || tor || otherHelpers || hasWarp || p.Has("--upstream") {
+			chain := p.ChainFlag() == "--psiphon" && !tor && !p.Has("--tor") && !p.Has("--tor-reverse") && !p.Has("--psiphon-reverse") &&
+				(!p.Has("--upstream") || p.OwnedUpstream())
+			if !chain && (!psiphon || tor || otherHelpers || hasWarp || p.Has("--upstream")) {
 				continue
 			}
 		case "tor":
-			if !tor || psiphon || otherHelpers || hasWarp || p.Has("--upstream") {
+			chain := p.ChainFlag() == "--tor" && !psiphon && !p.Has("--psiphon") && !p.Has("--tor-reverse") && !p.Has("--psiphon-reverse") &&
+				(!p.Has("--upstream") || p.OwnedUpstream())
+			if !chain && (!tor || psiphon || otherHelpers || hasWarp || p.Has("--upstream")) {
 				continue
 			}
 		case "balanced":
@@ -320,6 +356,9 @@ func IndependentProfilesFirst(profiles []Profile) []Profile {
 		return nil
 	}
 	family := func(p Profile) string {
+		if p.ChainFlag() != "" {
+			return "chain" // Psiphon or Tor inside WARP: Aether first
+		}
 		if p.Psiphon() {
 			return "psiphon"
 		}
@@ -352,7 +391,7 @@ func IndependentProfilesFirst(profiles []Profile) []Profile {
 		}
 		return false
 	}
-	kinds := []string{"psiphon", "tor", "warp"}
+	kinds := []string{"chain", "psiphon", "tor", "warp"}
 	for _, kind := range kinds {
 		if family(profiles[0]) != kind {
 			appendNext(kind)
@@ -454,6 +493,9 @@ func AttemptTimeout(p Profile) time.Duration {
 		return 200 * time.Second
 	}
 	startup := 45 * time.Second
+	if p.ChainFlag() != "" {
+		startup += 60 * time.Second // Psiphon or Tor still has to tunnel inside the WARP tunnel
+	}
 	if duration, err := time.ParseDuration(p.Value("--startup-secs") + "s"); err == nil && duration >= 0 && duration <= time.Duration(1<<63-1)-10*time.Minute {
 		startup = duration
 	}

@@ -232,7 +232,7 @@ func TestNativeStartupCannotSubstituteAnotherModeOrMissingBundle(t *testing.T) {
 func TestNativeProfileSelectionPreservesTransportIsolation(t *testing.T) {
 	for _, method := range []string{"auto", "psiphon", "psiphon-cdn"} {
 		p, err := nativeProfile("psiphon", method, false)
-		if err != nil || !p.Psiphon() {
+		if err != nil || !p.Psiphon() && p.ChainFlag() != "--psiphon" {
 			t.Fatalf("Psiphon acquired a non-Psiphon backend: %+v %v", p, err)
 		}
 	}

@@ -16,6 +16,8 @@ func Methods() []Method {
 		{"wiw", "Classic WARP-in-WARP (WireGuard inside WireGuard)"},
 		{"mim-h2", "MASQUE-in-MASQUE H2"},
 		{"mim-h3", "MASQUE-in-MASQUE H3"},
+		{"psiphon-warp", "Psiphon through WARP (Aether first)"},
+		{"tor-warp", "Tor through WARP (Aether first)"},
 		{"psiphon", "Psiphon only"},
 		{"psiphon-cdn", "Psiphon CDN only"},
 	}

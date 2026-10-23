@@ -50,92 +50,62 @@ func currentViaAetherFirst() bool {
 	return viaAetherFirst
 }
 
-// Bounds of the Aether-first ladder. The bare-Psiphon rungs get what is left.
+// Bounds of the ladder. Through WARP a chain connects in seconds once WARP is
+// up; standalone CDN variants scan fewer edges, so later ones get less time.
 const (
-	ladderWarpBudget    = 90 * time.Second
-	ladderPsiphonBudget = 110 * time.Second
-	ladderTorViaWarp    = 4 * time.Minute
-	ladderVariantBudget = 70 * time.Second // narrower CDN sets scan fewer edges
-	ladderWarpVariants  = 2
+	ladderChainBudget   = 150 * time.Second
+	ladderVariantBudget = 70 * time.Second
 )
 
-// launchPsiphonTorLadder connects Psiphon or Tor in this order:
-//  1. a verified Aether (WARP) tunnel, then Psiphon/Tor dialing through it;
-//  2. Psiphon/Tor on their own (through the local anti-DPI carrier if enabled).
-//
-// Every rung must pass the foreign-exit verification of the mode. A rung that
-// fails is stopped completely before the next one starts.
+// launchPsiphonTorLadder connects Psiphon or Tor, Aether first: the chain
+// profiles run them inside a WARP tunnel (as Oblivion's Psiphon mode does),
+// then the standalone profiles dial out on their own (through the local
+// anti-DPI carrier if enabled). Every rung must pass the foreign-exit
+// verification of the mode, and a failed rung is stopped before the next.
 func launchPsiphonTorLadder(ctx context.Context, mode string, o nativeOptions) (*nativeCore, observedExit, error) {
 	profiles, err := aether.StandaloneProfiles(mode, o.method)
 	if err != nil {
 		return nil, observedExit{}, err
 	}
+	if !currentViaAetherFirst() {
+		var own []aether.Profile
+		for _, p := range profiles {
+			if p.ChainFlag() == "" {
+				own = append(own, p)
+			}
+		}
+		if len(own) > 0 {
+			profiles = own
+		}
+	}
 	var failures []string
-	try := func(p aether.Profile, carrier string, budget time.Duration) (*nativeCore, observedExit, error) {
-		candidate := o
-		candidate.profile = &p
-		candidate.carrier = carrier
-		attempt, cancel := context.WithTimeout(ctx, budget)
-		defer cancel()
-		core, err := launchNative(attempt, mode, candidate)
-		if err != nil {
-			return nil, observedExit{}, err
-		}
-		checked, err := waitNative(attempt, mode, core)
-		if err != nil {
-			core.stop()
-			return nil, observedExit{}, err
-		}
-		return core, checked, nil
-	}
-
-	if currentViaAetherFirst() && mode != "aether" {
-		warpOptions := o
-		warpOptions.method, warpOptions.profile = "auto", nil
-		warpCtx, stopWarp := context.WithTimeout(ctx, ladderWarpBudget)
-		warp, _, warpErr := launchVerifiedNativeProfiles(warpCtx, warpOptions)
-		stopWarp()
-		if warpErr != nil {
-			failures = append(failures, "Aether: "+warpErr.Error())
-		} else {
-			through := profiles
-			if len(through) > ladderWarpVariants {
-				through = through[:ladderWarpVariants]
-			}
-			for _, p := range through {
-				budget := ladderPsiphonBudget
-				if mode == "tor" {
-					budget = ladderTorViaWarp
-				}
-				core, checked, err := try(p, warp.address, budget)
-				if err == nil {
-					core.parents = append(core.parents, warp)
-					return core, checked, nil
-				}
-				failures = append(failures, fmt.Sprintf("%s through Aether: %v", p.Label, err))
-				if ctx.Err() != nil {
-					break
-				}
-			}
-			warp.stop()
-		}
-	}
-
 	for i, p := range profiles {
 		if err := ctx.Err(); err != nil {
 			return nil, observedExit{}, fmt.Errorf("%w; %s", err, strings.Join(failures, "; "))
 		}
 		budget := ladderVariantBudget
-		if i == 0 {
+		switch {
+		case p.ChainFlag() != "":
+			budget = min(aether.AttemptTimeout(p)+15*time.Second, ladderChainBudget+60*time.Second)
+		case i == 0 || p.Has("--tor-only"):
 			budget = aether.AttemptTimeout(p)
 		}
 		if i == len(profiles)-1 {
 			budget = time.Hour // the start context bounds the final rung
 		}
-		core, checked, err := try(p, o.carrier, budget)
+		candidate := o
+		candidate.profile = &p
+		attempt, cancel := context.WithTimeout(ctx, budget)
+		core, err := launchNative(attempt, mode, candidate)
 		if err == nil {
-			return core, checked, nil
+			var checked observedExit
+			if checked, err = waitNative(attempt, mode, core); err == nil {
+				cancel()
+				return core, checked, nil
+			}
+			core.stop()
 		}
+		cancel()
 		failures = append(failures, fmt.Sprintf("%s: %v", p.Label, err))
 	}
 	return nil, observedExit{}, fmt.Errorf("%s did not connect: %s", mode, strings.Join(failures, "; "))

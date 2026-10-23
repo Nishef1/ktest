@@ -29,11 +29,11 @@ func TestAetherCatalogPreservesAndroidModeAndIdentityBoundaries(t *testing.T) {
 		for _, profile := range report.Profiles {
 			switch mode {
 			case "psiphon":
-				if profile.Method != "psiphon" && profile.Method != "psiphon-cdn" {
+				if profile.Method != "psiphon" && profile.Method != "psiphon-cdn" && profile.Method != "psiphon-warp" {
 					t.Fatal("non-Psiphon profile escaped mode filter")
 				}
 			case "tor":
-				if profile.Method != "tor" || len(profile.Identities) != 0 {
+				if profile.Method != "tor" && profile.Method != "tor-warp" || profile.Method == "tor" && len(profile.Identities) != 0 {
 					t.Fatal("Tor inherited WARP identity or method")
 				}
 			case "windscribe-aether":

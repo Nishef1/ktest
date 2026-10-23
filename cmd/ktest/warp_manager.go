@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,7 +63,15 @@ func loadAetherProfiles(base, ech, ip string, mode ConnectionMode, shape ...tlsS
 	if mode == ModeFast || mode == ModeBalanced || mode == ModeAether {
 		profiles = aether.WithLocalCarriers(aether.WithExitNodesOptions(profiles, s.opts.Fragment == "off"))
 	}
-	return tlsshape.Order(profilesForMode(profiles, mode), s.result), nil
+	ordered := tlsshape.Order(profilesForMode(profiles, mode), s.result)
+	if mode == ModePsiphon || mode == ModeTor {
+		// Aether first: the chains (Psiphon or Tor inside WARP) lead, the
+		// standalone profiles that need no WARP follow.
+		sort.SliceStable(ordered, func(i, j int) bool {
+			return ordered[i].ChainFlag() != "" && ordered[j].ChainFlag() == ""
+		})
+	}
+	return ordered, nil
 }
 
 // A first-use nested method must bootstrap its inner identity over an outer
@@ -603,8 +612,16 @@ func (m *warpManager) startProfile(ctx context.Context, i int, p aetherProfile) 
 			m.t.Note("%s: local anti-DPI carrier unavailable (%v); dialing directly", p.Label, err)
 		}
 	}
+	args, err := aether.ExposeChain(p, args, port)
+	if err != nil {
+		cancel()
+		if logFile != nil {
+			logFile.Close()
+		}
+		return false, nil, err.Error()
+	}
 	args = withPsiphonEdges(args, p, m.psiphonEdges)
-	if region, _ := aether.NormalizeRegion(m.o.psiphonCountry); region != "" && p.Psiphon() && !p.Has("--psiphon-region") {
+	if region, _ := aether.NormalizeRegion(m.o.psiphonCountry); region != "" && (p.Psiphon() || p.ChainFlag() == "--psiphon") && !p.Has("--psiphon-region") {
 		args = append(args, "--psiphon-region", region)
 	}
 	go func() {

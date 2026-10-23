@@ -232,11 +232,11 @@ func TestAetherRunArgsNeverPromptStayOnLoopbackAndDoNotRepeatFlags(t *testing.T)
 func TestPsiphonModeSelectsOnlyPsiphonProfiles(t *testing.T) {
 	base := t.TempDir()
 	profiles, err := loadAetherProfiles(base, "CFG", "1.2.3.4", ModePsiphon)
-	if err != nil || len(profiles) != 6 {
+	if err != nil || len(profiles) != 9 {
 		t.Fatalf("default Psiphon profiles: %v, %v", profiles, err)
 	}
 	for _, p := range profiles {
-		if !p.Psiphon() {
+		if !p.Psiphon() && p.ChainFlag() != "--psiphon" {
 			t.Fatalf("non-Psiphon profile selected: %v", p)
 		}
 	}
@@ -438,11 +438,11 @@ func TestDesktopAetherAndTorModesCannotCrossNativeBackends(t *testing.T) {
 					t.Fatalf("standalone Aether silently selected foreign backend %v", p.Args)
 				}
 			case ModePsiphon:
-				if !p.Psiphon() || p.Has("--tor-only") {
+				if !(p.Psiphon() || p.ChainFlag() == "--psiphon") || p.Has("--tor-only") {
 					t.Fatalf("Psiphon mode selected non-Psiphon %v", p.Args)
 				}
 			case ModeTor:
-				if !p.Has("--tor-only") || p.Psiphon() {
+				if !(p.Has("--tor-only") || p.ChainFlag() == "--tor") || p.Psiphon() {
 					t.Fatalf("Tor mode selected non-Tor %v", p.Args)
 				}
 			}

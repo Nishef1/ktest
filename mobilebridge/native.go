@@ -35,7 +35,6 @@ type nativeCore struct {
 	err                  error // read only after done closes
 	log                  *stageLog
 	advanceOnScanFailure bool // automatic MASQUE attempts yield after a full native scan fails
-	parents              []*nativeCore // tunnels this core dials through; stopped after it
 }
 
 // StartNativeProxy runs the packaged Aether core, including its existing Tor
@@ -337,6 +336,9 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 		// its UDP/H3/WireGuard candidates must stay direct.
 		args = append(args, "--upstream", "socks5://"+o.carrier)
 	}
+	if args, err = aether.ExposeChain(p, args, port); err != nil {
+		return nil, err
+	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	cleanupDNS := func() {}
 	if p.Psiphon() && !p.Has("--psiphon-config") {
@@ -382,9 +384,6 @@ func psiphonEdges(p aether.Profile, privateDir string) []string {
 func (n *nativeCore) stop() {
 	n.cancel()
 	<-n.done // shared runner bounds Wait and terminates owned descendants
-	for _, parent := range n.parents {
-		parent.stop()
-	}
 }
 
 func verifyModeUpstream(ctx context.Context, mode, address string) (observedExit, error) {
