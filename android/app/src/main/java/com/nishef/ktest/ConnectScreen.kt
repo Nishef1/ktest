@@ -509,14 +509,14 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
             if (viaFast && method != "auto" && method !in setOf("masque-h2", "gool-h2", "mim-h2"))
                 Note("This explicitly selected method cannot use the TCP carrier. Turn the carrier off to use it directly, or choose Auto to try all compatible transports.", Tone.Warn)
         }
-        if (mode == "psiphon" || mode == "tor") {
+        if (mode == "psiphon") {
             val prefs = androidx.compose.ui.platform.LocalContext.current
                 .getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
             var viaAether by remember { mutableStateOf(prefs.getBoolean("native_via_aether", true)) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Connect Aether first", color = K.text, fontSize = 14.sp)
-                    Text("Brings up a verified WARP tunnel and runs ${if (mode == "psiphon") "Psiphon" else "Tor"} through it. If that fails, it connects on its own.",
+                    Text("Brings up a verified WARP tunnel and runs Psiphon through it. If that fails, it connects on its own.",
                         color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
                 }
                 Switch(viaAether, { viaAether = it; prefs.edit().putBoolean("native_via_aether", it).apply() }, enabled = enabled,
@@ -569,8 +569,8 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
             }
         }
         Note(if (mode == "aether") "Auto tries independent WARP transports; a selected method tries its own IPv4/IPv6 and ECH/non-ECH variants without switching protocols. With the local carrier enabled, compatible H2 carrier variants are added without removing direct H3/WireGuard attempts in Auto. This Aether-only mode does not silently switch to Psiphon/Tor. An exit located in Iran may not work for every destination. First-time setup can take several minutes."
-             else if (mode == "psiphon") "Auto uses Psiphon's CDN fronting only (plain Psiphon does not connect from Iran): through Aether first, then on its own. Choose the plain method yourself if you want it."
-             else "Auto tries Aether then Tor through it, then Tor alone. Circuit bootstrap and independently verified foreign exit may take several minutes.")
+             else if (mode == "psiphon") "Auto runs Psiphon inside a verified Aether (WARP) tunnel first, then on its own with CDN fronting. Plain Psiphon does not connect from Iran; choose it yourself if you want it."
+             else "Tor runs on its own (Tor inside WARP stalled in a test). Circuit bootstrap and independently verified foreign exit may take several minutes.")
     }
 }
 

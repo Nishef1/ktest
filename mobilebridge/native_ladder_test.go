@@ -39,7 +39,7 @@ func TestLadderProfilesAutoIsCDNOnly(t *testing.T) {
 		t.Fatalf("explicit method = %v, %v", only, err)
 	}
 	tor, err := aether.StandaloneProfiles("tor", "auto")
-	if err != nil || len(tor) != 2 || tor[0].Method() != "tor-warp" || !tor[1].Has("--tor-only") {
+	if err != nil || len(tor) != 1 || !tor[0].Has("--tor-only") {
 		t.Fatalf("tor = %v, %v", tor, err)
 	}
 	if _, err := aether.StandaloneProfiles("tor", "masque-h2"); err == nil {

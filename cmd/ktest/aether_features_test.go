@@ -54,13 +54,6 @@ func TestAllAetherFamiliesRemainAvailableWithoutECH(t *testing.T) {
 			}
 			continue
 		}
-		if method.value == "tor-warp" {
-			tor, err := loadAetherProfiles(t.TempDir(), "", "", ModeTor)
-			if err != nil || len(filterAetherMethod(tor, method.value)) == 0 {
-				t.Errorf("dedicated Tor mode lost %s without ECH: %v", method.value, err)
-			}
-			continue
-		}
 		if len(filterAetherMethod(profiles, method.value)) == 0 {
 			t.Errorf("Aether lost %s without ECH", method.value)
 		}

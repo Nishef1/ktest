@@ -46,7 +46,6 @@ WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --
 Psiphon through WARP, MASQUE over HTTP/2 | --masque --h2 --psiphon
 Psiphon through WARP, WireGuard | --wg --noize balanced --psiphon
 Psiphon through WARP, MASQUE over HTTP/3 | --masque --h3 --psiphon
-Tor through WARP, MASQUE over HTTP/2 | --masque --h2 --tor
 Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
 Psiphon CDN, Cloudflare edges | --psiphon-only --psiphon-mode cdn --psiphon-cdn-sets cloudflare
 Psiphon CDN, Fastly and CloudFront edges | --psiphon-only --psiphon-mode cdn --psiphon-cdn-sets fastly,cloudfront
