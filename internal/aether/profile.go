@@ -43,8 +43,8 @@ WARP, MASQUE-in-MASQUE H2 | --mim --h2
 WARP, MASQUE-in-MASQUE H3 | --mim --h3
 WARP, classic WireGuard-in-WireGuard | --gool-classic
 WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --api-address {ECHIP}
-Psiphon | --psiphon-only
 Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
+Psiphon | --psiphon-only
 WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --fragment --scan thorough --startup-secs 100 --ech {ECH} --api-address {ECHIP}
 `
 

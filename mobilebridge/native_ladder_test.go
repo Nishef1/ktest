@@ -17,13 +17,10 @@ func TestSetPsiphonRegionValidates(t *testing.T) {
 	}
 }
 
-func TestLadderProfilesTriesCDNFirst(t *testing.T) {
+func TestLadderProfilesAutoIsCDNOnly(t *testing.T) {
 	profiles, err := ladderProfiles("psiphon", "auto")
-	if err != nil || len(profiles) < 2 {
-		t.Fatalf("profiles = %v, %v", profiles, err)
-	}
-	if profiles[0].Method() != "psiphon-cdn" || profiles[1].Method() != "psiphon" {
-		t.Fatalf("order = %s, %s", profiles[0].Method(), profiles[1].Method())
+	if err != nil || len(profiles) != 1 || profiles[0].Method() != "psiphon-cdn" {
+		t.Fatalf("Auto must use only the CDN profile: %v, %v", profiles, err)
 	}
 	only, err := ladderProfiles("psiphon", "psiphon")
 	if err != nil || len(only) != 1 || only[0].Method() != "psiphon" {

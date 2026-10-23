@@ -60,10 +60,9 @@ const (
 	ladderTorViaWarp    = 4 * time.Minute
 )
 
-// ladderProfiles are the Psiphon or Tor profiles to try for a mode. Psiphon's
-// CDN-fronted meek comes before its automatic shape: the automatic profile
-// alone was the only one ever tried when the method was Auto, so a network that
-// blocks everything but CDNs never reached the fronted path.
+// ladderProfiles are the Psiphon or Tor profiles to try for a mode. Auto used to
+// try only Psiphon's automatic shape, so a network that blocks everything but
+// CDNs never reached the fronted path.
 func ladderProfiles(mode, method string) ([]aether.Profile, error) {
 	if mode == "tor" {
 		if method != "" && method != "auto" {
@@ -76,15 +75,17 @@ func ladderProfiles(mode, method string) ([]aether.Profile, error) {
 		return nil, err
 	}
 	profiles = aether.FilterMethod(aether.ProfilesForMode(profiles, mode), method)
-	var cdn, rest []aether.Profile
-	for _, p := range profiles {
-		if p.Method() == "psiphon-cdn" {
-			cdn = append(cdn, p)
-		} else {
-			rest = append(rest, p)
+	// Plain Psiphon does not connect from Iran, so Auto uses only the CDN-fronted
+	// profile. The direct profile stays available as an explicit method.
+	if method == "" || method == "auto" {
+		var cdn []aether.Profile
+		for _, p := range profiles {
+			if p.Method() == "psiphon-cdn" {
+				cdn = append(cdn, p)
+			}
 		}
+		profiles = cdn
 	}
-	profiles = append(cdn, rest...)
 	if len(profiles) == 0 {
 		return nil, errors.New("selected method is incompatible with this mode")
 	}
