@@ -9,3 +9,6 @@ android/app/libs/
 
 # Cores staged by `ktest warp -upgrade -base .` are local, never committed.
 /cores/
+
+# Runtime state Aether Tor writes into the working directory.
+/aether-tor/
