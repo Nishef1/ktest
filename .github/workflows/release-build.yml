@@ -1,0 +1,74 @@
+# One run, one version: builds the Android ARMv8 preview APK and the Windows
+# portable ZIP in parallel (the same workflows that run on push, called with an
+# explicit version), then lists both files. Optionally keeps them in a draft
+# prerelease so they do not expire with the Actions artifacts (14 days).
+name: Release build (Android ARMv8 + Windows)
+run-name: Release build v${{ inputs.version }}
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version for both builds, for example 0.5.0-preview
+        required: true
+        type: string
+      version_code:
+        description: Android versionCode (higher than the last installed APK; the last was 19)
+        required: true
+        type: string
+      publish:
+        description: Also keep both files in a draft prerelease named after the version
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  android:
+    uses: ./.github/workflows/android-build.yml
+    secrets: inherit
+    with:
+      version: ${{ inputs.version }}
+      version_code: ${{ inputs.version_code }}
+  windows:
+    uses: ./.github/workflows/windows-portable.yml
+    with:
+      version: ${{ inputs.version }}
+  summary:
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          pattern: "*v${{ inputs.version }}*"
+          merge-multiple: true
+      - name: List the build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l release
+          {
+            echo "## KTest v${{ inputs.version }}"
+            echo
+            echo "Commit: \`${GITHUB_SHA}\`"
+            echo
+            echo "| File | SHA-256 |"
+            echo "| --- | --- |"
+            for f in release/*; do
+              case "$f" in *.sha256) continue ;; esac
+              echo "| \`$(basename "$f")\` | \`$(sha256sum "$f" | cut -d' ' -f1)\` |"
+            done
+            echo
+            echo "Artifacts are kept 14 days. Run with publish to keep them in a draft prerelease."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep both files in a draft prerelease
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" release/* --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --draft --prerelease --title "KTest v${{ inputs.version }}" \
+            --notes "Android ARMv8 preview APK and Windows portable ZIP built together from ${GITHUB_SHA}."

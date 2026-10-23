@@ -9,6 +9,12 @@ on:
       - "cmd/ktest/**"
       - "internal/aether/**"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Release version, for example 0.5.0-preview
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -210,8 +216,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Pinned Xray rejected an Android fragment or TUN profile" }
       - name: Windows smoke tests and portable ZIP
         shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
+          # A release run names its version; any other run is a development build.
+          $version = if ($env:INPUT_VERSION) { $env:INPUT_VERSION } else { "dev-" + $env:GITHUB_SHA.Substring(0, 7) }
+          "ktest $version`ncommit $env:GITHUB_SHA" | Set-Content -Encoding ascii portable/ktest/VERSION.txt
+          $zip = "ktest-windows-portable-v$version.zip"
+          "ZIP=$zip" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
           $menu = "0`n" | & ./portable/ktest/ktest.exe
           $menuText = $menu -join "`n"
           if ($LASTEXITCODE -ne 0 -or $menuText -notmatch "(?i)Disconnected" -or $menuText -notmatch "Connect with") {
@@ -235,13 +248,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "TUN config generator failed" }
           & ./portable/ktest/cores/sing-box.exe check -c build/tun-preview.json
           if ($LASTEXITCODE -ne 0) { throw "sing-box rejected generated TUN config" }
-          Compress-Archive -Path portable/ktest -DestinationPath ktest-windows-portable.zip -CompressionLevel Optimal
-          (Get-FileHash -Algorithm SHA256 ktest-windows-portable.zip).Hash.ToLowerInvariant() + "  ktest-windows-portable.zip" | Set-Content -Encoding ascii ktest-windows-portable.zip.sha256
+          Compress-Archive -Path portable/ktest -DestinationPath $zip -CompressionLevel Optimal
+          (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant() + "  $zip" | Set-Content -Encoding ascii "$zip.sha256"
       - uses: actions/upload-artifact@v7
         with:
-          name: ktest-windows-portable
+          name: ktest-windows-portable-v${{ inputs.version || github.sha }}
           path: |
-            ktest-windows-portable.zip
-            ktest-windows-portable.zip.sha256
+            ${{ env.ZIP }}
+            ${{ env.ZIP }}.sha256
           retention-days: 14
           if-no-files-found: error
