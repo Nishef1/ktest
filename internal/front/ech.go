@@ -109,7 +109,7 @@ func (f *Fronter) tryECH(ctx context.Context, fr Front, name string, protos []st
 			return nil, err
 		}
 		stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
-		c := tls.Client(raw, &tls.Config{
+		c := tls.Client(fragmentHello(raw), &tls.Config{
 			ServerName:                     name,
 			EncryptedClientHelloConfigList: list,
 			MinVersion:                     tls.VersionTLS13,
@@ -147,6 +147,50 @@ func (f *Fronter) tryECH(ctx context.Context, fr Front, name string, protos []st
 		}
 		return nil, fmt.Errorf("handshake: %w", err)
 	}
+}
+
+// fragmentHello sends the first TLS record (the ClientHello) in small pieces.
+// An ECH hello shows the outer name cloudflare-ech.com, which some networks
+// filter by looking for it in a single packet; reassembly is what they skip.
+// Only the first write is cut, the rest of the connection is untouched.
+func fragmentHello(c net.Conn) net.Conn { return &helloCutter{Conn: c} }
+
+type helloCutter struct {
+	net.Conn
+	done bool
+}
+
+func (c *helloCutter) Write(p []byte) (int, error) {
+	if c.done || len(p) < 64 || p[0] != 0x16 {
+		return c.Conn.Write(p)
+	}
+	c.done = true
+	if tcp, ok := c.Conn.(*net.TCPConn); ok {
+		_ = tcp.SetNoDelay(true)
+	}
+	// The names sit in the first ~150 bytes; the bulk follows in one write.
+	head := min(len(p), 160)
+	sent := 0
+	for sent < head {
+		n := 8 + mrand.IntN(9)
+		if sent+n > head {
+			n = head - sent
+		}
+		w, err := c.Conn.Write(p[sent : sent+n])
+		sent += w
+		if err != nil {
+			return sent, err
+		}
+		time.Sleep(time.Duration(1+mrand.IntN(3)) * time.Millisecond)
+	}
+	if sent < len(p) {
+		w, err := c.Conn.Write(p[sent:])
+		sent += w
+		if err != nil {
+			return sent, err
+		}
+	}
+	return sent, nil
 }
 
 // shuffled returns a copy of s in random order, so that one dead hint does not
@@ -256,7 +300,7 @@ func FetchCloudflareECH(ctx context.Context) ([]byte, string, error) {
 			last = err
 			continue
 		}
-		c := tls.Client(raw, &tls.Config{
+		c := tls.Client(fragmentHello(raw), &tls.Config{
 			ServerName:                     "api.cloudflareclient.com",
 			EncryptedClientHelloConfigList: dummyECHConfig(CloudflareECH),
 			MinVersion:                     tls.VersionTLS13,

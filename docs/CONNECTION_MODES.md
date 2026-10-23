@@ -18,6 +18,8 @@ Balanced and Fast connect without a representative website sweep or periodic web
 
 **Android Psiphon/Tor ladder (2026-10-23).** In Aether to Psiphon / Aether to Tor, Android first brings up a verified Aether (WARP) tunnel (bounded to 90 s) and runs Psiphon or Tor through it with `--upstream`; if that fails or "Connect Aether first" is off, Psiphon/Tor run on their own (through Fast's local anti-DPI carrier when enabled). Psiphon's CDN-fronted profile is tried before its automatic profile in both rungs; before this, Auto only ever tried the automatic profile. Android can choose the Psiphon exit country (`--psiphon-region`); an unavailable country fails rather than using another. Every rung still needs the foreign-exit verification. The desktop modes have not changed. Pinned core: Aether v2.3.5.
 
+**ECH bootstrap fragmentation (2026-10-23).** The ECH hello carries the outer name `cloudflare-ech.com`, which some networks filter in a single packet. KTest now sends the first 160 bytes of every ECH ClientHello (bootstrap and ECH fronts) in 8-16 byte pieces, and Android's ECH registration route adds Aether's `--fragment`. Tested only from an unfiltered network (the bootstrap still succeeds; ~1 s). Rewriting the config's `public_name` does not work: Cloudflare rejects ECH once the config bytes differ (checked 2026-10-23), so the outer name cannot be swapped for an unfiltered one.
+
 CLI policy options:
 
 For TCP-based Aether transports, Fast/Balanced can use an independent private

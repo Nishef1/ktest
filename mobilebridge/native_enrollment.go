@@ -78,7 +78,7 @@ func bootstrapAndroidWARP(ctx context.Context, o nativeOptions, paths aether.And
 	echCtx, stopECH := context.WithTimeout(ctx, 3*time.Second)
 	if config, edge, err := front.SharedCloudflareECH(echCtx); err == nil {
 		routes = append(routes, aether.EnrollmentRoute{
-			Label: "ECH registration", Args: []string{"--ech", base64.StdEncoding.EncodeToString(config), "--api-address", edge},
+			Label: "ECH registration", Args: []string{"--fragment", "--ech", base64.StdEncoding.EncodeToString(config), "--api-address", edge},
 			Timeout: 25 * time.Second,
 		})
 	}
