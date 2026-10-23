@@ -47,7 +47,7 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	if err != nil {
 		return nil, err
 	}
-	templates = filterAetherMethod(templates, o.aetherMethod)
+	templates = filterAetherMethodForMode(templates, o.aetherMethod, o.mode)
 	templates, err = supportedAetherProfiles(ctx, aetherBinary(o.base), templates)
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 	if err != nil {
 		return nil, err
 	}
-	profiles = filterAetherMethod(profiles, o.aetherMethod)
+	profiles = filterAetherMethodForMode(profiles, o.aetherMethod, o.mode)
 	supported := map[string]bool{}
 	for _, p := range templates {
 		supported[p.ID()] = true

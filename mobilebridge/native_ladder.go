@@ -58,6 +58,8 @@ const (
 	ladderWarpBudget    = 90 * time.Second
 	ladderPsiphonBudget = 110 * time.Second
 	ladderTorViaWarp    = 4 * time.Minute
+	ladderVariantBudget = 70 * time.Second // narrower CDN sets scan fewer edges
+	ladderWarpVariants  = 2
 )
 
 // ladderProfiles are the Psiphon or Tor profiles to try for a mode. Auto used to
@@ -74,18 +76,7 @@ func ladderProfiles(mode, method string) ([]aether.Profile, error) {
 	if err != nil {
 		return nil, err
 	}
-	profiles = aether.FilterMethod(aether.ProfilesForMode(profiles, mode), method)
-	// Plain Psiphon does not connect from Iran, so Auto uses only the CDN-fronted
-	// profile. The direct profile stays available as an explicit method.
-	if method == "" || method == "auto" {
-		var cdn []aether.Profile
-		for _, p := range profiles {
-			if p.Method() == "psiphon-cdn" {
-				cdn = append(cdn, p)
-			}
-		}
-		profiles = cdn
-	}
+	profiles = aether.FilterMethodForMode(aether.ProfilesForMode(profiles, mode), method, mode)
 	if len(profiles) == 0 {
 		return nil, errors.New("selected method is incompatible with this mode")
 	}
@@ -131,7 +122,11 @@ func launchPsiphonTorLadder(ctx context.Context, mode string, o nativeOptions) (
 		if warpErr != nil {
 			failures = append(failures, "Aether: "+warpErr.Error())
 		} else {
-			for _, p := range profiles {
+			through := profiles
+			if len(through) > ladderWarpVariants {
+				through = through[:ladderWarpVariants]
+			}
+			for _, p := range through {
 				budget := ladderPsiphonBudget
 				if mode == "tor" {
 					budget = ladderTorViaWarp
@@ -154,7 +149,10 @@ func launchPsiphonTorLadder(ctx context.Context, mode string, o nativeOptions) (
 		if err := ctx.Err(); err != nil {
 			return nil, observedExit{}, fmt.Errorf("%w; %s", err, strings.Join(failures, "; "))
 		}
-		budget := aether.AttemptTimeout(p)
+		budget := ladderVariantBudget
+		if i == 0 {
+			budget = aether.AttemptTimeout(p)
+		}
 		if i == len(profiles)-1 {
 			budget = time.Hour // the start context bounds the final rung
 		}

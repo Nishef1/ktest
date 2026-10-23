@@ -232,7 +232,7 @@ func TestAetherRunArgsNeverPromptStayOnLoopbackAndDoNotRepeatFlags(t *testing.T)
 func TestPsiphonModeSelectsOnlyPsiphonProfiles(t *testing.T) {
 	base := t.TempDir()
 	profiles, err := loadAetherProfiles(base, "CFG", "1.2.3.4", ModePsiphon)
-	if err != nil || len(profiles) != 2 {
+	if err != nil || len(profiles) != 6 {
 		t.Fatalf("default Psiphon profiles: %v, %v", profiles, err)
 	}
 	for _, p := range profiles {

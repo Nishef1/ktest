@@ -18,6 +18,9 @@ func parseAetherProfiles(text, ech, ip string) ([]aetherProfile, error) {
 func filterAetherMethod(profiles []aetherProfile, method string) []aetherProfile {
 	return aether.FilterMethod(profiles, method)
 }
+func filterAetherMethodForMode(profiles []aetherProfile, method string, mode ConnectionMode) []aetherProfile {
+	return aether.FilterMethodForMode(profiles, method, string(mode))
+}
 func profilesForMode(profiles []aetherProfile, mode ConnectionMode) []aetherProfile {
 	return aether.ProfilesForMode(profiles, string(mode))
 }

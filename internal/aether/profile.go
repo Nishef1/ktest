@@ -44,6 +44,10 @@ WARP, MASQUE-in-MASQUE H3 | --mim --h3
 WARP, classic WireGuard-in-WireGuard | --gool-classic
 WARP, WireGuard, aggressive obfuscation | --wg --noize aggressive --ech {ECH} --api-address {ECHIP}
 Psiphon through CDN fronting | --psiphon-only --psiphon-mode cdn
+Psiphon CDN, Cloudflare edges | --psiphon-only --psiphon-mode cdn --psiphon-cdn-sets cloudflare
+Psiphon CDN, Fastly and CloudFront edges | --psiphon-only --psiphon-mode cdn --psiphon-cdn-sets fastly,cloudfront
+Psiphon CDN, Akamai and Bunny edges | --psiphon-only --psiphon-mode cdn --psiphon-cdn-sets psiphon-akamai,psiphon-bunny
+Psiphon CDN, Vercel and GitHub edges | --psiphon-only --psiphon-mode cdn --psiphon-cdn-sets vercel,github
 Psiphon | --psiphon-only
 WARP, MASQUE over HTTP/2 with ECH, thorough scan | --masque --h2 --fragment --scan thorough --startup-secs 100 --ech {ECH} --api-address {ECHIP}
 `
@@ -227,6 +231,22 @@ func (p Profile) ID() string {
 	}
 	sum := sha256.Sum256([]byte(p.Label + "\n" + strings.Join(args, "\x00")))
 	return hex.EncodeToString(sum[:8])
+}
+
+// FilterMethodForMode is FilterMethod plus the Psiphon rule: plain Psiphon does
+// not connect from Iran, so Auto in Psiphon mode uses only the CDN-fronted
+// profiles. The plain profile stays reachable as an explicit method.
+func FilterMethodForMode(profiles []Profile, method, mode string) []Profile {
+	if mode == "psiphon" && (method == "" || method == "auto") {
+		var cdn []Profile
+		for _, p := range profiles {
+			if p.Method() == "psiphon-cdn" {
+				cdn = append(cdn, p)
+			}
+		}
+		return cdn
+	}
+	return FilterMethod(profiles, method)
 }
 
 func FilterMethod(profiles []Profile, method string) []Profile {
