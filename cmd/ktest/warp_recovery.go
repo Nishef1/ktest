@@ -1,7 +1,6 @@
 package main
 
 import (
-	"sort"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
@@ -38,22 +37,6 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 		default:
 			unknown = append(unknown, p)
 		}
-	}
-	if mode == ModeBalanced {
-		// Measured winners keep their order within a backend, but Balanced tries
-		// Aether (WARP) before Psiphon (through WARP before alone) before Tor.
-		rank := func(p aetherProfile) int {
-			switch {
-			case p.Has("--tor-only"):
-				return 3
-			case p.Psiphon():
-				return 2
-			case p.ChainFlag() != "":
-				return 1
-			}
-			return 0
-		}
-		sort.SliceStable(proven, func(i, j int) bool { return rank(proven[i]) < rank(proven[j]) })
 	}
 	var diverse, variants []aetherProfile
 	seen := map[string]bool{}
