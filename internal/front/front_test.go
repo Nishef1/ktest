@@ -606,4 +606,7 @@ func TestMediaFrontingPausesAfterRepeatedEmptyResponses(t *testing.T) {
 	if f.mediaPaused(fam, "www.youtube.com") {
 		t.Fatal("pages and thumbnails must keep their fronting")
 	}
+	if f.mediaPaused(fam, "rr2---sn-y.googlevideo.com") {
+		t.Fatal("a healthy cache must keep its fronting while another is paused")
+	}
 }

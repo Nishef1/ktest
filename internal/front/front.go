@@ -198,7 +198,7 @@ func (f *Fronter) Upstreams() []smartproxy.Upstream {
 // return nothing or an error for every video request. Such a connection looks
 // like a success, so no other route is ever tried and only the video fails while
 // pages and thumbnails work. After a few failures in a row, fronting steps aside
-// for that cache for a while and the ordinary routes (and exits) take over.
+// for that cache host for a while and the ordinary routes (and exits) take over.
 const (
 	mediaFailLimit = 3
 	mediaPause     = 10 * time.Minute
@@ -209,12 +209,12 @@ type mediaHealth struct {
 	until time.Time
 }
 
+// mediaKey names one media cache host: a bad cache (rr3---sn-x) must not take
+// fronting away from the healthy ones (rr1---sn-y) of the same domain.
 func mediaKey(fam *Family, host string) string {
 	host = normalize(host)
-	for _, d := range fam.NoStandIn {
-		if host == d || strings.HasSuffix(host, "."+d) {
-			return fam.Name + "|" + d
-		}
+	if fam.noStandIn(host) {
+		return fam.Name + "|" + host
 	}
 	return ""
 }

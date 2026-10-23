@@ -390,7 +390,8 @@ func IndependentProfilesFirst(profiles []Profile) []Profile {
 		}
 		return false
 	}
-	kinds := []string{"chain", "psiphon", "tor", "warp"}
+	// Aether (WARP) first, then Psiphon (through WARP before alone), then Tor.
+	kinds := []string{"warp", "chain", "psiphon", "tor"}
 	for _, kind := range kinds {
 		if family(profiles[0]) != kind {
 			appendNext(kind)

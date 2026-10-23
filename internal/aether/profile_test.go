@@ -83,7 +83,7 @@ func TestIndependentProfileOrderingPreservesWinnerAndBackendCoverage(t *testing.
 		{Label: "tor", Args: []string{"--tor-only"}},
 	}
 	ordered := IndependentProfilesFirst(profiles)
-	for i, label := range []string{"warp", "cdn", "tor", "psiphon", "variant"} {
+	for i, label := range []string{"warp", "cdn", "tor", "variant", "psiphon"} {
 		if ordered[i].Label != label {
 			t.Fatalf("candidate %d = %s, want %s", i, ordered[i].Label, label)
 		}
@@ -93,7 +93,7 @@ func TestIndependentProfileOrderingPreservesWinnerAndBackendCoverage(t *testing.
 		t.Fatal("recovery ordering changed Fast's permitted inventory")
 	}
 	profiles[0], profiles[4] = profiles[4], profiles[0]
-	if ordered = IndependentProfilesFirst(profiles); ordered[0].Label != "tor" || ordered[2].Label != "variant" {
+	if ordered = IndependentProfilesFirst(profiles); ordered[0].Label != "tor" || ordered[1].Label != "variant" {
 		t.Fatal("a preferred independent backend did not retain its first attempt")
 	}
 }
@@ -107,7 +107,7 @@ func TestCachedPsiphonDoesNotBuryCDNRetryBehindWarpVariants(t *testing.T) {
 		Profile{Label: "cdn", Args: []string{"--psiphon-only", "--psiphon-mode", "cdn"}},
 		Profile{Label: "tor", Args: []string{"--tor-only"}})
 	ordered := IndependentProfilesFirst(profiles)
-	if ordered[0].Label != "cached" || ordered[3].Label != "cdn" || len(ordered) != len(profiles) {
+	if ordered[0].Label != "cached" || ordered[4].Label != "cdn" || len(ordered) != len(profiles) {
 		t.Fatal("a failed cached Psiphon path can starve its independent CDN retry")
 	}
 }
