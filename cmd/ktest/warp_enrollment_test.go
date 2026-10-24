@@ -187,11 +187,12 @@ func TestEnrollmentRoutesIncludeECHAndIndependentCDNCarrier(t *testing.T) {
 	}
 	defer l.Close()
 	routes := enrollmentRoutes(context.Background(), base, l.Addr().String(), "CFG", "1.2.3.4")
-	if len(routes) != 4 ||
+	if len(routes) != 5 ||
 		routes[0].label != "local proxy" || enrollmentArg(routes[0].args, "--upstream") != "socks5://"+l.Addr().String() ||
-		routes[1].label != "fragmented API HTTPS" ||
-		routes[2].label != "ECH" || enrollmentArg(routes[2].args, "--ech") != "CFG" || enrollmentArg(routes[2].args, "--api-address") != "1.2.3.4" ||
-		routes[3].label != "Psiphon CDN bootstrap" || enrollmentArg(routes[3].args, "--psiphon-mode") != "cdn" {
+		routes[1].label != "direct WARP API (core edge fallback)" || len(routes[1].args) != 0 ||
+		routes[2].label != "fragmented API HTTPS" ||
+		routes[3].label != "ECH" || enrollmentArg(routes[3].args, "--ech") != "CFG" || enrollmentArg(routes[3].args, "--api-address") != "1.2.3.4" ||
+		routes[4].label != "Psiphon CDN bootstrap" || enrollmentArg(routes[4].args, "--psiphon-mode") != "cdn" {
 		t.Fatal(routes)
 	}
 }
@@ -291,5 +292,15 @@ func TestEnrollmentProcessHelper(t *testing.T) {
 			os.Exit(1)
 		}
 		time.Sleep(time.Minute)
+	}
+}
+
+// No local carrier or VPN is required to attempt the native API's edge fallback.
+func TestEnrollmentNoProxyIncludesDirectAndFragmentedAttempts(t *testing.T) {
+	routes := enrollmentRoutes(context.Background(), t.TempDir(), "", "cfg", "104.18.0.6")
+	if len(routes) < 3 || routes[0].label != "direct WARP API (core edge fallback)" ||
+		len(routes[0].args) != 0 || routes[1].label != "fragmented API HTTPS" ||
+		routes[2].label != "ECH" {
+		t.Fatalf("independent API fallback missing: %+v", routes)
 	}
 }

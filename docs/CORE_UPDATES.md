@@ -1,11 +1,17 @@
 # Updating native cores safely
 
-**Current acceptance boundary (2026-10-21):** Aether v2.3.2 and Xray-core v26.10.21 are separately pinned; updating Aether does not update Xray, HEV or ByeDPI. Current CI passed on commit `978e0ab`, but this does not establish live foreign egress, Android physical-device stability, or performance. See [the current audit](CURRENT_AUDIT_2026-10-21.md).
+**Upgrade boundary (2026-10-24):** Reviewed Aether v2.4.0 update; native Android and desktop locks are regenerated from the published release, without changing Xray, HEV or ByeDPI. New CI and real-device tests are required; historical CI does not establish real ISP connectivity. See [v2.4.0 audit](AETHER_240_AUDIT_2026-10-24.md).
 
 KTest does not update a live tunnel in-place. Release pins are explicit in
 source control, and the Windows portable and Android builds independently
 verify the artifacts they distribute. KTest never fetches an unsigned
 "latest" Aether binary at connection time.
+
+## Aether v2.4.0 (2026-10-24)
+
+Official release: https://github.com/patterniha/Aether/releases/tag/v2.4.0
+
+Aether now retries the Cloudflare WARP API using alternative API names and Cloudflare-owned edge addresses. MASQUE H2 TLS, gateway/port scanning, cached gateway validation and short-lived reconnect/cooldown handling have native fixes. KTest uses these rather than duplicating the network engine. The desktop enrollment list now includes an unfragmented direct API attempt; optional local-carrier startup failure no longer cancels the other bounded routes. The upgrade must retain exact checksums for desktop archives and Android archives plus extracted executables, and must preserve all saved WARP keys. Real-device ISP connectivity remains unverified.
 
 ## Aether v2.3.5 (2026-10-23)
 

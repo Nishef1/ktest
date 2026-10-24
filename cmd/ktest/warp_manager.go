@@ -824,8 +824,10 @@ func (m *warpManager) prepareIdentityFile(ctx context.Context, protocol, path st
 		if m.o.mode == ModeFast || m.o.mode == ModeBalanced || m.o.mode == ModeAether {
 			var err error
 			proxyAddr, err = m.localCarrier(ctx)
-			if err != nil {
-				return err
+			if err != nil && m.t != nil {
+				// An optional local carrier failure must not block the direct API,
+				// edge fallback, ECH or Psiphon enrollment attempts.
+				m.t.Note("Local registration carrier unavailable (%v); trying other WARP enrollment routes", err)
 			}
 		} else if canUseEnrollmentProxy(m.o.mode, m.proxy) {
 			proxyAddr = m.o.listen
