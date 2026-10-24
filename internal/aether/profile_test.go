@@ -274,20 +274,28 @@ func TestImplicitEndpointKeepsNativeQuickReconnect(t *testing.T) {
 		got := RunArgs(Profile{Label: "auto", Args: args}, 18190, t.TempDir())
 		count := 0
 		for _, flag := range got {
-			if flag == "--quick-reconnect" { count++ }
+			if flag == "--quick-reconnect" {
+				count++
+			}
 			if flag == "--peer" || flag == "--wg-peer" || flag == "--no-quick-reconnect" {
 				t.Fatalf("implicit endpoint overridden: %v", got)
 			}
 		}
-		if count != 1 { t.Fatalf("native reconnect missing or duplicated: %v", got) }
+		if count != 1 {
+			t.Fatalf("native reconnect missing or duplicated: %v", got)
+		}
 	}
 }
 
 func TestAetherDesktopAndAndroidUseSameCoreGeneration(t *testing.T) {
 	desktop, err := DesktopBundleManifest()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	android, err := AndroidBundleManifest()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if desktop.Version != android.Version {
 		t.Fatalf("desktop %s and Android %s differ", desktop.Version, android.Version)
 	}
