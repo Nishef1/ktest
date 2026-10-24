@@ -15,10 +15,9 @@ import (
 var registerMu sync.Mutex
 
 // RegisterAetherIdentity obtains missing WARP keys while KTest is
-// disconnected: first through another app's local SOCKS5 proxy (via, may be
-// empty), then over the current network, which another active VPN carries.
-// This is the route Patterniha advises since cloudflare-ech.com was blocked
-// (2026-10-21): get the key elsewhere once, then turn the other VPN off.
+// disconnected: use a user-supplied local proxy (if set), then native direct
+// WARP API routes including Cloudflare edge fallback, then fragmented HTTPS.
+// An existing VPN is only an optional carrier for the direct route.
 // Existing keys are never replaced; registration output is never logged.
 func RegisterAetherIdentity(nativeLibraryDir, privateDir, via string) (string, error) {
 	if !filepath.IsAbs(privateDir) {

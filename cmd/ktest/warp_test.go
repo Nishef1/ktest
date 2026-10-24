@@ -360,7 +360,7 @@ func TestAetherHelpOptionMatchingAndEqualsValues(t *testing.T) {
 func TestOfficialAetherAssetSelection(t *testing.T) {
 	for _, platform := range [][2]string{{"windows", "amd64"}, {"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}} {
 		url, hash, err := aetherArchiveFor(platform[0], platform[1])
-		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/v2.3.5/") {
+		if err != nil || len(hash) != 64 || !strings.Contains(url, "releases/download/"+aetherVersion+"/") {
 			t.Fatalf("%v: %s / %s / %v", platform, url, hash, err)
 		}
 	}

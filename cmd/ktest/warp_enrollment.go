@@ -50,6 +50,8 @@ func enrollmentRoutes(ctx context.Context, base, proxy, ech, ip string) []enroll
 			routes = append(routes, enrollmentRoute{"local proxy", []string{"--upstream", "socks5://" + proxy}})
 		}
 	}
+	// v2.4.0 can try Cloudflare-owned API edge IPs even without a VPN.
+	routes = append(routes, enrollmentRoute{"direct WARP API (core edge fallback)", nil})
 	routes = append(routes, enrollmentRoute{"fragmented API HTTPS", []string{"--fragment"}})
 	if ech == "" {
 		fctx, cancel := context.WithTimeout(ctx, 3*time.Second)

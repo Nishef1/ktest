@@ -1,10 +1,10 @@
-# Verified upstream versions — reviewed 2026-10-21
+# Verified upstream versions — reviewed 2026-10-24
 
 Official release pages were checked before selection. This repository does not bundle external executables.
 
 | Component | Version checked | Published | Use in ktest | Official source |
 | --- | --- | --- | --- | --- |
-| Aether | **v2.3.5** | 2026-10-23 | Pinned runtime on Windows/Android; protocol CLI matches v2.3.1; Android verifies archive and extracted executable hashes | https://github.com/patterniha/Aether/releases/tag/v2.3.2 |
+| Aether | **v2.4.0** | 2026-10-24 | Reviewed update for Android/Desktop: WARP API edge fallback, H2/TLS and reconnect fixes; signed APK and real-network acceptance still required | https://github.com/patterniha/Aether/releases/tag/v2.4.0 |
 | Xray-core | **v26.10.21** | 2026-10-21 | Pinned official Windows executable and Android ARM64 `libxray.so`; local TLS-fragment route and Android TUN adapter | https://github.com/XTLS/Xray-core/releases/tag/v26.10.21 |
 | HEV | **2.19.0** | Pinned | Android TUN fallback; app minimum API 29 follows the upstream manifest | https://github.com/heiher/hev-socks5-tunnel |
 | ByeDPI | **v0.17.3** | Pinned | Hash-pinned Android ARM/ARM64 local anti-DPI helper; candidate strategies are not proven for every ISP | https://github.com/hufrea/byedpi/releases/tag/v0.17.3 |

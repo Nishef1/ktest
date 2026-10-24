@@ -1,26 +1,26 @@
 {
-  "version": "v2.3.5",
+  "version": "v2.4.0",
   "repository": "https://github.com/patterniha/Aether",
   "archives": {
     "windows/amd64": {
       "file": "aether-windows-x86_64.zip",
-      "sha256": "b913d080305a74398cfdf47de0917645782d29ff0fe44077884b421943b5957a"
+      "sha256": "84abf564b5549d4fec2e6b8ecde17a8309ffd4a829b3f96a412322cfb0e5e3be"
     },
     "linux/amd64": {
       "file": "aether-linux-x86_64.tar.gz",
-      "sha256": "eeae25cd6e0850dbc2fbbb875d45bd7fdc1fdd7f344a3f6ecf2bd6ac05c11a7a"
+      "sha256": "9c36836ea0abbf6544b6a364a636437eec3f93583f9288f387b2254176bbfed1"
     },
     "linux/arm64": {
       "file": "aether-linux-arm64.tar.gz",
-      "sha256": "583cd9de71f0fbd30dbd8b14be576d34655f111cc6ecb245d2560229991933da"
+      "sha256": "41d7f4a9cff7cd62322d99f7c2963601f9fd17d3446d057cf81f72938ff7f817"
     },
     "darwin/amd64": {
       "file": "aether-macos-x86_64.tar.gz",
-      "sha256": "028114d251b929bb05bf439838886c1eb5971d360ae3d3f50b6b732fab7a3908"
+      "sha256": "e6879c3d025c8b9816c5b083884eace595944fa37f8747b7e0b57285326a913e"
     },
     "darwin/arm64": {
       "file": "aether-macos-arm64.tar.gz",
-      "sha256": "9ce75b64f3cc72aba6ab940cccb15b79e45b46880685a4a5bae4f4a6478ff6e8"
+      "sha256": "f303b9cba2bb53ffd23fe243b3d060a719061dac764f667556f6605d3d23d543"
     }
   }
 }
