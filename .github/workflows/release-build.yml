@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       version_code:
-        description: Android versionCode (higher than the last installed APK; the last was 19)
+        description: Android versionCode (higher than the last installed APK; the last was 20)
         required: true
         type: string
       publish:
