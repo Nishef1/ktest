@@ -1,9 +1,6 @@
 name: Update Aether Android lock
 
 on:
-  # Temporary branch-only lock generation; removed after lock hashes commit.
-  push:
-    branches: [fix/aether-v240-fallbacks-20261024]
   workflow_dispatch:
     inputs:
       version:
@@ -25,7 +22,7 @@ jobs:
           persist-credentials: true
       - name: Derive and pin native hashes from published release
         env:
-          REQUESTED_VERSION: ${{ inputs.version || 'v2.4.0' }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -34,7 +31,7 @@ jobs:
           git diff --check
       - name: Commit the reviewed lock on the feature branch
         env:
-          REQUESTED_VERSION: ${{ inputs.version || 'v2.4.0' }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
