@@ -633,9 +633,7 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
             }
         }
-        Note(if (mode == "aether") "Auto tries independent WARP H2, H3 and WireGuard variants. The selected method stays within its transport; optional Fast only adds compatible TCP paths. An Iran-located WARP exit may not open every destination."
-             else if (mode == "psiphon") "Psiphon Auto uses CDN first unless you explicitly select WARP first. Both require working network paths and a verified foreign exit; a saved WARP key only proves registration."
-             else "Tor is standalone: it does not need WARP keys. Optional Fast is an independent anti-DPI first hop, not an Aether tunnel. Tor circuit bootstrap can take several minutes.")
+        // Detailed route diagnostics belong in Tools.
     }
 }
 
@@ -664,7 +662,7 @@ private fun UpstreamPanel(mode: String, upstream: String, onUpstream: (String) -
                 )
                 KField(upstream, onUpstream, "Local address, e.g. 127.0.0.1:9050", enabled = enabled, mono = true,
                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri)
-                Note("Only the Go core performs exit verification. A listening port alone does not prove Internet access.")
+ 
             }
         }
     }

@@ -221,6 +221,13 @@ func nativeAutoAttemptProfiles(profiles []aether.Profile) []aether.Profile {
 // already been filtered to that transport. Failed processes stop before the
 // next IPv4/IPv6, ECH/non-ECH or compatible carrier candidate starts.
 func launchVerifiedNativeProfiles(ctx context.Context, o nativeOptions) (*nativeCore, observedExit, error) {
+	// Calibrate the user's Auto SNI, fingerprint and fragment preferences
+	// for this network once, using a bounded window; fixed values remain.
+	if o.privateDir != "" && (o.method == "" || o.method == "auto" || o.method == "masque-h2") {
+		tlsCtx, cancelTLS := context.WithTimeout(ctx, 8*time.Second)
+		_, _ = mobileTLSShape(tlsCtx, o.privateDir, true)
+		cancelTLS()
+	}
 	// Discover ECH once, but keep non-ECH IPv4/IPv6 profiles first. A failed
 	// ECH bootstrap must not suppress ordinary MASQUE H2/H3 or WireGuard routes.
 	ech, ip := "", ""

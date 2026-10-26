@@ -280,7 +280,8 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		if probeDir == "" && native != nil {
 			probeDir = native.privateDir
 		}
-		if mode == "psiphon" || frontDir != "" {
+		if frontDir != "" || (mode == "psiphon" && native != nil &&
+			(native.method == "" || native.method == "auto" || native.method == "psiphon-cdn")) {
 			autoPrepareNetworkEdges(startContext, probeDir, mode)
 		}
 	}
