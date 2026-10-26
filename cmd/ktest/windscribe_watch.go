@@ -174,6 +174,7 @@ type windscribeMonitor struct {
 	nextReconnect       time.Time
 	disconnectedSamples int
 	onTCPConnected      func() // optional, once the CLI confirms TCP Connected
+	bootstrapOnly       bool // API error + missing state + no active VPN adapter
 	issue               string // why the last status was unknown
 }
 
@@ -184,6 +185,45 @@ func (m *windscribeMonitor) State() windscribeState {
 }
 
 func (m *windscribeMonitor) Connected() bool { return m != nil && m.State() == windscribeConnected }
+
+// BootstrapOnly authorizes starting the requested Aether carrier, NOT a VPN
+// login, reconnect or a claim that Windscribe is disconnected.
+func (m *windscribeMonitor) BootstrapOnly() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.bootstrapOnly && m.state == windscribeUnknown
+}
+
+// Only a local CLI response with a known account-API error and no usable
+// Connect state can enter limited bootstrap. The Windows VPN-adapter check
+// must be clean. A malformed response, a busy/connected tunnel, or IPC
+// failure never grants this permission. Aether can then provide network
+// access before Windscribe's account API becomes reachable.
+func windscribeCanBootstrapAPIError(raw string, parsed windscribeState, cliErr error, vpnUp bool) bool {
+	if cliErr != nil || vpnUp || parsed != windscribeUnknown {
+		return false
+	}
+	apiError := false
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
+		low := strings.ToLower(strings.TrimSpace(line))
+		low = strings.TrimSpace(strings.TrimPrefix(low, "*"))
+		if strings.HasPrefix(low, "login state:") {
+			apiError = strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(low, "login state:")), "error:")
+		}
+		if strings.HasPrefix(low, "connect state:") {
+			value := strings.TrimSpace(strings.TrimPrefix(low, "connect state:"))
+			// Only an absent/unknown state may use limited bootstrap. A
+			// connecting, connected, pending or unrecognized state must not.
+			if value != "" && value != "unknown" && value != "n/a" {
+				return false
+			}
+		}
+	}
+	return apiError
+}
 
 func (m *windscribeMonitor) markBridgeReady() {
 	if m == nil {
@@ -273,10 +313,14 @@ var vpnAdapterUp = func() bool { return len(activeVPNAdapters()) > 0 }
 func (m *windscribeMonitor) refresh(ctx context.Context) {
 	out, err := m.command(ctx, "status")
 	state, loggedIn := parseWindscribeStatus(string(out))
-	m.mu.Lock()
 	parsed := state
+	bootstrap := windscribeCanBootstrapAPIError(string(out), parsed, err, vpnAdapterUp())
+	m.mu.Lock()
 	state = windscribeObservedState(m.state, m.lastValidCLIStatus, time.Now(), state, loggedIn, err)
+	m.bootstrapOnly = bootstrap && state == windscribeUnknown
 	switch {
+	case m.bootstrapOnly:
+		m.issue = "Windscribe account API is blocked; Aether bootstrap can start, but VPN status and login remain unverified"
 	case state != windscribeUnknown:
 		m.issue = ""
 	case err != nil:
@@ -417,10 +461,21 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 			case <-time.After(2 * time.Second):
 			}
 			m.refresh(ctx)
+			// Two consecutive local CLI readings are enough to identify the
+			// specific API-only outage. No need to wait another 18 seconds.
+			if m.BootstrapOnly() {
+				break
+			}
 		}
 	}
 	if m.State() == windscribeUnknown {
-		if !monitorUnknownCLIAllowed(o.mode) {
+		if o.mode == ModeWindscribeAether && m.BootstrapOnly() {
+			m.mu.Lock()
+			m.autoReconnect = false
+			m.mu.Unlock()
+			t.Note("Windscribe account API unavailable; no active VPN adapter detected. Starting Aether carrier only.")
+			t.Note("Windscribe VPN is NOT connected or verified. Connect manually only after checking its app state; automatic reconnect is disabled.")
+		} else if !monitorUnknownCLIAllowed(o.mode) {
 			m.mu.RLock()
 			issue := m.issue
 			m.mu.RUnlock()
@@ -430,12 +485,14 @@ func startWindscribeMonitor(ctx context.Context, o connectOptions, t *term) *win
 			}
 			return nil
 		}
-		// Continue read-only polling so a transient IPC failure does not
-		// permanently disable confirmation of a later healthy TCP session.
-		m.autoReconnect = false
-		t.Note("Watching for Windscribe's connection; automatic reconnect is off until status is available")
-		if o.verbose {
-			t.Note("Use -windscribe-cli with an absolute executable path for a custom installation.")
+		if o.mode == ModeWindscribe {
+			// Continue read-only polling so a transient IPC failure does
+			// not permanently disable a later healthy TCP session.
+			m.autoReconnect = false
+			t.Note("Watching Windscribe; automatic reconnect is off until status is available")
+			if o.verbose {
+				t.Note("Use -windscribe-cli with an absolute path for a custom installation.")
+			}
 		}
 	}
 	go func() {

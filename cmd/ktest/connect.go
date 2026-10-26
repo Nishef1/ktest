@@ -618,7 +618,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		t.Line(toneFail, "Windscribe through Aether needs a trusted CLI state; check Windscribe/login before starting a second tunnel")
 		return 1
 	}
-	if monitor != nil && (monitor.Connected() || (o.mode == ModeWindscribeAether && monitor.State() != windscribeDisconnected) || (o.ws.packetEnabled() && monitor.State() == windscribeUnknown)) {
+	if monitor != nil && (monitor.Connected() ||
+		(o.mode == ModeWindscribeAether && monitor.State() != windscribeDisconnected && !monitor.BootstrapOnly()) ||
+		(o.ws.packetEnabled() && monitor.State() == windscribeUnknown)) {
 		t.Note("Windscribe is %s. Standing by until the official CLI confirms disconnect; existing VPN is left running.", monitor.State())
 		if !monitor.waitDisconnected(ctx) {
 			return 0
