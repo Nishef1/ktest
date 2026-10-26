@@ -49,18 +49,32 @@ internal data class ConnectionMode(
 
 internal val nativeModes = setOf("aether", "tor", "psiphon")
 
-// The Go catalog is the canonical description of the current CLI modes.
-// Android does not silently rebrand Psiphon or Tor as unrelated transports.
+// The Go catalog retains stable CLI labels and transport policies.
+// Android uses shorter display labels while preserving exact mode IDs.
 internal val modes: List<ConnectionMode> by lazy {
     runCatching {
         val values = JSONObject(Mobilebridge.connectionModes()).getJSONArray("modes")
         (0 until values.length()).map { i ->
             val item = values.getJSONObject(i)
-            ConnectionMode(
-                item.getString("id"), item.getString("title"),
-                item.getString("subtitle"), item.getBoolean("available"),
-                item.optString("limitation"), item.optString("details")
-            )
+            val id = item.getString("id")
+            val title = when (id) {
+                "aether" -> "Aether (WARP)"
+                "psiphon" -> "Psiphon"
+                "tor" -> "Tor"
+                else -> item.getString("title")
+            }
+            val subtitle = when (id) {
+                "psiphon" -> "Standalone CDN first; optional WARP-first chain"
+                "tor" -> "Independent Tor; optional local anti-DPI"
+                else -> item.getString("subtitle")
+            }
+            val details = when (id) {
+                "psiphon" -> "Psiphon Auto uses CDN directly by default, without WARP keys. Choose WARP first in Connection method to try the chain when its keys exist. Local Fast anti-DPI is a separate optional carrier; each successful exit must be verified."
+                "tor" -> "Tor runs independently and needs no WARP key. Fast anti-DPI is an optional local first hop, not Aether."
+                else -> item.optString("details")
+            }
+            ConnectionMode(id, title, subtitle, item.getBoolean("available"),
+                item.optString("limitation"), details)
         }
     }.getOrElse {
         listOf(ConnectionMode("balanced", "Balanced", "Connection catalog unavailable", false,
@@ -458,6 +472,21 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
     }
     var expanded by remember { mutableStateOf(false) }
     Panel {
+        val needsWARP = mode == "aether" || (mode == "psiphon" && method == "psiphon-warp")
+        if (needsWARP) {
+            val privateDir = androidx.compose.ui.platform.LocalContext.current.filesDir.absolutePath
+            var identityStatus by remember(privateDir) { mutableStateOf<JSONObject?>(null) }
+            LaunchedEffect(privateDir, method) {
+                identityStatus = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { JSONObject(Mobilebridge.aetherIdentityStatus(privateDir)) }.getOrNull()
+                }
+            }
+            val valid = identityStatus?.optInt("valid", -1) ?: -1
+            if (valid >= 0) {
+                Note("Saved WARP identities: $valid. Aether can register missing keys automatically; manage or back up keys in Settings. A key is not proof of a working connection.",
+                    if (valid == 0) Tone.Warn else Tone.Info)
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconTile(KIcons.Bolt, K.cyan)
             Spacer(Modifier.width(14.dp))
@@ -493,13 +522,14 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
             Note("The saved method is no longer compatible with this mode. Select a supported method before connecting.", Tone.Warn)
         }
         if (mode == "aether") {
+            Note("Aether is a WARP connection, not a switch that enables Psiphon or Tor. H2, H3 and WireGuard require a saved WARP key; missing keys are registered before the first scan.")
             val prefs = androidx.compose.ui.platform.LocalContext.current
                 .getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
             var viaFast by remember { mutableStateOf(prefs.getBoolean("aether_via_fast", false)) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Try local anti-DPI carrier", color = K.text, fontSize = 14.sp)
-                    Text("Auto keeps every Aether transport eligible. TCP/HTTP2 may use the local carrier; UDP/HTTP3 and WireGuard are still tried directly.",
+                    Text("Optional: Fast anti-DPI before HTTP/2", color = K.text, fontSize = 14.sp)
+                    Text("Adds a local Fast carrier to compatible H2 methods before direct attempts. H3 and WireGuard stay direct, and failure to start Fast no longer blocks Aether.",
                         color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
                 }
                 Switch(viaFast, { viaFast = it; prefs.edit().putBoolean("aether_via_fast", it).apply() }, enabled = enabled,
@@ -507,21 +537,49 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                         uncheckedThumbColor = K.muted, uncheckedTrackColor = K.surfaceHigh, uncheckedBorderColor = K.strokeStrong))
             }
             if (viaFast && method != "auto" && method !in setOf("masque-h2", "gool-h2", "mim-h2"))
-                Note("This explicitly selected method cannot use the TCP carrier. Turn the carrier off to use it directly, or choose Auto to try all compatible transports.", Tone.Warn)
+                Note("The Fast carrier applies to HTTP/2 only. This selected transport remains direct even while the option is on.")
         }
         if (mode == "psiphon") {
             val prefs = androidx.compose.ui.platform.LocalContext.current
                 .getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
-            var viaAether by remember { mutableStateOf(prefs.getBoolean("native_via_aether", true)) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Connect Aether first", color = K.text, fontSize = 14.sp)
-                    Text("Brings up a verified WARP tunnel and runs Psiphon through it. If that fails, it connects on its own.",
-                        color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
+            var viaAether by remember { mutableStateOf(prefs.getBoolean("native_via_aether", false)) }
+            if (method == "auto") {
+                Text("Psiphon connection order", color = K.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Segmented(listOf("direct" to "CDN first", "warp" to "WARP first"),
+                    if (viaAether) "warp" else "direct",
+                    { selected ->
+                        viaAether = selected == "warp"
+                        prefs.edit().putBoolean("native_via_aether", viaAether).apply()
+                    }, enabled = enabled)
+                Note(if (viaAether)
+                    "1. If saved WARP keys are valid, try Psiphon inside Aether. 2. If unsuccessful or keys are missing, use independent Psiphon CDN. No WARP key is required for step 2."
+                    else "1. Try independent Psiphon CDN directly (no WARP key). Aether will not be started in this mode unless you choose WARP first.")
+            } else if (method == "psiphon-warp") {
+                Note("Explicit Psiphon-through-WARP: WARP keys are required. Select Auto to allow standalone CDN fallback.", Tone.Warn)
+            } else {
+                Note("Explicit standalone Psiphon: WARP is never started, regardless of the saved Auto preference.")
+            }
+        }
+        if (mode == "psiphon" || mode == "tor") {
+            val prefs = androidx.compose.ui.platform.LocalContext.current
+                .getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
+            var viaFast by remember(mode) { mutableStateOf(prefs.getBoolean("native_via_fast", true)) }
+            var advanced by remember(mode) { mutableStateOf(false) }
+            Row(Modifier.fillMaxWidth().clickable(enabled = enabled) { advanced = !advanced },
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Advanced: local Fast anti-DPI", color = K.muted, fontSize = 13.sp,
+                    modifier = Modifier.weight(1f))
+                Text(if (viaFast) "Enabled" else "Disabled", color = K.faint, fontSize = 12.sp)
+                Icon(KIcons.ExpandMore, "Show advanced carrier settings", tint = K.muted)
+            }
+            if (advanced) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Try local Fast carrier before direct dialing", modifier = Modifier.weight(1f),
+                        color = K.text, fontSize = 13.sp)
+                    Switch(viaFast, { viaFast = it; prefs.edit().putBoolean("native_via_fast", it).apply() },
+                        enabled = enabled)
                 }
-                Switch(viaAether, { viaAether = it; prefs.edit().putBoolean("native_via_aether", it).apply() }, enabled = enabled,
-                    colors = SwitchDefaults.colors(checkedThumbColor = K.bg, checkedTrackColor = K.mint,
-                        uncheckedThumbColor = K.muted, uncheckedTrackColor = K.surfaceHigh, uncheckedBorderColor = K.strokeStrong))
+                Note("Fast is a local anti-DPI helper, NOT Aether/WARP. If it fails to start, direct dialing remains available; standalone Psiphon also retries directly when the helper cannot carry it.")
             }
         }
         if (mode == "psiphon") {
@@ -568,9 +626,9 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text(coreLog, color = K.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = K.mono)
             }
         }
-        Note(if (mode == "aether") "Auto tries independent WARP transports; a selected method tries its own IPv4/IPv6 and ECH/non-ECH variants without switching protocols. With the local carrier enabled, compatible H2 carrier variants are added without removing direct H3/WireGuard attempts in Auto. This Aether-only mode does not silently switch to Psiphon/Tor. An exit located in Iran may not work for every destination. First-time setup can take several minutes."
-             else if (mode == "psiphon") "Auto runs Psiphon inside a verified Aether (WARP) tunnel first, then on its own with CDN fronting. Plain Psiphon does not connect from Iran; choose it yourself if you want it."
-             else "Tor runs on its own (Tor inside WARP stalled in a test). Circuit bootstrap and independently verified foreign exit may take several minutes.")
+        Note(if (mode == "aether") "Auto tries independent WARP H2, H3 and WireGuard variants. The selected method stays within its transport; optional Fast only adds compatible TCP paths. An Iran-located WARP exit may not open every destination."
+             else if (mode == "psiphon") "Psiphon Auto uses CDN first unless you explicitly select WARP first. Both require working network paths and a verified foreign exit; a saved WARP key only proves registration."
+             else "Tor is standalone: it does not need WARP keys. Optional Fast is an independent anti-DPI first hop, not an Aether tunnel. Tor circuit bootstrap can take several minutes.")
     }
 }
 

@@ -35,8 +35,8 @@ android {
         targetSdk = 35
         // Monotonic Android package revision; not a CPU architecture version.
         // Release builds pass -PktestVersionCode / -PktestVersionName.
-        versionCode = providers.gradleProperty("ktestVersionCode").orNull?.toInt() ?: 22
-        versionName = providers.gradleProperty("ktestVersionName").orNull ?: "0.5.2-preview"
+        versionCode = providers.gradleProperty("ktestVersionCode").orNull?.toInt() ?: 23
+        versionName = providers.gradleProperty("ktestVersionName").orNull ?: "0.5.3-preview"
         // The default device build remains ARM. Explicit x86_64 selection is
         // for emulator validation against the same packaged upstream cores.
         ndk { abiFilters += (providers.gradleProperty("ktestAbis").orNull

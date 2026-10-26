@@ -267,7 +267,7 @@ class ProxyService : Service() {
                                     }.onFailure { Mobilebridge.setAetherTLS("auto", "auto", "auto") }
                                     runCatching { Mobilebridge.setPsiphonRegion(p.getString("psiphon_region", "").orEmpty()) }
                                         .onFailure { p.edit().remove("psiphon_region").apply() }
-                                    Mobilebridge.setNativeViaAether(p.getBoolean("native_via_aether", true))
+                                    Mobilebridge.setNativeViaAether(p.getBoolean("native_via_aether", false))
                                 }
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {

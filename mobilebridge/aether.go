@@ -47,7 +47,7 @@ func AetherProfileCatalog(mode, method string) (string, error) {
 					if mode == "aether" {
 						choice.Title = "Automatic (tries Aether transports)"
 					} else if mode == "psiphon" {
-						choice.Title = "Default Psiphon (direct)"
+						choice.Title = "Automatic (Psiphon CDN + optional WARP chain)"
 					}
 				}
 				methods = append(methods, choice)

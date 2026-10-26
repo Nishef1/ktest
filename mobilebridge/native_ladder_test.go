@@ -47,6 +47,18 @@ func TestLadderProfilesAutoIsCDNOnly(t *testing.T) {
 	}
 }
 
+func TestPsiphonWARPPreferenceDefaultIndependent(t *testing.T) {
+	SetNativeViaAether(false)
+	t.Cleanup(func() { SetNativeViaAether(false) })
+	if currentViaAetherFirst() {
+		t.Fatal("standalone Psiphon should be first unless WARP-first is explicitly enabled")
+	}
+	SetNativeViaAether(true)
+	if !currentViaAetherFirst() {
+		t.Fatal("the user's WARP-first preference was ignored")
+	}
+}
+
 func TestPsiphonRegionOnlyAppliesToPsiphon(t *testing.T) {
 	t.Cleanup(func() { _ = SetPsiphonRegion("") })
 	_ = SetPsiphonRegion("NL")
@@ -57,5 +69,28 @@ func TestPsiphonRegionOnlyAppliesToPsiphon(t *testing.T) {
 	tor, _ := aether.StandaloneProfiles("tor", "auto")
 	if aether.WithPsiphonRegion(tor[0], "NL").Has("--psiphon-region") {
 		t.Fatal("Tor must not get a Psiphon region")
+	}
+}
+
+func TestPsiphonAutoSkipsWARPWhenNoKeysExist(t *testing.T) {
+	SetNativeViaAether(true)
+	t.Cleanup(func() { SetNativeViaAether(false) })
+	profiles, err := ladderProfilesForLaunch("psiphon", "auto", t.TempDir())
+	if err != nil || len(profiles) == 0 {
+		t.Fatalf("no independent Psiphon candidates: %v %v", profiles, err)
+	}
+	for _, p := range profiles {
+		if p.ChainFlag() != "" || p.Method() != "psiphon-cdn" {
+			t.Fatalf("auto should not provision WARP before standalone CDN: %v", p.Args)
+		}
+	}
+	// Explicit chain is a deliberate strict choice, not an implicit fallback.
+	strict, err := ladderProfilesForLaunch("psiphon", "psiphon-warp", t.TempDir())
+	if err != nil || len(strict) == 0 || strict[0].ChainFlag() != "--psiphon" {
+		t.Fatalf("explicit WARP first unexpectedly changed protocols: %v %v", strict, err)
+	}
+	tor, err := ladderProfilesForLaunch("tor", "auto", t.TempDir())
+	if err != nil || len(tor) != 1 || !tor[0].Has("--tor-only") {
+		t.Fatalf("Tor used WARP preference: %v %v", tor, err)
 	}
 }

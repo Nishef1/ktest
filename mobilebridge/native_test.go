@@ -154,16 +154,22 @@ func TestAndroidExplicitAetherMethodScansOnlyItsIPv4IPv6Variants(t *testing.T) {
 	}
 	hasCarriedIPv6 := false
 	for _, p := range carriedH2 {
-		if p.Method() != "masque-h2" || !p.LocalCarrier() {
-			t.Fatalf("explicit H2 through Fast selected an incompatible profile: %+v", p)
+		if p.Method() != "masque-h2" {
+			t.Fatalf("explicit H2 through Fast selected a different transport: %+v", p)
 		}
 		hasCarriedIPv6 = hasCarriedIPv6 || p.Has("-6")
 	}
 	if !hasCarriedIPv6 {
 		t.Fatalf("explicit H2 through Fast lost its IPv6 carrier variant: %+v", carriedH2)
 	}
-	if _, err := nativeProfilesForSelection(carrierProfiles, "wireguard", true); err == nil {
-		t.Fatal("WireGuard must not be silently forced through the TCP carrier")
+	wireguard, err := nativeProfilesForSelection(carrierProfiles, "wireguard", true)
+	if err != nil || len(wireguard) == 0 {
+		t.Fatalf("optional Fast toggle removed direct WireGuard: %v, %v", wireguard, err)
+	}
+	for _, p := range wireguard {
+		if p.Method() != "wireguard" || p.LocalCarrier() {
+			t.Fatalf("UDP method was forced through TCP carrier: %+v", p)
+		}
 	}
 }
 
