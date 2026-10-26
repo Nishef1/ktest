@@ -13,7 +13,7 @@ import (
 // Settings the app applies before each connection, like SetAetherTLS.
 var (
 	nativeSettingsMu sync.Mutex
-	psiphonRegion    string // upper-case ISO country code, "" = Psiphon's choice
+	psiphonRegion    string  // upper-case ISO country code, "" = Psiphon's choice
 	viaAetherFirst   = false // Psiphon Auto is independent by default; WARP-first is explicit
 )
 

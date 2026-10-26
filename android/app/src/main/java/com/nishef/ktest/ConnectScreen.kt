@@ -49,18 +49,32 @@ internal data class ConnectionMode(
 
 internal val nativeModes = setOf("aether", "tor", "psiphon")
 
-// The Go catalog is the canonical description of the current CLI modes.
-// Android does not silently rebrand Psiphon or Tor as unrelated transports.
+// The Go catalog retains stable CLI labels and transport policies.
+// Android uses shorter display labels while preserving exact mode IDs.
 internal val modes: List<ConnectionMode> by lazy {
     runCatching {
         val values = JSONObject(Mobilebridge.connectionModes()).getJSONArray("modes")
         (0 until values.length()).map { i ->
             val item = values.getJSONObject(i)
-            ConnectionMode(
-                item.getString("id"), item.getString("title"),
-                item.getString("subtitle"), item.getBoolean("available"),
-                item.optString("limitation"), item.optString("details")
-            )
+            val id = item.getString("id")
+            val title = when (id) {
+                "aether" -> "Aether (WARP)"
+                "psiphon" -> "Psiphon"
+                "tor" -> "Tor"
+                else -> item.getString("title")
+            }
+            val subtitle = when (id) {
+                "psiphon" -> "Standalone CDN first; optional WARP-first chain"
+                "tor" -> "Independent Tor; optional local anti-DPI"
+                else -> item.getString("subtitle")
+            }
+            val details = when (id) {
+                "psiphon" -> "Psiphon Auto uses CDN directly by default, without WARP keys. Choose WARP first in Connection method to try the chain when its keys exist. Local Fast anti-DPI is a separate optional carrier; each successful exit must be verified."
+                "tor" -> "Tor runs independently and needs no WARP key. Fast anti-DPI is an optional local first hop, not Aether."
+                else -> item.optString("details")
+            }
+            ConnectionMode(id, title, subtitle, item.getBoolean("available"),
+                item.optString("limitation"), details)
         }
     }.getOrElse {
         listOf(ConnectionMode("balanced", "Balanced", "Connection catalog unavailable", false,
