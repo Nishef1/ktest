@@ -269,9 +269,9 @@ func TestAPIErrorDisconnectIsDistrustedWhileAVPNAdapterIsUp(t *testing.T) {
 
 func TestLimitedAetherBootstrapForBlockedAccountAPI(t *testing.T) {
 	for _, tc := range []struct {
-		name, raw string
-		state windscribeState
-		err error
+		name, raw    string
+		state        windscribeState
+		err          error
 		vpnUp, allow bool
 	}{
 		{"API blocked with no connection field", "Login state: Error: SSL error\nFirewall state: Off", windscribeUnknown, nil, false, true},

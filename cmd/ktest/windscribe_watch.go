@@ -174,7 +174,7 @@ type windscribeMonitor struct {
 	nextReconnect       time.Time
 	disconnectedSamples int
 	onTCPConnected      func() // optional, once the CLI confirms TCP Connected
-	bootstrapOnly       bool // API error + missing state + no active VPN adapter
+	bootstrapOnly       bool   // API error + missing state + no active VPN adapter
 	issue               string // why the last status was unknown
 }
 
