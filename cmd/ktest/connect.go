@@ -648,7 +648,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// The listen address is needed at the end; find out now, not after the cores
 	// have been started.
-	if chosen, changed, err := recoverLoopbackListen(o.listen, connectListenDefault); err != nil {
+	if chosen, changed, err := recoverSessionListen(o.mode, o.listen, connectListenDefault); err != nil {
 		t.Println("")
 		t.Box("CANNOT LISTEN", toneFail, []string{err.Error(), "An explicit -listen port is never changed without your request."})
 		return 1
@@ -657,7 +657,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		o.listen = chosen
 	}
 	if !o.noHTTP {
-		if chosen, changed, err := recoverLoopbackListen(o.httpListen, connectHTTPDefault); err == nil {
+		if chosen, changed, err := recoverSessionListen(o.mode, o.httpListen, connectHTTPDefault); err == nil {
 			if changed {
 				t.Note("Default HTTP port %s is occupied. Using %s; update any application's manual proxy setting.", o.httpListen, chosen)
 				o.httpListen = chosen

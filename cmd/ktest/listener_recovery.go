@@ -32,3 +32,18 @@ func recoverLoopbackListen(requested, stock string) (string, bool, error) {
 	_ = alternate.Close()
 	return address, true, nil
 }
+
+// recoverSessionListen keeps Windscribe's actual proxy endpoints consistent
+// with its explicit HTTP Proxy Settings. An automatically relocated listener
+// would leave Windscribe connecting to 10801 while KTest listens elsewhere.
+// All other modes retain the previous auto-recovery policy.
+func recoverSessionListen(mode ConnectionMode, requested, stock string) (string, bool, error) {
+	if !mode.isWindscribe() {
+		return recoverLoopbackListen(requested, stock)
+	}
+	address, _, err := recoverLoopbackListen(requested, "")
+	if err != nil {
+		return "", false, fmt.Errorf("Windscribe proxy port %s is occupied; close the conflicting listener or explicitly change the KTest listener and Windscribe HTTP Proxy Settings together: %w", requested, err)
+	}
+	return address, false, nil
+}
