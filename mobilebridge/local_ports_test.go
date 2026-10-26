@@ -32,7 +32,9 @@ func TestAndroidPortsAreFixedAndValidated(t *testing.T) {
 		t.Fatalf("CLI/test ephemeral listeners unexpectedly changed: %s %s", a, b)
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer listener.Close()
 	if msg := listenerError("SOCKS5", listener.Addr().String(), errBusy{}).Error(); !strings.Contains(msg, "Settings") {
 		t.Fatalf("busy port did not explain how to change it: %s", msg)
@@ -40,4 +42,5 @@ func TestAndroidPortsAreFixedAndValidated(t *testing.T) {
 }
 
 type errBusy struct{}
+
 func (errBusy) Error() string { return "address in use" }

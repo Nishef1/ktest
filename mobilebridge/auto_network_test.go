@@ -7,6 +7,15 @@ import (
 
 func TestAutomaticCDNScannerGates(t *testing.T) {
 	dir := t.TempDir()
+	routeNetworkMu.Lock()
+	old := routeNetworkToken
+	routeNetworkToken = ""
+	routeNetworkMu.Unlock()
+	defer func() {
+		routeNetworkMu.Lock()
+		routeNetworkToken = old
+		routeNetworkMu.Unlock()
+	}()
 	if autoEdgeEligible("fast", dir) {
 		t.Fatal("automatic CDN scanning must not start without an identified network")
 	}

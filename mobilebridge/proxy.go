@@ -280,7 +280,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		if probeDir == "" && native != nil {
 			probeDir = native.privateDir
 		}
-		autoPrepareNetworkEdges(startContext, probeDir, mode)
+		if mode == "psiphon" || frontDir != "" {
+			autoPrepareNetworkEdges(startContext, probeDir, mode)
+		}
 	}
 	switch mode {
 	case "balanced", "fast", "aether":

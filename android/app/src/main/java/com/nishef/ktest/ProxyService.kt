@@ -271,8 +271,8 @@ class ProxyService : Service() {
                                     // The app always binds to stable loopback ports unless
                                     // the user explicitly changes them in Settings.
                                     Mobilebridge.setLocalProxyPorts(
-                                        p.getInt("listener_socks_port", 10808),
-                                        p.getInt("listener_http_port", 10809))
+                                        p.getInt("listener_socks_port", 10808).toLong(),
+                                        p.getInt("listener_http_port", 10809).toLong())
                                 }
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {

@@ -149,7 +149,7 @@ internal fun SettingsScreen(
                             "Choose ports from 1024 to 65535."
                         socks == http -> "SOCKS5 and HTTP ports must be different."
                         else -> runCatching {
-                            Mobilebridge.setLocalProxyPorts(socks, http)
+                            Mobilebridge.setLocalProxyPorts(socks.toLong(), http.toLong())
                             preferences.edit().putInt("listener_socks_port", socks)
                                 .putInt("listener_http_port", http).apply()
                             portSaved = true
