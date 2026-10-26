@@ -108,11 +108,7 @@ internal fun ConnectScreen(
         if (state == LinkState.Active) {
             EndpointsPanel(status, routeReport, checkingRoute, onCheckRoute, onCopy)
         }
-        if (activeMode.id == "balanced" || activeMode.id == "fast") {
-            RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
-                canTestRoutes, onTestRoutes, onCancelRouteTest)
-        }
-        // Detailed protocol notes belong in Settings/Tools, not above Connect.
+        // Connection details are below the core controls.
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
         if (activeMode.id in nativeModes) {
@@ -120,6 +116,10 @@ internal fun ConnectScreen(
         }
         if (activeMode.available && activeMode.id in listOf("balanced", "fast", "aether")) {
             UpstreamPanel(activeMode.id, upstream, onUpstream, !locked)
+        }
+        if (activeMode.id == "balanced" || activeMode.id == "fast") {
+            RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
+                canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
         if (coverage != "vpn") UsagePanel()
     }

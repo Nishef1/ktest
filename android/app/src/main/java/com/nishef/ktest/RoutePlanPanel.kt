@@ -1,12 +1,14 @@
 package com.nishef.ktest
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +41,7 @@ internal fun RoutePlanPanel(
     s: RoutePlanState, connected: Boolean, connecting: Boolean,
     canTest: Boolean, onTest: () -> Unit, onCancel: () -> Unit
 ) {
+    var showDetails by rememberSaveable { mutableStateOf(false) }
     val report = s.report
     val profile = report?.optJSONObject("profile")
     val running = report?.optBoolean("running") == true
@@ -48,16 +51,17 @@ internal fun RoutePlanPanel(
     val targetsChanged = s.changedProfileAt != null &&
         (profile == null || profile.optString("completed_at") == s.changedProfileAt)
     Panel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().clickable { showDetails = !showDetails }, verticalAlignment = Alignment.CenterVertically) {
             IconTile(KIcons.Route, K.cyan)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text("Manual route diagnostics", color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text("Optional observations · connection stays adaptive",
+                Text("Advanced route tests", color = K.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(if (running) "Testing…" else if (fresh) "Recent results saved" else "Optional",
                     color = K.muted, fontSize = 12.sp)
             }
+            Text(if (showDetails) "Hide" else "Show", color = K.cyan, fontSize = 12.sp)
         }
-        Note("Connect starts without these tests and learns routes from live traffic. Manual results describe only the tested URLs, not feeds or playback.")
+        if (showDetails) {
         if (running || s.starting) {
             val done = report?.optInt("completed") ?: 0
             val total = report?.optInt("total") ?: 0
@@ -129,8 +133,7 @@ internal fun RoutePlanPanel(
                 }
             }
         }
-        report?.optString("note")?.takeIf { it.isNotBlank() }?.let { Note(it) }
-        Note("A successful HTTPS request proves only the listed probe. HTTP 403 is a service refusal, even with verified TLS. These checks do not prove native-app CA trust, account access, working APIs or playable media.")
+        }
     }
 }
 
