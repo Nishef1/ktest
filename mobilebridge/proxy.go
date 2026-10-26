@@ -273,6 +273,15 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	if localStateDir != "" && realPrivateDirectory(localStateDir) {
 		cdnranges.Load(localStateDir)
 	}
+	// Bounded preflight, not an exhaustive scan: keep measured edges for this
+	// network, then allow live routing to adapt to actual target responses.
+	if !testOnly {
+		probeDir := localStateDir
+		if probeDir == "" && native != nil {
+			probeDir = native.privateDir
+		}
+		autoPrepareNetworkEdges(startContext, probeDir, mode)
+	}
 	switch mode {
 	case "balanced", "fast", "aether":
 	case "psiphon", "tor":

@@ -239,7 +239,7 @@ func runCDNScan(ctx context.Context, cancel context.CancelFunc, provider, family
 		failure = "could not complete private scan export"
 	}
 	if dir != "" && len(best) > 0 && !writeFailed {
-		if saveVerifiedCDNEdges(dir, edges.VerifiedCache{Provider: provider, Source: preset.Source, VerifiedAt: time.Now().UTC(), Results: best}) != nil {
+		if saveVerifiedCDNEdges(dir, edges.VerifiedCache{Provider: provider, Network: cdnCacheNetwork(), Source: preset.Source, VerifiedAt: time.Now().UTC(), Results: best}) != nil {
 			cacheFailed = true
 			failure = "scan finished but verified provider edges could not be saved"
 		}
@@ -360,5 +360,5 @@ func loadVerifiedCDNEdges(privateFilesDir, provider string) []string {
 	if !realPrivateDirectory(dir) {
 		return nil
 	}
-	return edges.LoadVerified(dir, provider, "")
+	return edges.LoadVerified(dir, provider, cdnCacheNetwork())
 }
