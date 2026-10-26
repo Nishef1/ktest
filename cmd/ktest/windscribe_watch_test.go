@@ -266,3 +266,38 @@ func TestAPIErrorDisconnectIsDistrustedWhileAVPNAdapterIsUp(t *testing.T) {
 		t.Fatalf("Disconnected with a live VPN adapter was trusted: %s", got)
 	}
 }
+
+func TestLimitedAetherBootstrapForBlockedAccountAPI(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw    string
+		state        windscribeState
+		err          error
+		vpnUp, allow bool
+	}{
+		{"API blocked with no connection field", "Login state: Error: SSL error\nFirewall state: Off", windscribeUnknown, nil, false, true},
+		{"API blocked with unknown state", "Login state: Error: Network error\nConnect state: Unknown", windscribeUnknown, nil, false, true},
+		{"active VPN adapter", "Login state: Error: SSL error", windscribeUnknown, nil, true, false},
+		{"known disconnect uses normal flow", "Login state: Error: SSL error\nConnect state: Disconnected", windscribeDisconnected, nil, false, false},
+		{"connected tunnel not overwritten", "Login state: Error: SSL error\nConnect state: Connected: Berlin\nProtocol: TCP:443", windscribeUnknown, nil, false, false},
+		{"pending connection", "Login state: Error: SSL error\n*Connect state: Connected: Berlin", windscribeUnknown, nil, false, false},
+		{"connecting", "Login state: Error: SSL error\nConnect state: Connecting", windscribeUnknown, nil, false, false},
+		{"logout", "Login state: Not logged in\nConnect state: Unknown", windscribeUnknown, nil, false, false},
+		{"unrecognized no API error", "Login state: Logged in\nConnect state: Unknown", windscribeUnknown, nil, false, false},
+		{"CLI IPC error", "Login state: Error: SSL error", windscribeUnknown, errors.New("IPC"), false, false},
+		{"malformed state", "Login state: Error: SSL error\nConnect state: Waiting", windscribeUnknown, nil, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := windscribeCanBootstrapAPIError(tc.raw, tc.state, tc.err, tc.vpnUp); got != tc.allow {
+				t.Fatalf("bootstrap=%v, want=%v", got, tc.allow)
+			}
+		})
+	}
+	m := &windscribeMonitor{state: windscribeUnknown, bootstrapOnly: true, autoReconnect: false}
+	if !m.BootstrapOnly() || m.Connected() {
+		t.Fatal("limited bootstrap was mistaken for authenticated VPN connectivity")
+	}
+	m.state = windscribeConnected
+	if m.BootstrapOnly() {
+		t.Fatal("active VPN was granted Aether bootstrap permission")
+	}
+}

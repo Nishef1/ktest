@@ -21,3 +21,9 @@ Portable build, Go unit and race tests are mandatory. An actual Windows Windscri
 ## HTTP proxy isolation
 
 The HTTP listener accepts CONNECT requests without a password. Any non-loopback bind (`0.0.0.0`, `::`, LAN/public addresses) is rejected to prevent exposing it as an open proxy. Windscribe local and through-Aether modes also reject port 0 and privileged ports. The Windscribe setup panel shows the actual configured HTTP address when an explicit custom port is used; it is not hard-coded to 10801. Local diagnostics and other modes keep ephemeral loopback-port support when explicitly requested.
+
+## Account API circular-bootstrap regression
+
+When Windscribe CLI itself replies with `Login state: Error: SSL error` (or another explicit API error) and omits its connection state, the previous Aether mode stopped **before Aether was ever started**. This is a bootstrap circularity on restricted networks where a usable network path may need to come before the account API. A missing CLI executable, failed IPC command, ordinary logout, unrecognized response, VPN adapter already up, or connected/connecting/pending indication still fails closed.
+
+A limited, *Aether-carrier-only* bootstrap is now permitted after repeated API-only CLI responses with no active VPN adapter. No Windscribe VPN session is claimed, no automatic reconnect is allowed, and the user must check the Windscribe app before connecting. This is not a bypass for uncertain live VPN states. The monitor continues polling so successful local state reads can transition the UI normally. This does not prove successful Aether network traversal or that Windscribe API traffic will use the carrier.
