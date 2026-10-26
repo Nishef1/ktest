@@ -269,16 +269,15 @@ func TestAPIErrorDisconnectIsDistrustedWhileAVPNAdapterIsUp(t *testing.T) {
 	}
 }
 
-
 // The original Aether carrier is user-space and does not need the Windscribe
 // account API. Regression: unknown CLI must not stop the very bootstrap path
 // that makes the filtered account API reachable.
 func TestWindscribeAetherUnknownCLIStartsLocalCarrierOnly(t *testing.T) {
 	for _, tc := range []struct {
-		mode ConnectionMode
-		state windscribeState
+		mode   ConnectionMode
+		state  windscribeState
 		packet bool
-		wait bool
+		wait   bool
 	}{
 		{ModeWindscribeAether, windscribeUnknown, false, false},
 		{ModeWindscribeAether, windscribeDisconnected, false, false},
