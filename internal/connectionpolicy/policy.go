@@ -29,7 +29,7 @@ func allModes() []Mode {
 			"Local Go, ByeDPI, Xray, Zapret and fronting routes with learned priors; Aether exits on demand, no Psiphon or Tor."},
 		{"aether", "Aether", "Packaged MASQUE / WireGuard core", true,
 			"Aether handles enrollment, scans and reconnect.",
-			"Aether: search WARP MASQUE/WireGuard profiles only; registers missing keys over ECH first; every site uses any working WARP exit."},
+			"Aether: search WARP MASQUE/WireGuard profiles only; tries direct Cloudflare API/edge, fragmented and anti-DPI registration paths for missing keys; every site uses any working WARP exit."},
 		{"tor", "Aether to Tor", "Tor alone through Fast's local anti-DPI", true,
 			"Requires a verified Tor circuit and foreign exit. First connection can take several minutes.",
 			"Aether to Tor: Tor runs on its own (Tor inside WARP stalled at 15% in an Iranian test); no direct fallback for managed apps. Different Tor circuits can use different public IPs."},
