@@ -98,6 +98,8 @@ internal fun ConnectScreen(
 ) {
     val locked = state == LinkState.Active || state == LinkState.Connecting || state == LinkState.Disconnecting || routePlan.busy || connectBlocked
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        // Exit location remains at the top even during startup and checks.
+        PublicIpPanel(state == LinkState.Active)
         Hero(activeMode, state, status, upstream, coverage, vpnActive, connectBlocked, routePlan.manualBusy, onPower)
         AnimatedVisibility(error != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
             Banner(error.orEmpty(), Tone.Danger, onDismissError)
@@ -110,8 +112,7 @@ internal fun ConnectScreen(
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
-        if (activeMode.details.isNotBlank()) Note(activeMode.details, Tone.Info)
-        PublicIpPanel(state == LinkState.Active)
+        // Detailed protocol notes belong in Settings/Tools, not above Connect.
         CoverageCard(coverage, onCoverage, !locked)
         ModeCard(activeMode, !locked, onMode)
         if (activeMode.id in nativeModes) {
@@ -197,7 +198,7 @@ private fun Hero(
                 Tag(mode.title, K.mint)
                 if (coverage != "proxy") Tag(if (vpnActive) "Packet VPN active" else "VPN inactive", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
-                status.optString("exit_location").takeIf { it.isNotBlank() }?.let { Tag("Exit · $it", K.text) }
+                // Public exit location is shown in the fixed top IP panel.
             }
         }
     }
@@ -366,7 +367,7 @@ private fun PublicIpPanel(connected: Boolean) {
     }
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            SectionLabel("Public IP")
+            SectionLabel("IP & country")
             Spacer(Modifier.weight(1f))
             if (busy) CircularProgressIndicator(Modifier.size(16.dp), color = K.mint, strokeWidth = 2.dp)
             else IconButton(onClick = { refresh++ }, modifier = Modifier.size(28.dp)) {
@@ -374,20 +375,26 @@ private fun PublicIpPanel(connected: Boolean) {
             }
         }
         IpRow("Before", before, K.muted)
-        if (connected) IpRow("Now", after, K.mint)
-        error?.let { Note(it, Tone.Warn) }
+        IpRow("Exit", if (connected) after else null, K.mint, placeholder = if (connected) "Checking…" else "Not connected")
+        // Reserve this line so a delayed IP lookup cannot shift the power button.
+        Text(error?.take(90) ?: " ", color = K.amber, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, fontSize = 11.sp, modifier = Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-private fun IpRow(label: String, info: JSONObject?, tint: androidx.compose.ui.graphics.Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = K.muted, fontSize = 13.sp, modifier = Modifier.width(64.dp))
-        Text(info?.optString("country")?.let(::flagOf) ?: "·", fontSize = 20.sp)
-        Spacer(Modifier.width(10.dp))
-        Text(info?.optString("ip") ?: "checking…", color = if (info != null) tint else K.faint,
-            fontSize = 15.sp, fontFamily = K.mono, modifier = Modifier.weight(1f))
-        info?.optString("country")?.takeIf { it.isNotBlank() }?.let { Tag(it, tint) }
+private fun IpRow(label: String, info: JSONObject?, tint: androidx.compose.ui.graphics.Color,
+                  placeholder: String = "Checking…") {
+    Row(Modifier.fillMaxWidth().height(34.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = K.muted, fontSize = 12.sp, modifier = Modifier.width(56.dp))
+        Text(info?.optString("country")?.takeIf { it.length == 2 }?.let(::flagOf) ?: "🌐",
+            fontSize = 19.sp, modifier = Modifier.width(34.dp))
+        Text(info?.optString("ip")?.takeIf { it.isNotBlank() } ?: placeholder,
+            color = if (info != null) tint else K.faint, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, fontSize = 14.sp,
+            fontFamily = K.mono, modifier = Modifier.weight(1f))
+        Text(info?.optString("country")?.takeIf { it.length == 2 } ?: "  ",
+            color = tint, fontSize = 12.sp, modifier = Modifier.width(27.dp))
     }
 }
 
@@ -674,10 +681,8 @@ private fun EndpointsPanel(
             val address = status.optString(key)
             if (address.isNotBlank()) EndpointRow(label, address, onCopy)
         }
-        if (status.optBoolean("xray_ready")) {
-            Note("Official Xray TLS fragmentation path is running alongside ByeDPI and Go. This is not a separate VPN.", Tone.Info)
-        } else if (status.optString("xray_error").isNotBlank()) {
-            Note("Xray skipped: ${status.optString("xray_error")}. Existing local strategies remain available.", Tone.Warn)
+        if (status.optString("xray_error").isNotBlank()) {
+            Note("Xray unavailable; other routes remain active.", Tone.Warn)
         }
         if (status.optBoolean("fronting")) {
             val accepted = status.optInt("front_accepted")
@@ -688,7 +693,7 @@ private fun EndpointsPanel(
                 else "Optional fronting active · $accepted accepted TLS sessions · $refused rejected by clients",
                 if (disabled.isNotBlank() || refused > 0) Tone.Warn else Tone.Info
             )
-            Note("This is per-connection evidence only. Installed user CA trust is not universal across Android apps.")
+ 
         }
         if (status.optString("dns_error").isNotBlank()) {
             Note("Last DNS transport failure (${status.optInt("dns_failures")}): ${status.optString("dns_error")}", Tone.Warn)
@@ -696,8 +701,8 @@ private fun EndpointsPanel(
         // Aggregate transport observations contain no URLs, IPs, headers,
         // cookies or account data. They do not prove a particular app used QUIC.
         if (status.optInt("tcp_attempts") > 0 || status.optInt("udp_failures") > 0) {
-            Note("Connection diagnostics · TCP events: ${status.optInt("tcp_attempts")}, TCP failures: ${status.optInt("tcp_failures")}, blocked by policy: ${status.optInt("tcp_blocked")}, TLS replies: ${status.optInt("tls_responses")}")
-            Note("UDP associations: ${status.optInt("udp_associations")} · UDP failures: ${status.optInt("udp_failures")} (port 443: ${status.optInt("udp_443_failures")}). UDP/443 errors may contribute to a QUIC-to-TCP delay, but are not proof.")
+            KeyValue("TCP", "${status.optInt("tcp_attempts")} attempts · ${status.optInt("tcp_failures")} failed")
+            KeyValue("UDP", "${status.optInt("udp_associations")} sessions · ${status.optInt("udp_failures")} failed")
             val method = status.optString("last_route")
             if (method.isNotBlank()) Note("Last observed route: $method · first response: ${status.optLong("last_route_ms")} ms · connect: ${status.optLong("last_connect_ms")} ms")
             val lastFailure = status.optString("last_failure")
@@ -709,7 +714,7 @@ private fun EndpointsPanel(
         if (filtering.isNotBlank()) Note("Filtering on this network: $filtering")
         SecondaryButton(if (checking) "Checking HTTPS routes…" else "Check HTTPS endpoints", onCheckRoute,
             Modifier.fillMaxWidth(), busy = checking, icon = KIcons.Check)
-        Note("An endpoint response does not verify profiles, feeds or video playback.")
+ 
         if (routeReport != null) {
             val ok = routeReport.optInt("verified")
             val attempted = routeReport.optInt("attempted")

@@ -575,16 +575,18 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	core, err := connectionsession.Start(ctx, proxy, "127.0.0.1:0")
+	androidSession := !testOnly && (localStateDir != "" || (native != nil && native.privateDir != ""))
+	socksBind, httpBind := localProxyAddresses(androidSession)
+	core, err := connectionsession.Start(ctx, proxy, socksBind)
 	if err != nil {
 		cancel()
-		return "", fmt.Errorf("SOCKS listener: %w", err)
+		return "", listenerError("SOCKS5", socksBind, err)
 	}
-	httpAddress, err := core.StartHTTP("127.0.0.1:0", nil)
+	httpAddress, err := core.StartHTTP(httpBind, nil)
 	if err != nil {
 		cancel()
 		core.Stop()
-		return "", fmt.Errorf("HTTP listener: %w", err)
+		return "", listenerError("HTTP", httpBind, err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
 	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, automatic: automatic}
