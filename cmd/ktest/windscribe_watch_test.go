@@ -177,12 +177,14 @@ func TestWindscribeCLIStatusGraceExpiresWithoutInventingDisconnection(t *testing
 }
 
 func TestWindscribeInitialUnknownCLINeverEnablesNestedTunnel(t *testing.T) {
-	if !monitorUnknownCLIAllowed(ModeWindscribe) {
-		t.Fatal("read-only bridge should keep watching after transient CLI startup failure")
+	for _, mode := range []ConnectionMode{ModeWindscribe, ModeWindscribeAether} {
+		if !monitorUnknownCLIAllowed(mode) {
+			t.Fatalf("%s local bridge should not require account API state", mode)
+		}
 	}
-	for _, mode := range []ConnectionMode{ModeWindscribeAether, ModeAether, ModeFast} {
+	for _, mode := range []ConnectionMode{ModeAether, ModeFast} {
 		if monitorUnknownCLIAllowed(mode) {
-			t.Fatalf("unknown CLI would authorize unsafe mode %s", mode)
+			t.Fatalf("non-Windscribe mode %s unexpectedly uses its CLI", mode)
 		}
 	}
 }
@@ -267,37 +269,30 @@ func TestAPIErrorDisconnectIsDistrustedWhileAVPNAdapterIsUp(t *testing.T) {
 	}
 }
 
-func TestLimitedAetherBootstrapForBlockedAccountAPI(t *testing.T) {
+
+// The original Aether carrier is user-space and does not need the Windscribe
+// account API. Regression: unknown CLI must not stop the very bootstrap path
+// that makes the filtered account API reachable.
+func TestWindscribeAetherUnknownCLIStartsLocalCarrierOnly(t *testing.T) {
 	for _, tc := range []struct {
-		name, raw    string
-		state        windscribeState
-		err          error
-		vpnUp, allow bool
+		mode ConnectionMode
+		state windscribeState
+		packet bool
+		wait bool
 	}{
-		{"API blocked with no connection field", "Login state: Error: SSL error\nFirewall state: Off", windscribeUnknown, nil, false, true},
-		{"API blocked with unknown state", "Login state: Error: Network error\nConnect state: Unknown", windscribeUnknown, nil, false, true},
-		{"active VPN adapter", "Login state: Error: SSL error", windscribeUnknown, nil, true, false},
-		{"known disconnect uses normal flow", "Login state: Error: SSL error\nConnect state: Disconnected", windscribeDisconnected, nil, false, false},
-		{"connected tunnel not overwritten", "Login state: Error: SSL error\nConnect state: Connected: Berlin\nProtocol: TCP:443", windscribeUnknown, nil, false, false},
-		{"pending connection", "Login state: Error: SSL error\n*Connect state: Connected: Berlin", windscribeUnknown, nil, false, false},
-		{"connecting", "Login state: Error: SSL error\nConnect state: Connecting", windscribeUnknown, nil, false, false},
-		{"logout", "Login state: Not logged in\nConnect state: Unknown", windscribeUnknown, nil, false, false},
-		{"unrecognized no API error", "Login state: Logged in\nConnect state: Unknown", windscribeUnknown, nil, false, false},
-		{"CLI IPC error", "Login state: Error: SSL error", windscribeUnknown, errors.New("IPC"), false, false},
-		{"malformed state", "Login state: Error: SSL error\nConnect state: Waiting", windscribeUnknown, nil, false, false},
+		{ModeWindscribeAether, windscribeUnknown, false, false},
+		{ModeWindscribeAether, windscribeDisconnected, false, false},
+		{ModeWindscribeAether, windscribeConnected, false, true},
+		{ModeWindscribeAether, windscribeConnecting, false, true},
+		{ModeWindscribe, windscribeUnknown, false, false},
+		{ModeWindscribe, windscribeUnknown, true, true},
+		{ModeWindscribeAether, windscribeUnknown, true, true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := windscribeCanBootstrapAPIError(tc.raw, tc.state, tc.err, tc.vpnUp); got != tc.allow {
-				t.Fatalf("bootstrap=%v, want=%v", got, tc.allow)
-			}
-		})
+		if got := windscribeShouldWaitForDisconnect(tc.mode, tc.state, tc.packet); got != tc.wait {
+			t.Fatalf("%s state=%s packet=%t wait=%t want=%t", tc.mode, tc.state, tc.packet, got, tc.wait)
+		}
 	}
-	m := &windscribeMonitor{state: windscribeUnknown, bootstrapOnly: true, autoReconnect: false}
-	if !m.BootstrapOnly() || m.Connected() {
-		t.Fatal("limited bootstrap was mistaken for authenticated VPN connectivity")
-	}
-	m.state = windscribeConnected
-	if m.BootstrapOnly() {
-		t.Fatal("active VPN was granted Aether bootstrap permission")
+	if m := (*windscribeMonitor)(nil); m.Connected() {
+		t.Fatal("missing CLI must never be considered a connected VPN")
 	}
 }

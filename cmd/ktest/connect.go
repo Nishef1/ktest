@@ -614,14 +614,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 		t.Note("Zapret2 %s: waiting for Windscribe's HTTP CONNECT target; filters may affect other processes using the same IP:443 during each outer handshake", o.ws.zapret)
 	}
-	if o.mode == ModeWindscribeAether && monitor == nil {
-		t.Line(toneFail, "Windscribe through Aether needs a trusted CLI state; check Windscribe/login before starting a second tunnel")
-		return 1
-	}
-	if monitor != nil && (monitor.Connected() ||
-		(o.mode == ModeWindscribeAether && monitor.State() != windscribeDisconnected && !monitor.BootstrapOnly()) ||
-		(o.ws.packetEnabled() && monitor.State() == windscribeUnknown)) {
-		t.Note("Windscribe is %s. Standing by until the official CLI confirms disconnect; existing VPN is left running.", monitor.State())
+	// CLI status is advisory for the userspace HTTP/Aether carrier.
+	// Never make a missing or blocked account API a prerequisite for the
+	// transport that may make that API reachable. Still avoid actively
+	// duplicating a known Connected/Connecting VPN session.
+	if monitor != nil && windscribeShouldWaitForDisconnect(o.mode, monitor.State(), o.ws.packetEnabled()) {
+		t.Note("Windscribe is %s. Waiting for its active connection to finish; no duplicate VPN attempt.", monitor.State())
 		if !monitor.waitDisconnected(ctx) {
 			return 0
 		}
@@ -1592,4 +1590,15 @@ func waitForExit(ctx context.Context, ready func() bool) bool {
 		}
 	}
 	return ctx.Err() == nil
+}
+
+// windscribeShouldWaitForDisconnect distinguishes observation from transport
+// startup. Unknown CLI status is not VPN authentication and must not prevent
+// launching the local Aether SOCKS carrier. Explicit packet-filter mode still
+// needs a known state because it can change system-wide packet behavior.
+func windscribeShouldWaitForDisconnect(mode ConnectionMode, state windscribeState, packetEnabled bool) bool {
+	if state == windscribeConnected || state == windscribeConnecting {
+		return true
+	}
+	return state == windscribeUnknown && packetEnabled && mode.isWindscribe()
 }

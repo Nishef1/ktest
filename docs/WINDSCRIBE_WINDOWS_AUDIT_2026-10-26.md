@@ -22,8 +22,10 @@ Portable build, Go unit and race tests are mandatory. An actual Windows Windscri
 
 The HTTP listener accepts CONNECT requests without a password. Any non-loopback bind (`0.0.0.0`, `::`, LAN/public addresses) is rejected to prevent exposing it as an open proxy. Windscribe local and through-Aether modes also reject port 0 and privileged ports. The Windscribe setup panel shows the actual configured HTTP address when an explicit custom port is used; it is not hard-coded to 10801. Local diagnostics and other modes keep ephemeral loopback-port support when explicitly requested.
 
-## Account API circular-bootstrap regression
+## Optional Windscribe CLI observation (2026-10-26)
 
-When Windscribe CLI itself replies with `Login state: Error: SSL error` (or another explicit API error) and omits its connection state, the previous Aether mode stopped **before Aether was ever started**. This is a bootstrap circularity on restricted networks where a usable network path may need to come before the account API. A missing CLI executable, failed IPC command, ordinary logout, unrecognized response, VPN adapter already up, or connected/connecting/pending indication still fails closed.
+CLI status is useful for the connection dashboard but is not a prerequisite for the user-space Aether/WARP HTTP carrier. The old account-API bootstrap allowlist was too strict and could leave KTest stuck even before Aether. When the CLI is unavailable or reports Unknown, KTest now starts the carrier with an explicit warning and disables automatic Windscribe reconnect. The Windscribe app must still authenticate and report its own VPN success.
 
-A limited, *Aether-carrier-only* bootstrap is now permitted after repeated API-only CLI responses with no active VPN adapter. No Windscribe VPN session is claimed, no automatic reconnect is allowed, and the user must check the Windscribe app before connecting. This is not a bypass for uncertain live VPN states. The monitor continues polling so successful local state reads can transition the UI normally. This does not prove successful Aether network traversal or that Windscribe API traffic will use the carrier.
+Known Connected or Connecting states are not disturbed: the session waits for disconnect rather than starting a competing VPN. Optional system-wide packet-desync mode retains its separate requirement for usable CLI state. A visible VPN adapter triggers a loop warning, not an automatic claim that it is authenticated/connected. Avoid routing KTest or Aether back into Windscribe.
+
+No claim of real Windows or ISP connectivity from Go unit tests.
