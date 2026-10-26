@@ -424,6 +424,9 @@ private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -
             scope.launch {
                 try {
                     s.cdnStatus = withContext(Dispatchers.IO) {
+                        // Manual and automatic CDN results must share the same
+                        // opaque underlying-network key, never a stale one.
+                        ProxyService.prepareUnderlyingNetwork(context)
                         Mobilebridge.startCDNScanToFileFamily(provider, family, budget, context.filesDir.canonicalPath)
                         JSONObject(Mobilebridge.cdnScanStatus())
                     }
