@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestAndroidHardlinkDeniedFallsBackToExclusiveIdentityPublish(t *testing.T) 
 		t.Fatalf("published credential was not preserved exactly: %v", err)
 	}
 	info, err := os.Stat(target)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("saved key must be private 0600: %v / %v", info, err)
 	}
 	created, err = publishStagedIdentity(stage, target, "wg", denied)
