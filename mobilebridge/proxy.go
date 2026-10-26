@@ -187,6 +187,15 @@ func ProxyStatus() string {
 	return encodeReport(currentReportLocked())
 }
 
+// StartAndroidProxyWithUpstream keeps stable local ports even when an Android
+// user supplies an explicit SOCKS upstream instead of the packaged core.
+func StartAndroidProxyWithUpstream(mode, upstream, privateDir string) (string, error) {
+	if !realPrivateDirectory(privateDir) {
+		return "", errors.New("Android proxy requires an app-private directory")
+	}
+	return startProxyConfigured(context.Background(), mode, upstream, nil, "", "", privateDir, false)
+}
+
 // StartProxy starts real in-process Go SOCKS5 and HTTP listeners.
 // This low-level entry point uses built-in plain + ClientHello splitting paths.
 // Android uses StartAndroidProxy to include its packaged native ByeDPI routes.
@@ -272,6 +281,18 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	}()
 	if localStateDir != "" && realPrivateDirectory(localStateDir) {
 		cdnranges.Load(localStateDir)
+	}
+	// Bounded preflight, not an exhaustive scan: keep measured edges for this
+	// network, then allow live routing to adapt to actual target responses.
+	if !testOnly {
+		probeDir := localStateDir
+		if probeDir == "" && native != nil {
+			probeDir = native.privateDir
+		}
+		if frontDir != "" || (mode == "psiphon" && native != nil &&
+			(native.method == "" || native.method == "auto" || native.method == "psiphon-cdn")) {
+			autoPrepareNetworkEdges(startContext, probeDir, mode)
+		}
 	}
 	switch mode {
 	case "balanced", "fast", "aether":
@@ -575,16 +596,18 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	core, err := connectionsession.Start(ctx, proxy, "127.0.0.1:0")
+	androidSession := !testOnly && (localStateDir != "" || (native != nil && native.privateDir != ""))
+	socksBind, httpBind := localProxyAddresses(androidSession)
+	core, err := connectionsession.Start(ctx, proxy, socksBind)
 	if err != nil {
 		cancel()
-		return "", fmt.Errorf("SOCKS listener: %w", err)
+		return "", listenerError("SOCKS5", socksBind, err)
 	}
-	httpAddress, err := core.StartHTTP("127.0.0.1:0", nil)
+	httpAddress, err := core.StartHTTP(httpBind, nil)
 	if err != nil {
 		cancel()
 		core.Stop()
-		return "", fmt.Errorf("HTTP listener: %w", err)
+		return "", listenerError("HTTP", httpBind, err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
 	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, automatic: automatic}

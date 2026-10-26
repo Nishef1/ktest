@@ -85,6 +85,25 @@ func shapeProfiles(profiles []aether.Profile, o tlsshape.Options, r *tlsshape.Re
 	return tlsshape.Apply(profiles, o, r)
 }
 
+// A network that blocks every MASQUE gateway must not pay the entire
+// calibration budget again on every Connect. Explicit Measure remains available.
+var autoTLSMu sync.Mutex
+var autoTLSRecent = map[string]time.Time{}
+
+func allowAutoTLSProbe(network, options string, now time.Time) bool {
+	if network == "" {
+		return false
+	}
+	key := network + ":" + options
+	autoTLSMu.Lock()
+	defer autoTLSMu.Unlock()
+	if when, found := autoTLSRecent[key]; found && now.Sub(when) < 10*time.Minute {
+		return false
+	}
+	autoTLSRecent[key] = now
+	return true
+}
+
 var calibrateMu sync.Mutex
 
 // CalibrateAetherTLS measures this network now (the "Measure" button) and

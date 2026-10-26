@@ -117,9 +117,50 @@ internal fun SettingsScreen(
         }
     }
 
+    var showPorts by remember { mutableStateOf(false) }
+    var socksPort by remember { mutableStateOf(preferences.getInt("listener_socks_port", 10808).toString()) }
+    var httpPort by remember { mutableStateOf(preferences.getInt("listener_http_port", 10809).toString()) }
+    var portError by remember { mutableStateOf<String?>(null) }
+    var portSaved by remember { mutableStateOf(false) }
+
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        ScreenTitle("Settings", "App, engine and privacy information.")
+        ScreenTitle("Settings", "Connection preferences")
         Spacer(Modifier.height(4.dp))
+
+        Panel {
+            Row(Modifier.fillMaxWidth().clickable { showPorts = !showPorts },
+                verticalAlignment = Alignment.CenterVertically) {
+                IconTile(KIcons.Route, K.cyan)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Local proxy ports", color = K.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text("SOCKS5 $socksPort · HTTP $httpPort", color = K.muted, fontSize = 12.sp)
+                }
+                Icon(KIcons.ExpandMore, "Change ports", tint = K.muted)
+            }
+            if (showPorts) {
+                KField(socksPort, { socksPort = it; portSaved = false }, "SOCKS5 port", enabled = targetsEditable, mono = true)
+                KField(httpPort, { httpPort = it; portSaved = false }, "HTTP port", enabled = targetsEditable, mono = true)
+                SecondaryButton("Save ports", {
+                    val socks = socksPort.toIntOrNull()
+                    val http = httpPort.toIntOrNull()
+                    portError = when {
+                        socks == null || http == null || socks !in 1024..65535 || http !in 1024..65535 ->
+                            "Choose ports from 1024 to 65535."
+                        socks == http -> "SOCKS5 and HTTP ports must be different."
+                        else -> runCatching {
+                            Mobilebridge.setLocalProxyPorts(socks.toLong(), http.toLong())
+                            preferences.edit().putInt("listener_socks_port", socks)
+                                .putInt("listener_http_port", http).apply()
+                            portSaved = true
+                            null
+                        }.getOrElse { it.message ?: "Could not save ports" }
+                    }
+                }, Modifier.fillMaxWidth(), enabled = targetsEditable)
+                portError?.let { Note(it, Tone.Warn) }
+                if (portSaved) Note("Saved for the next connection.", Tone.Good)
+            }
+        }
 
         Panel {
             Row(verticalAlignment = Alignment.CenterVertically) {

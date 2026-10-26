@@ -268,6 +268,11 @@ class ProxyService : Service() {
                                     runCatching { Mobilebridge.setPsiphonRegion(p.getString("psiphon_region", "").orEmpty()) }
                                         .onFailure { p.edit().remove("psiphon_region").apply() }
                                     Mobilebridge.setNativeViaAether(p.getBoolean("native_via_aether", false))
+                                    // The app always binds to stable loopback ports unless
+                                    // the user explicitly changes them in Settings.
+                                    Mobilebridge.setLocalProxyPorts(
+                                        p.getInt("listener_socks_port", 10808).toLong(),
+                                        p.getInt("listener_http_port", 10809).toLong())
                                 }
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {
@@ -299,7 +304,7 @@ class ProxyService : Service() {
                                             applicationInfo.nativeLibraryDir, privateDir)
                                     }
                                 } else {
-                                    Mobilebridge.startProxyWithUpstream(mode, upstream)
+                                    Mobilebridge.startAndroidProxyWithUpstream(mode, upstream, filesDir.canonicalPath)
                                 }
                             }
                         }
