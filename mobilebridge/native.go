@@ -224,9 +224,11 @@ func launchVerifiedNativeProfiles(ctx context.Context, o nativeOptions) (*native
 	// Calibrate the user's Auto SNI, fingerprint and fragment preferences
 	// for this network once, using a bounded window; fixed values remain.
 	if o.privateDir != "" && (o.method == "" || o.method == "auto" || o.method == "masque-h2") {
-		tlsCtx, cancelTLS := context.WithTimeout(ctx, 8*time.Second)
-		_, _ = mobileTLSShape(tlsCtx, o.privateDir, true)
-		cancelTLS()
+		if allowAutoTLSProbe(tlsNetworkKey(), currentAetherTLS().Key(), time.Now()) {
+			tlsCtx, cancelTLS := context.WithTimeout(ctx, 8*time.Second)
+			_, _ = mobileTLSShape(tlsCtx, o.privateDir, true)
+			cancelTLS()
+		}
 	}
 	// Discover ECH once, but keep non-ECH IPv4/IPv6 profiles first. A failed
 	// ECH bootstrap must not suppress ordinary MASQUE H2/H3 or WireGuard routes.
