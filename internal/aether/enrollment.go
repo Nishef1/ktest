@@ -116,13 +116,9 @@ func EnrollIdentity(ctx context.Context, o EnrollmentOptions) error {
 			err = ctx.Err()
 		}
 		if err == nil {
-			err = os.Chmod(stage, 0o600)
-			if err == nil {
-				err = os.Link(stage, o.Path)
-			}
-			if errors.Is(err, os.ErrExist) {
-				err = CheckIdentity(o.Path, o.Protocol)
-			}
+			// Android can prohibit hard links even inside app-private storage.
+			// The shared helper falls back to exclusive, non-overwriting creation.
+			_, err = publishStagedIdentity(stage, o.Path, o.Protocol, os.Link)
 			if err != nil {
 				notify("save_failed")
 				_ = os.RemoveAll(dir) // exact directory created by this attempt

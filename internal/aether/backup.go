@@ -144,13 +144,11 @@ func publishIdentity(dir, name, protocol string, data []byte) (bool, error) {
 	if err := CheckIdentity(stage.Name(), protocol); err != nil {
 		return false, err
 	}
-	if err := os.Link(stage.Name(), target); err != nil {
-		if errors.Is(err, os.ErrExist) && CheckIdentity(target, protocol) == nil {
-			return false, nil
-		}
+	created, err := publishStagedIdentity(stage.Name(), target, protocol, os.Link)
+	if err != nil {
 		return false, fmt.Errorf("cannot publish %s without overwriting existing data: %w", name, err)
 	}
-	return true, nil
+	return created, nil
 }
 
 // RestoreIdentityBundle validates every credential before publishing any of
