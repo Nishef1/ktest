@@ -78,3 +78,12 @@ func TestAndroidAutomaticAetherMethodDescribesVerifiedWarpFailover(t *testing.T)
 		t.Fatalf("inaccurate automatic method description: %+v", result)
 	}
 }
+
+func TestRegisterAetherIdentityKindValidationPrecedesNativeBundle(t *testing.T) {
+	if _, err := RegisterAetherIdentityKind("", "", "", "invalid"); err == nil {
+		t.Fatal("unsupported key type accepted")
+	}
+	if _, err := RegisterAetherIdentityKind("", "", "", "both"); err == nil {
+		t.Fatal("invalid private directory accepted")
+	}
+}

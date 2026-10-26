@@ -31,19 +31,26 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
     var message by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var valid by remember { mutableIntStateOf(0) }
+    var masqueReady by remember { mutableStateOf(false) }
+    var wireguardReady by remember { mutableStateOf(false) }
+    var invalidKeys by remember { mutableStateOf("") }
     var via by remember { mutableStateOf("") }
 
     fun refreshStatus() {
         scope.launch {
-            valid = withContext(Dispatchers.IO) {
-                runCatching { JSONObject(Mobilebridge.aetherIdentityStatus(privateDir)).optInt("valid") }.getOrDefault(0)
+            val status = withContext(Dispatchers.IO) {
+                runCatching { JSONObject(Mobilebridge.aetherIdentityStatus(privateDir)) }.getOrNull()
             }
+            valid = status?.optInt("valid") ?: 0
+            masqueReady = status?.optBoolean("masque_ready") ?: false
+            wireguardReady = status?.optBoolean("wireguard_ready") ?: false
+            invalidKeys = status?.optJSONArray("invalid")?.let { keys ->
+                (0 until keys.length()).joinToString(", ") { keys.optString(it) }
+            }.orEmpty()
         }
     }
     LaunchedEffect(privateDir) {
-        valid = withContext(Dispatchers.IO) {
-            runCatching { JSONObject(Mobilebridge.aetherIdentityStatus(privateDir)).optInt("valid") }.getOrDefault(0)
-        }
+        refreshStatus()
     }
     val export = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -117,9 +124,9 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
         }
     }
 
-    // The pinned Aether v2.4.0 core retries the normal WARP API and Cloudflare
-    // API edges on the direct route. A separate VPN/proxy is optional.
-    fun register() {
+    // PattNG keeps key selection independent of each connection profile.
+    // Direct WARP API/edge remains first; ECH and Psiphon CDN are fallbacks.
+    fun register(kind: String) {
         if (busy) return
         val proxy = via.trim()
         busy = true
@@ -128,12 +135,12 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
         scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    JSONObject(Mobilebridge.registerAetherIdentity(nativeLibraryDir, privateDir, proxy))
+                    JSONObject(Mobilebridge.registerAetherIdentityKind(nativeLibraryDir, privateDir, proxy, kind))
                 }
                 val items = result.getJSONArray("results")
                 val failed = (0 until items.length()).map { items.getJSONObject(it) }.filter { !it.optBoolean("ready") }
                 if (failed.isEmpty()) {
-                    message = "WARP keys are ready. If you turned on another VPN for this, turn it off before connecting KTest."
+                    message = "Requested WARP key is ready. Registration success does not prove a working tunnel."
                 } else {
                     error = failed.joinToString("\n") { "${it.optString("protocol")}: ${it.optString("error")}" }
                 }
@@ -149,12 +156,14 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
     }
 
     Panel {
-        SectionLabel("WARP identity recovery")
-        Text("Valid saved Aether keys: $valid", color = K.text)
-        if (valid == 0) {
-            Note("No WARP key yet. First try Get WARP key with the optional proxy field empty: " +
-                "Aether attempts the normal API and its Cloudflare edge fallback, then fragmented HTTPS. " +
-                "If blocked, retry using a local SOCKS5/HTTP proxy or another VPN, then disconnect that VPN before connecting KTest.", Tone.Warn)
+        SectionLabel("WARP keys · Cloudflare device registration")
+        Text("Aether uses WARP keys for MASQUE and WireGuard. Psiphon CDN and standalone Tor do not need WARP keys.",
+            color = K.muted, fontSize = 12.sp, lineHeight = 17.sp)
+        KeyValue("MASQUE H2 / H3", if (masqueReady) "Key saved" else "Missing")
+        KeyValue("WireGuard", if (wireguardReady) "Key saved" else "Missing")
+        if (invalidKeys.isNotBlank()) Note("Existing invalid key file(s): $invalidKeys. They are preserved, not overwritten; restore a backup or explicitly repair them.", Tone.Warn)
+        if (!masqueReady || !wireguardReady) {
+            Note("Try with the proxy field empty first. The core uses its direct API/edge fallback, fragmented TLS and optional ECH or Psiphon CDN registration. Getting a key is not the same as connecting.", Tone.Warn)
         }
         OutlinedTextField(
             value = via,
@@ -165,9 +174,11 @@ internal fun AetherIdentityBackupPanel(scope: CoroutineScope, privateDir: String
             enabled = !busy,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
         )
-        SecondaryButton("Get WARP key", { register() },
-            Modifier.fillMaxWidth(), enabled = canRestore, busy = busy)
-        Note("Your WARP identity is generated automatically by Aether on first use and kept in this app's private storage. App updates keep it; uninstalling or clearing app data removes it. Export an encrypted copy before uninstalling.")
+        SecondaryButton(if (masqueReady) "Check / keep MASQUE key" else "Get MASQUE key",
+            { register("masque") }, Modifier.fillMaxWidth(), enabled = canRestore && !busy, busy = busy)
+        SecondaryButton(if (wireguardReady) "Check / keep WireGuard key" else "Get WireGuard key",
+            { register("wg") }, Modifier.fillMaxWidth(), enabled = canRestore && !busy, busy = busy)
+        Note("Keys are handled independently. Existing valid keys are reused and never overwritten. Updates keep private keys, but uninstalling or clearing data removes them; export a backup first.")
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },

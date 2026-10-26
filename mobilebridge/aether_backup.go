@@ -60,19 +60,28 @@ func AetherIdentityStatus(privateDir string) string {
 		_, _ = aether.MigrateIdentityFiles(target, filepath.Join(privateDir, "automatic-exits"))
 	}
 	count := 0
+	masqueReady, wireguardReady := false, false
 	var warnings []string
 	for name, protocol := range aether.IdentityFiles {
 		err := aether.CheckIdentity(filepath.Join(target, name), protocol)
 		if err == nil {
 			count++
+			if name == "masque.toml" {
+				masqueReady = true
+			}
+			if name == "wg.toml" {
+				wireguardReady = true
+			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			warnings = append(warnings, name)
 		}
 	}
 	raw, _ := json.Marshal(struct {
 		Valid            int      `json:"valid"`
+		MASQUEReady      bool     `json:"masque_ready"`
+		WireGuardReady   bool     `json:"wireguard_ready"`
 		Invalid          []string `json:"invalid"`
 		PrivateDirectory string   `json:"private_directory"`
-	}{Valid: count, Invalid: warnings, PrivateDirectory: target})
+	}{Valid: count, MASQUEReady: masqueReady, WireGuardReady: wireguardReady, Invalid: warnings, PrivateDirectory: target})
 	return string(raw)
 }
