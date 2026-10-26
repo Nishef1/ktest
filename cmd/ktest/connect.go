@@ -186,6 +186,19 @@ func validateConnectOptions(o connectOptions) error {
 	if _, err := parseConnectionMode(string(o.mode)); err != nil {
 		return err
 	}
+	// The HTTP CONNECT listener is unauthenticated and must never listen on
+	// a LAN/wildcard address. Windscribe additionally needs a fixed nonzero
+	// SOCKS and HTTP port matching the user's app proxy setting.
+	if !o.noHTTP {
+		if err := validateProxyBind(o.httpListen, o.mode.isWindscribe()); err != nil {
+			return fmt.Errorf("-http-listen: %w", err)
+		}
+	}
+	if o.mode.isWindscribe() {
+		if err := validateProxyBind(o.listen, true); err != nil {
+			return fmt.Errorf("-listen: %w", err)
+		}
+	}
 	if o.mode == ModeFast && (o.exitSocks != "" || strings.HasPrefix(o.aetherMethod, "psiphon") || o.aetherMethod == "tor") {
 		return errors.New("Fast permits only native Aether exits; use Balanced for Psiphon, Tor or external SOCKS")
 	}

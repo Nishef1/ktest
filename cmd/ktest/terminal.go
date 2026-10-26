@@ -604,7 +604,7 @@ func (t *terminal) connectWithOptions(in *input, o connectOptions) bool {
 	if mode.isWindscribe() {
 		t.ui.Box("WINDSCRIBE SETTINGS", toneInfo, []string{
 			t.ui.Bold("Connection  ") + "Protocol OpenVPN TCP, port 443",
-			t.ui.Bold("Proxy       ") + "Proxy Settings → HTTP, 127.0.0.1, port 10801, no login",
+			t.ui.Bold("Proxy       ") + "Proxy Settings → HTTP, " + o.httpListen + ", no login",
 			t.ui.Dim("Not Proxy Gateway. WireGuard, IKEv2 and Stealth ignore this proxy."),
 		})
 		if o.ws.packetEnabled() {

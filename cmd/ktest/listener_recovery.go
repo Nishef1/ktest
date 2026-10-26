@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"strconv"
 )
 
 // recoverLoopbackListen refuses to take ownership of another app's socket.
@@ -46,4 +47,23 @@ func recoverSessionListen(mode ConnectionMode, requested, stock string) (string,
 		return "", false, fmt.Errorf("Windscribe proxy port %s is occupied; close the conflicting listener or explicitly change the KTest listener and Windscribe HTTP Proxy Settings together: %w", requested, err)
 	}
 	return address, false, nil
+}
+
+// validateProxyBind prevents exposing an unauthenticated HTTP CONNECT proxy
+// on a LAN/wildcard interface. Windscribe must also refuse ephemeral and
+// privileged listener ports: its app is configured to a persistent endpoint.
+func validateProxyBind(address string, fixed bool) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || port == "" {
+		return fmt.Errorf("expected a loopback host:port, got %q", address)
+	}
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("%q is not a loopback listener", address)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 0 || n > 65535 || (fixed && n < 1024) {
+		return fmt.Errorf("port %q is invalid; Windscribe needs 1024..65535, no random port", port)
+	}
+	return nil
 }

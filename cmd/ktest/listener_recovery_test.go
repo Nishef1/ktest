@@ -85,3 +85,47 @@ func TestWindscribeFreeListenerRemainsFixed(t *testing.T) {
 		t.Fatalf("Windscribe listener was changed on a free port: %s %t %v", chosen, changed, err)
 	}
 }
+
+func TestWindscribeProxyPortAndLoopbackValidation(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:10800", "127.0.0.1:10801", "localhost:12000", "[::1]:10801"} {
+		if err := validateProxyBind(address, true); err != nil {
+			t.Fatalf("valid Windscribe loopback listener %s rejected: %v", address, err)
+		}
+	}
+	for _, address := range []string{"0.0.0.0:10801", "[::]:10801", "192.168.1.20:10801", "0.0.0.0:0",
+		"127.0.0.1:0", "127.0.0.1:443", "127.0.0.1:65536", "example.com:10801", "127.0.0.1:bad"} {
+		if err := validateProxyBind(address, true); err == nil {
+			t.Fatalf("unsafe or unstable Windscribe proxy listener %s was accepted", address)
+		}
+	}
+	// Other modes can request an ephemeral loopback port for local tests,
+	// but never wildcard/LAN HTTP listener.
+	if err := validateProxyBind("127.0.0.1:0", false); err != nil {
+		t.Fatalf("existing ephemeral port mode should remain supported: %v", err)
+	}
+	if err := validateProxyBind("0.0.0.0:10801", false); err == nil {
+		t.Fatal("unauthenticated HTTP proxy was exposed to LAN")
+	}
+}
+
+func TestValidateWindscribeProxyOptionsRejectUnsafeBinds(t *testing.T) {
+	for _, mode := range []ConnectionMode{ModeWindscribe, ModeWindscribeAether} {
+		o := defaultConnectOptions(t.TempDir())
+		o.mode = mode
+		o.tun = false
+		o.listen = "127.0.0.1:10800"
+		o.httpListen = "127.0.0.1:10801"
+		if err := validateConnectOptions(o); err != nil {
+			t.Fatalf("%s default endpoints rejected: %v", mode, err)
+		}
+		o.httpListen = "0.0.0.0:10801"
+		if err := validateConnectOptions(o); err == nil {
+			t.Fatalf("%s accepted LAN HTTP proxy", mode)
+		}
+		o.httpListen = "127.0.0.1:10801"
+		o.listen = "127.0.0.1:0"
+		if err := validateConnectOptions(o); err == nil {
+			t.Fatalf("%s accepted an unstable SOCKS port", mode)
+		}
+	}
+}

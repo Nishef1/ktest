@@ -17,3 +17,7 @@ Both Windscribe local and Windscribe-through-Aether sessions now reject a busy l
 ## Verification limits
 
 Portable build, Go unit and race tests are mandatory. An actual Windows Windscribe app + Windows adapter + Iranian ISP network run is not represented by CI. Test login, selected OpenVPN TCP endpoint, HTTP Proxy Settings, intentional disconnect, traffic through the VPN, DNS leak prevention and system HTTPS IP verification before calling the integration field-verified.
+
+## HTTP proxy isolation
+
+The HTTP listener accepts CONNECT requests without a password. Any non-loopback bind (`0.0.0.0`, `::`, LAN/public addresses) is rejected to prevent exposing it as an open proxy. Windscribe local and through-Aether modes also reject port 0 and privileged ports. The Windscribe setup panel shows the actual configured HTTP address when an explicit custom port is used; it is not hard-coded to 10801. Local diagnostics and other modes keep ephemeral loopback-port support when explicitly requested.
