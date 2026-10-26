@@ -47,6 +47,18 @@ func TestLadderProfilesAutoIsCDNOnly(t *testing.T) {
 	}
 }
 
+func TestPsiphonWARPPreferenceDefaultIndependent(t *testing.T) {
+	SetNativeViaAether(false)
+	t.Cleanup(func() { SetNativeViaAether(false) })
+	if currentViaAetherFirst() {
+		t.Fatal("standalone Psiphon should be first unless WARP-first is explicitly enabled")
+	}
+	SetNativeViaAether(true)
+	if !currentViaAetherFirst() {
+		t.Fatal("the user's WARP-first preference was ignored")
+	}
+}
+
 func TestPsiphonRegionOnlyAppliesToPsiphon(t *testing.T) {
 	t.Cleanup(func() { _ = SetPsiphonRegion("") })
 	_ = SetPsiphonRegion("NL")

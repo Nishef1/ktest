@@ -172,13 +172,17 @@ func nativeProfilesForSelection(profiles []aether.Profile, method string, viaFas
 	if method != "" && method != "auto" {
 		profiles = aether.FilterMethod(profiles, method)
 		if viaFast {
-			var carried []aether.Profile
+			// Fast is an optional TCP/H2 carrier, not a transport filter.
+			// Keep direct H2, H3 and WireGuard candidates as fallbacks.
+			var carried, direct []aether.Profile
 			for _, p := range profiles {
 				if p.LocalCarrier() {
 					carried = append(carried, p)
+				} else {
+					direct = append(direct, p)
 				}
 			}
-			profiles = carried
+			profiles = append(carried, direct...)
 		}
 	}
 	if len(profiles) == 0 {
@@ -330,10 +334,9 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 		if err != nil {
 			return nil, err
 		}
-	} else if o.carrier != "" && mode != "aether" {
-		// Dedicated Psiphon/Tor carrier mode sends their own traffic through
-		// Fast. Aether Auto only binds profiles carrying our explicit placeholder;
-		// its UDP/H3/WireGuard candidates must stay direct.
+	} else if o.carrier != "" && mode != "aether" && (p.ChainFlag() == "" || p.Has("--h2") || p.Has("--http2")) {
+		// Fast carries standalone Psiphon/Tor and WARP-over-H2 chains only.
+		// H3 and WireGuard chains cannot cross a TCP-only SOCKS carrier.
 		args = append(args, "--upstream", "socks5://"+o.carrier)
 	}
 	if args, err = aether.ExposeChain(p, args, port); err != nil {

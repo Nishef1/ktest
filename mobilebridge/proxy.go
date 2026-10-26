@@ -298,18 +298,30 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}
 			carrier, err = startFastCarrier(startContext, native.libraryDir, native.privateDir)
 			if err != nil {
-				return "", fmt.Errorf("Fast carrier for Aether: %w", err)
+				// This is an optional first-hop helper, not the chosen exit.
+				// Failure to start Fast must never prevent direct Aether,
+				// Psiphon CDN or Tor from being tried independently.
+				carrier, native.carrier, native.viaFast = nil, "", false
+			} else {
+				defer func() {
+					if !keepCarrier {
+						carrier.stop()
+					}
+				}()
+				native.carrier = carrier.address
 			}
-			defer func() {
-				if !keepCarrier {
-					carrier.stop()
-				}
-			}()
-			native.carrier = carrier.address
 		}
 		if mode == "aether" && native.profile == nil {
 			var verified observedExit
 			managed, verified, err = launchVerifiedNativeProfiles(startContext, *native)
+			if err == nil {
+				verifiedNative = &verified
+			}
+		} else if mode == "psiphon" && native.profile == nil {
+			// The old path launched only one profile, ignoring the WARP-first
+			// switch and never reaching standalone/CDN fallback methods.
+			var verified observedExit
+			managed, verified, err = launchPsiphonTorLadder(startContext, mode, *native)
 			if err == nil {
 				verifiedNative = &verified
 			}
