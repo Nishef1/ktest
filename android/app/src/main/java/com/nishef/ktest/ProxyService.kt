@@ -304,7 +304,7 @@ class ProxyService : Service() {
                                             applicationInfo.nativeLibraryDir, privateDir)
                                     }
                                 } else {
-                                    Mobilebridge.startProxyWithUpstream(mode, upstream)
+                                    Mobilebridge.startAndroidProxyWithUpstream(mode, upstream, filesDir.canonicalPath)
                                 }
                             }
                         }

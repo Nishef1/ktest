@@ -187,6 +187,15 @@ func ProxyStatus() string {
 	return encodeReport(currentReportLocked())
 }
 
+// StartAndroidProxyWithUpstream keeps stable local ports even when an Android
+// user supplies an explicit SOCKS upstream instead of the packaged core.
+func StartAndroidProxyWithUpstream(mode, upstream, privateDir string) (string, error) {
+	if !realPrivateDirectory(privateDir) {
+		return "", errors.New("Android proxy requires an app-private directory")
+	}
+	return startProxyConfigured(context.Background(), mode, upstream, nil, "", "", privateDir, false)
+}
+
 // StartProxy starts real in-process Go SOCKS5 and HTTP listeners.
 // This low-level entry point uses built-in plain + ClientHello splitting paths.
 // Android uses StartAndroidProxy to include its packaged native ByeDPI routes.
