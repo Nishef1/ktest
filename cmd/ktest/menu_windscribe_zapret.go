@@ -11,7 +11,6 @@ import (
 func (t *terminal) windscribeZapretMenu(base string, in *input) bool {
 	t.ui.menuView()
 	t.ui.Heading("Windscribe / Zapret2 bridge (experimental)", "Click Connect in Windscribe; its requested node is detected automatically.")
-	t.ui.Note("Use Windscribe OpenVPN TCP/443 with HTTP Proxy Settings pointing to 127.0.0.1:10801.")
 	t.ui.Note("Zapret2 temporarily affects other processes using the same entry IP:443 during each outer handshake.")
 	if err := checkWindscribeZapret(base); err != nil {
 		t.ui.Line(toneWarn, "%v", err)
@@ -20,6 +19,7 @@ func (t *terminal) windscribeZapretMenu(base string, in *input) bool {
 		return ok
 	}
 	o := t.menuConnectOptions(base, ModeWindscribe)
+	t.ui.Note("Set Windscribe OpenVPN TCP/443 and HTTP Proxy Settings to %s.", o.httpListen)
 	if !o.ws.packetEnabled() {
 		o.ws.zapret = "fake"
 	}

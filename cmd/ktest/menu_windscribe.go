@@ -14,7 +14,7 @@ func (t *terminal) windscribeMenu(base string, in *input) bool {
 			t.ui.Line(toneWarn, "%s", message)
 			message = ""
 		}
-		t.ui.menuOption("1", "Local anti-DPI bridge", "No Aether / WARP / Psiphon")
+		t.ui.menuOption("1", "Local anti-DPI bridge", "Fixed HTTP 127.0.0.1:10801 · no extra VPN")
 		t.ui.menuOption("2", "Windscribe through Aether", "WARP carries OpenVPN TCP; keep Aether running")
 		t.ui.menuOption("3", "Zapret2 bridge (Windows experimental)", "Detect the node automatically when you click Connect in Windscribe")
 		t.ui.menuOption("4", "Diagnostics and tests", "")

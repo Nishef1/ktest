@@ -186,6 +186,19 @@ func validateConnectOptions(o connectOptions) error {
 	if _, err := parseConnectionMode(string(o.mode)); err != nil {
 		return err
 	}
+	// The HTTP CONNECT listener is unauthenticated and must never listen on
+	// a LAN/wildcard address. Windscribe additionally needs a fixed nonzero
+	// SOCKS and HTTP port matching the user's app proxy setting.
+	if !o.noHTTP {
+		if err := validateProxyBind(o.httpListen, o.mode.isWindscribe()); err != nil {
+			return fmt.Errorf("-http-listen: %w", err)
+		}
+	}
+	if o.mode.isWindscribe() {
+		if err := validateProxyBind(o.listen, true); err != nil {
+			return fmt.Errorf("-listen: %w", err)
+		}
+	}
 	if o.mode == ModeFast && (o.exitSocks != "" || strings.HasPrefix(o.aetherMethod, "psiphon") || o.aetherMethod == "tor") {
 		return errors.New("Fast permits only native Aether exits; use Balanced for Psiphon, Tor or external SOCKS")
 	}
@@ -648,7 +661,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 
 	// The listen address is needed at the end; find out now, not after the cores
 	// have been started.
-	if chosen, changed, err := recoverLoopbackListen(o.listen, connectListenDefault); err != nil {
+	if chosen, changed, err := recoverSessionListen(o.mode, o.listen, connectListenDefault); err != nil {
 		t.Println("")
 		t.Box("CANNOT LISTEN", toneFail, []string{err.Error(), "An explicit -listen port is never changed without your request."})
 		return 1
@@ -657,7 +670,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		o.listen = chosen
 	}
 	if !o.noHTTP {
-		if chosen, changed, err := recoverLoopbackListen(o.httpListen, connectHTTPDefault); err == nil {
+		if chosen, changed, err := recoverSessionListen(o.mode, o.httpListen, connectHTTPDefault); err == nil {
 			if changed {
 				t.Note("Default HTTP port %s is occupied. Using %s; update any application's manual proxy setting.", o.httpListen, chosen)
 				o.httpListen = chosen
