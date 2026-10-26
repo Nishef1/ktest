@@ -61,17 +61,17 @@ const (
 // Psiphon-through-WARP first when explicitly requested and keys already
 // exist. Each rung must prove a foreign exit before it is promoted. A
 // failed Fast carrier is retried directly, not treated as an ISP failure.
-func launchPsiphonTorLadder(ctx context.Context, mode string, o nativeOptions) (*nativeCore, observedExit, error) {
-	profiles, err := aether.StandaloneProfiles(mode, o.method)
+func ladderProfilesForLaunch(mode, method, stateDir string) ([]aether.Profile, error) {
+	profiles, err := aether.StandaloneProfiles(mode, method)
 	if err != nil {
-		return nil, observedExit{}, err
+		return nil, err
 	}
-	if mode == "psiphon" && (o.method == "" || o.method == "auto") {
+	if mode == "psiphon" && (method == "" || method == "auto") {
 		var direct, chain []aether.Profile
 		for _, p := range profiles {
 			if p.ChainFlag() == "" {
 				direct = append(direct, p)
-			} else if aether.ReadyIdentity(p, o.stateDir) {
+			} else if aether.ReadyIdentity(p, stateDir) {
 				// Do not spend the first attempt registering WARP keys
 				// when the user only needs a standalone Psiphon exit.
 				chain = append(chain, p)
@@ -82,6 +82,16 @@ func launchPsiphonTorLadder(ctx context.Context, mode string, o nativeOptions) (
 		} else {
 			profiles = direct
 		}
+	}
+	return profiles, nil
+}
+
+// Psiphon Auto and its conditional WARP-first order share one testable plan.
+// Explicit methods never silently switch to another protocol.
+func launchPsiphonTorLadder(ctx context.Context, mode string, o nativeOptions) (*nativeCore, observedExit, error) {
+	profiles, err := ladderProfilesForLaunch(mode, o.method, o.stateDir)
+	if err != nil {
+		return nil, observedExit{}, err
 	}
 	var failures []string
 	for i, p := range profiles {
