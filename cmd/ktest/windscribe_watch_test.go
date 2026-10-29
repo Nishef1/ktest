@@ -145,6 +145,32 @@ func TestWindscribeStatusIssueDoesNotEchoCredentials(t *testing.T) {
 	}
 }
 
+// Windscribe 2.25.6 prints failed connection attempts under "Connect state:
+// Error: ..." rather than reporting an ordinary disconnect. Do not promote
+// these errors into an auto-reconnect-eligible disconnected state.
+func TestWindscribeCLI2256ConnectionErrorsRemainUntrusted(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason, want string
+	}{
+		{"location unavailable", "Location does not exist or is disabled", "selected location"},
+		{"account restriction", "You are out of data, or your account has been disabled. Upgrade to Pro", "account or data-limit"},
+		{"adapter failure", "VPN adapter setup failed", "adapter setup"},
+		{"unrecognized error", "SENSITIVE-CREDENTIAL", "connection error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := "Login state: Logged in\\nConnect state: Error: " + tc.reason + "\\nToken: PRIVATE-TOKEN\\n"
+			state, loggedIn := parseWindscribeStatus(raw)
+			if state != windscribeUnknown || !loggedIn {
+				t.Fatalf("failure became trusted VPN state: state=%s loggedIn=%v", state, loggedIn)
+			}
+			msg := windscribeStatusIssue(raw, state, loggedIn)
+			if !strings.Contains(msg, tc.want) || strings.Contains(msg, "PRIVATE-TOKEN") || strings.Contains(msg, "SENSITIVE-CREDENTIAL") {
+				t.Fatalf("unsafe or unhelpful CLI diagnostic: %q", msg)
+			}
+		})
+	}
+}
+
 func TestWindscribeCLIStatusGraceExpiresWithoutInventingDisconnection(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
