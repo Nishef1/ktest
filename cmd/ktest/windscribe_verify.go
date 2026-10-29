@@ -33,6 +33,30 @@ func windscribeStatusIssue(raw string, state windscribeState, loggedIn bool) str
 		return "Windscribe CLI returned no recognizable login state; inspect windscribe-cli status"
 	}
 	if state == windscribeUnknown {
+		// Windscribe 2.25.6 reports failed connection attempts as
+		// "Connect state: Error: ..." rather than "Disconnected". Keep
+		// the state unknown (never authorize auto-reconnect), but provide
+		// actionable, fixed-text diagnostics without exposing CLI output.
+		for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
+			field, value, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "*")), ":")
+			if !ok || !strings.EqualFold(strings.TrimSpace(field), "Connect state") {
+				continue
+			}
+			failure := strings.ToLower(strings.TrimSpace(value))
+			if !strings.HasPrefix(failure, "error:") {
+				continue
+			}
+			switch {
+			case strings.Contains(failure, "location does not exist or is disabled"):
+				return "Windscribe rejected the selected location; choose an available location in the app"
+			case strings.Contains(failure, "out of data") || strings.Contains(failure, "account has been disabled"):
+				return "Windscribe reported an account or data-limit error; check your plan in the app"
+			case strings.Contains(failure, "vpn adapter setup failed") || strings.Contains(failure, "wireguard adapter setup failed"):
+				return "Windscribe reported a VPN adapter setup error; inspect the app"
+			default:
+				return "Windscribe reported a connection error; inspect the app for details"
+			}
+		}
 		return "Windscribe CLI returned an unrecognized connection state"
 	}
 	return ""
