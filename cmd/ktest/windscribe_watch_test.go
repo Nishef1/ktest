@@ -158,7 +158,7 @@ func TestWindscribeCLI2256ConnectionErrorsRemainUntrusted(t *testing.T) {
 		{"unrecognized error", "SENSITIVE-CREDENTIAL", "connection error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw := "Login state: Logged in\\nConnect state: Error: " + tc.reason + "\\nToken: PRIVATE-TOKEN\\n"
+			raw := "Login state: Logged in\nConnect state: Error: " + tc.reason + "\nToken: PRIVATE-TOKEN\n"
 			state, loggedIn := parseWindscribeStatus(raw)
 			if state != windscribeUnknown || !loggedIn {
 				t.Fatalf("failure became trusted VPN state: state=%s loggedIn=%v", state, loggedIn)
