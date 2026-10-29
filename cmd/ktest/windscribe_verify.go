@@ -75,7 +75,7 @@ func readWSStatus(ctx context.Context, cli string) wsCLIStatus {
 		return wsCLIStatus{err: fmt.Errorf("%s", windscribeStatusIssue(string(out), state, loggedIn))}
 	}
 	if state == windscribeUnknown {
-		return wsCLIStatus{err: fmt.Errorf("Windscribe CLI returned an unrecognized connection state")}
+		return wsCLIStatus{err: fmt.Errorf("%s", windscribeStatusIssue(string(out), state, loggedIn))}
 	}
 	return wsCLIStatus{state: state, protocol: parseWindscribeProtocol(string(out)), ip: parseWindscribeVPNIP(string(out))}
 }
