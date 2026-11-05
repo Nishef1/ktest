@@ -221,7 +221,7 @@ internal fun Segmented(
                 Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp)).background(bg)
                     .then(if (active) Modifier.border(1.dp, K.strokeStrong, RoundedCornerShape(10.dp)) else Modifier)
                     .clickable(enabled = enabled, role = Role.RadioButton) { onSelect(value) }
-                    .semantics { selected = active }
+                    .semantics { this.selected = active }
                     .padding(vertical = 9.dp),
                 contentAlignment = Alignment.Center
             ) {

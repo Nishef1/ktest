@@ -273,15 +273,14 @@ func TestUnknownOptionNamesTheRange(t *testing.T) {
 	}
 }
 
-
 func TestMainMenuShowsCoverageAndDoesNotMixAetherWithPsiphon(t *testing.T) {
 	for _, wholePC := range []bool{false, true} {
 		var output bytes.Buffer
 		menu := &terminal{options: connectOptions{tun: wholePC}, ui: plainTerm(&output)}
 		menu.mainMenu(t.TempDir())
-		want := "Coverage: Proxy apps only"
+		want := "Proxy apps only"
 		if wholePC {
-			want = "Coverage: Whole PC (beta; Administrator required)"
+			want = "Whole PC (beta)"
 		}
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("wholePC=%t: missing coverage summary: %s", wholePC, output.String())

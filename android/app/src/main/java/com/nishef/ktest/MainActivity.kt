@@ -509,7 +509,7 @@ private fun BottomNav(selected: Int, onSelect: (Int) -> Unit, modifier: Modifier
             Row(
                 Modifier.weight(1f).height(50.dp).clip(RoundedCornerShape(20.dp)).background(bg)
                     .clickable(role = Role.Tab) { onSelect(index) }
-                    .semantics { selected = active; contentDescription = item.first },
+                    .semantics { this.selected = active; contentDescription = item.first },
                 horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(item.second, if (active) null else item.first, tint = fg, modifier = Modifier.size(20.dp))

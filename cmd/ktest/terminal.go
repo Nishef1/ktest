@@ -128,23 +128,23 @@ func (t *terminal) mainMenu(base string) {
 	// Preserve the working connection policy and coverage prominently on the
 	// first line. Account for its wrapping and long notices before deciding
 	// whether the alternate screen has room for every menu option.
-	previous := "Default policy: "
+	previous := "Default: "
 	if t.settings.Connect["mode"] != "" {
-		previous = "Last policy: "
+		previous = "Last: "
 	}
 	coverage := "Proxy apps only"
 	if t.options.tun {
-		coverage = "Whole PC (beta; Administrator required)"
+		coverage = "Whole PC (beta)"
 	}
-	statusText := "Disconnected · " + previous + policyName(t.options.mode) + " · Coverage: " + coverage
+	statusText := "Disconnected · " + previous + policyName(t.options.mode) + " · " + coverage
 	requiredRows := 24 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
 	if t.notice != "" {
 		noticeRows := len(wrapText(t.notice, max(u.width()-4, 1)))
 		requiredRows += max(noticeRows-1, 0)
 	}
 	u.menuViewHeight(requiredRows)
-	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Windows connection console"))
-	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(policyName(t.options.mode))+" · "+u.Dim("Coverage: "+coverage))
+	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Free access toolkit"))
+	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(policyName(t.options.mode))+" · "+u.Dim(coverage))
 	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
 	u.text("  "+u.Bold(u.Cyan("Enter"))+"  ", "         ", u.Bold("Connect with "+policyName(t.options.mode)))
 	u.Println("")
