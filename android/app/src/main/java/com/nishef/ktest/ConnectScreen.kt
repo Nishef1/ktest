@@ -98,9 +98,10 @@ internal fun ConnectScreen(
 ) {
     val locked = state == LinkState.Active || state == LinkState.Connecting || state == LinkState.Disconnecting || routePlan.busy || connectBlocked
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        // Exit location remains at the top even during startup and checks.
-        PublicIpPanel(state == LinkState.Active)
+        // Connection is the primary action; keep it above network diagnostics
+        // on compact phones so the user need not scroll before connecting.
         Hero(activeMode, state, status, upstream, coverage, vpnActive, connectBlocked, routePlan.manualBusy, onPower)
+        PublicIpPanel(state == LinkState.Active)
         AnimatedVisibility(error != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
             Banner(error.orEmpty(), Tone.Danger, onDismissError)
         }
@@ -140,7 +141,7 @@ private fun Hero(
                 LinkState.Connecting -> "Connecting…"
                 LinkState.Disconnecting -> "Disconnecting…"
                 LinkState.Unavailable -> "Not available yet"
-                LinkState.Idle -> if (manualTesting) "Testing routes…" else "Tap to connect"
+                LinkState.Idle -> if (manualTesting) "Testing routes…" else if (connectBlocked) "Connection paused" else "Tap to connect"
             },
             color = K.text, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp
         )
@@ -272,8 +273,15 @@ private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> U
         transition.animateFloat(0f, 1f, infiniteRepeatable(
             tween(if (busy) 760 else 2200, easing = LinearEasing)), label = "orbMotion").value
     } else 0f
+    // The main action stays visible on compact-height and landscape phones.
+    val screenHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp
+    val orbSize = when {
+        screenHeight < 600 -> 164.dp
+        screenHeight < 760 -> 192.dp
+        else -> 228.dp
+    }
     Box(
-        Modifier.size(228.dp)
+        Modifier.size(orbSize)
             .semantics { contentDescription = when (state) {
                 LinkState.Active -> "Disconnect"; LinkState.Connecting -> "Cancel connection"
                 LinkState.Disconnecting -> "Disconnecting"
@@ -334,8 +342,8 @@ private fun CoverageCard(coverage: String, onCoverage: (String) -> Unit, enabled
         Segmented(listOf("vpn" to "VPN", "both" to "Both", "proxy" to "Proxy"), coverage, onCoverage, enabled = enabled)
         Text(
             when (coverage) {
-                "vpn" -> "Every app is routed through the selected mode. Android asks for VPN permission the first time. UDP other than DNS only passes through a verified foreign exit; apps fall back to TCP otherwise."
-                "both" -> "The VPN covers every app, and the local SOCKS5/HTTP addresses stay available for apps or devices you point at them."
+                "vpn" -> "Android routes other apps through the selected mode (KTest's own traffic is excluded to prevent loops). VPN permission is requested on first use. Non-DNS UDP uses only an approved relay or tunnel; unsupported flows are blocked, not sent directly."
+                "both" -> "Android routes other apps through the VPN (excluding KTest itself), while SOCKS5/HTTP remain available to apps you explicitly configure."
                 else -> "Only apps you point at the local SOCKS5 or HTTP address use KTest."
             },
             color = K.muted, fontSize = 12.sp, lineHeight = 17.sp
@@ -369,8 +377,10 @@ private fun PublicIpPanel(connected: Boolean) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionLabel("IP & country")
             Spacer(Modifier.weight(1f))
-            if (busy) CircularProgressIndicator(Modifier.size(16.dp), color = K.mint, strokeWidth = 2.dp)
-            else IconButton(onClick = { refresh++ }, modifier = Modifier.size(28.dp)) {
+            if (busy) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(16.dp), color = K.mint, strokeWidth = 2.dp)
+            }
+            else IconButton(onClick = { refresh++ }, modifier = Modifier.size(48.dp)) {
                 Icon(KIcons.Search, "Check IP again", tint = K.muted, modifier = Modifier.size(16.dp))
             }
         }
@@ -385,7 +395,7 @@ private fun PublicIpPanel(connected: Boolean) {
 @Composable
 private fun IpRow(label: String, info: JSONObject?, tint: androidx.compose.ui.graphics.Color,
                   placeholder: String = "Checking…") {
-    Row(Modifier.fillMaxWidth().height(34.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = K.muted, fontSize = 12.sp, modifier = Modifier.width(56.dp))
         Text(info?.optString("country")?.takeIf { it.length == 2 }?.let(::flagOf) ?: "🌐",
             fontSize = 19.sp, modifier = Modifier.width(34.dp))
@@ -501,14 +511,15 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 Text("Connection method", color = K.muted, fontSize = 12.sp)
                 Box {
                     Row(
-                        Modifier.clip(RoundedCornerShape(8.dp))
-                            .clickable(enabled = enabled && choices.size > 1) { expanded = true }
-                            .padding(vertical = 2.dp),
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
+                            .clickable(enabled = enabled && choices.size > 1, role = Role.Button) { expanded = true }
+                            .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(choices.firstOrNull { it.first == method }?.second ?: "Method unavailable · select another",
                             color = if (choices.any { it.first == method }) K.text else K.amber,
-                            fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         if (enabled && choices.size > 1) Icon(KIcons.ExpandMore, "Choose method", tint = K.cyan)
                     }
                     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
@@ -572,7 +583,8 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 .getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE)
             var viaFast by remember(mode) { mutableStateOf(prefs.getBoolean("native_via_fast", true)) }
             var advanced by remember(mode) { mutableStateOf(false) }
-            Row(Modifier.fillMaxWidth().clickable(enabled = enabled) { advanced = !advanced },
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .clickable(enabled = enabled, role = Role.Button) { advanced = !advanced },
                 verticalAlignment = Alignment.CenterVertically) {
                 Text("Advanced: local Fast anti-DPI", color = K.muted, fontSize = 13.sp,
                     modifier = Modifier.weight(1f))
@@ -600,7 +612,8 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 "FI" to "Finland", "PL" to "Poland", "JP" to "Japan", "SG" to "Singapore", "IN" to "India", "BR" to "Brazil",
                 "AU" to "Australia", "HK" to "Hong Kong", "CZ" to "Czechia", "RO" to "Romania", "BG" to "Bulgaria")
             Box {
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(enabled = enabled) { open = true }) {
+                Column(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(8.dp)).clickable(enabled = enabled, role = Role.Button) { open = true }) {
                     Text("Psiphon exit country", color = K.muted, fontSize = 12.sp)
                     Text(countries.firstOrNull { it.first == region }?.let { if (it.first.isEmpty()) it.second else "${it.second} (${it.first})" }
                         ?: region, color = K.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
@@ -641,7 +654,8 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
 private fun UpstreamPanel(mode: String, upstream: String, onUpstream: (String) -> Unit, enabled: Boolean) {
     var open by rememberSaveable { mutableStateOf(upstream.isNotBlank()) }
     Panel {
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { open = !open },
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(12.dp)).clickable(role = Role.Button) { open = !open },
             verticalAlignment = Alignment.CenterVertically) {
             IconTile(KIcons.Route, K.muted)
             Spacer(Modifier.width(14.dp))
@@ -751,17 +765,18 @@ private fun EndpointRow(label: String, address: String, onCopy: (String) -> Unit
     LaunchedEffect(copied) { if (copied) { delay(1600); copied = false } }
     val shape = RoundedCornerShape(14.dp)
     Row(
-        Modifier.fillMaxWidth().clip(shape).background(K.bg).border(1.dp, K.stroke, shape)
-            .clickable { onCopy(address); copied = true }.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(shape).background(K.bg).border(1.dp, K.stroke, shape)
+            .semantics { contentDescription = "Copy $label proxy address" }
+            .clickable(role = Role.Button) { onCopy(address); copied = true }
+            .padding(start = 14.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(label, color = K.muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
             modifier = Modifier.width(62.dp))
         Text(address, color = K.text, fontSize = 15.sp, fontFamily = K.mono, modifier = Modifier.weight(1f))
-        IconButton(onClick = { onCopy(address); copied = true }) {
-            Icon(if (copied) KIcons.Check else KIcons.Copy, "Copy $label address",
-                tint = if (copied) K.mint else K.muted, modifier = Modifier.size(18.dp))
-        }
+        // One tap target per row: avoid nested click semantics and duplicate copy.
+        Icon(if (copied) KIcons.Check else KIcons.Copy, null,
+            tint = if (copied) K.mint else K.muted, modifier = Modifier.size(20.dp))
     }
 }
 

@@ -68,7 +68,7 @@ var menuSections = []struct {
 	{"Connection methods", []menuItem{
 		connectItem("1", connectionpolicy.Title(string(ModeBalanced)), "Adaptive routing", ModeBalanced),
 		connectItem("2", connectionpolicy.Title(string(ModeFast)), "Faster fallback", ModeFast),
-		{key: "3", name: connectionpolicy.Title(string(ModeAether)), desc: "WARP / Psiphon", mode: ModeAether, action: func(t *terminal, base string, in *input) bool { return t.aetherMenu(base, in) }},
+		{key: "3", name: connectionpolicy.Title(string(ModeAether)), desc: "WARP exit only", mode: ModeAether, action: func(t *terminal, base string, in *input) bool { return t.aetherMenu(base, in) }},
 		connectItem("4", connectionpolicy.Title(string(ModeTor)), "Tor", ModeTor),
 		{key: "5", name: connectionpolicy.Title(string(ModeWindscribe)), desc: "Local bridge / through Aether", mode: ModeWindscribe, action: func(t *terminal, base string, in *input) bool { return t.windscribeMenu(base, in) }},
 		connectItem("6", connectionpolicy.Title(string(ModePsiphon)), "Psiphon", ModePsiphon),
@@ -125,21 +125,26 @@ func (t *terminal) setupDescription(base string) string {
 
 func (t *terminal) mainMenu(base string) {
 	u := t.ui
-	// Most menus fit 24 rows, but a long warning may wrap to additional
-	// rows. Preserve scrollback instead of trapping important options below
-	// the bottom of a short alternate-screen terminal.
-	requiredRows := 24
+	// Preserve the working connection policy and coverage prominently on the
+	// first line. Account for its wrapping and long notices before deciding
+	// whether the alternate screen has room for every menu option.
+	previous := "Default policy: "
+	if t.settings.Connect["mode"] != "" {
+		previous = "Last policy: "
+	}
+	coverage := "Proxy apps only"
+	if t.options.tun {
+		coverage = "Whole PC (beta; Administrator required)"
+	}
+	statusText := "Disconnected · " + previous + policyName(t.options.mode) + " · Coverage: " + coverage
+	requiredRows := 24 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
 	if t.notice != "" {
 		noticeRows := len(wrapText(t.notice, max(u.width()-4, 1)))
 		requiredRows += max(noticeRows-1, 0)
 	}
 	u.menuViewHeight(requiredRows)
-	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Free access toolkit"))
-	previous := "Default policy: "
-	if t.settings.Connect["mode"] != "" {
-		previous = "Last policy: "
-	}
-	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(policyName(t.options.mode)))
+	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Windows connection console"))
+	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(policyName(t.options.mode))+" · "+u.Dim("Coverage: "+coverage))
 	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
 	u.text("  "+u.Bold(u.Cyan("Enter"))+"  ", "         ", u.Bold("Connect with "+policyName(t.options.mode)))
 	u.Println("")

@@ -41,6 +41,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -89,6 +93,7 @@ private fun KTestApp() {
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val scrolls = listOf(rememberScrollState(), rememberScrollState(), rememberScrollState())
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var modeId by rememberSaveable { mutableStateOf(prefs.getString("mode", "balanced") ?: "balanced") }
     var upstream by remember { mutableStateOf(prefs.getString("upstream_$modeId", "") ?: "") }
     var nativeMethod by remember { mutableStateOf(validNativeMethod(modeId, prefs.getString("method_$modeId", "auto") ?: "auto")) }
@@ -317,7 +322,7 @@ private fun KTestApp() {
                 transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(150)) }) { page ->
                 Column(
                     Modifier.fillMaxSize().verticalScroll(scrolls[page])
-                        .padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 120.dp)
+                        .padding(horizontal = 20.dp).padding(top = 8.dp, bottom = if (keyboardVisible) 24.dp else 120.dp)
                 ) {
                     when (page) {
                         0 -> ConnectScreen(
@@ -456,9 +461,12 @@ private fun KTestApp() {
                 }
             }
         }
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-            .background(Brush.verticalGradient(0f to Color.Transparent, .3f to K.bg.copy(alpha = .94f), 1f to K.bg))) {
-            BottomNav(tab, { tab = it }, Modifier.padding(top = 18.dp))
+        // An overlaid tab bar otherwise blocks text fields while the IME is up.
+        if (!keyboardVisible) {
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .background(Brush.verticalGradient(0f to Color.Transparent, .3f to K.bg.copy(alpha = .94f), 1f to K.bg))) {
+                BottomNav(tab, { tab = it }, Modifier.padding(top = 18.dp))
+            }
         }
     }
 }
@@ -500,7 +508,8 @@ private fun BottomNav(selected: Int, onSelect: (Int) -> Unit, modifier: Modifier
             val fg by animateColorAsState(if (active) K.mint else K.muted, label = "navFg")
             Row(
                 Modifier.weight(1f).height(50.dp).clip(RoundedCornerShape(20.dp)).background(bg)
-                    .clickable(role = Role.Tab) { onSelect(index) },
+                    .clickable(role = Role.Tab) { onSelect(index) }
+                    .semantics { selected = active; contentDescription = item.first },
                 horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(item.second, if (active) null else item.first, tint = fg, modifier = Modifier.size(20.dp))

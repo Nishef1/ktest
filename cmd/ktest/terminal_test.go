@@ -273,6 +273,26 @@ func TestUnknownOptionNamesTheRange(t *testing.T) {
 	}
 }
 
+
+func TestMainMenuShowsCoverageAndDoesNotMixAetherWithPsiphon(t *testing.T) {
+	for _, wholePC := range []bool{false, true} {
+		var output bytes.Buffer
+		menu := &terminal{options: connectOptions{tun: wholePC}, ui: plainTerm(&output)}
+		menu.mainMenu(t.TempDir())
+		want := "Coverage: Proxy apps only"
+		if wholePC {
+			want = "Coverage: Whole PC (beta; Administrator required)"
+		}
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("wholePC=%t: missing coverage summary: %s", wholePC, output.String())
+		}
+		if !strings.Contains(output.String(), "WARP exit only") ||
+			strings.Contains(output.String(), "WARP / Psiphon") {
+			t.Fatalf("Aether mode is misrepresented as including Psiphon: %s", output.String())
+		}
+	}
+}
+
 func TestMenuDoesNotAdvertiseConfiguredExitsAsConnected(t *testing.T) {
 	if out := menuOutput(t, "0\n"); !strings.Contains(out, "Disconnected") || strings.Contains(out, "exit paths (WARP/Psiphon):") || strings.Contains(out, "READY") {
 		t.Fatal("configuration was presented as a connection:", out)

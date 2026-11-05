@@ -19,6 +19,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -37,7 +39,7 @@ internal object K {
     val strokeStrong = Color(0xFF2A3B4A)
     val text = Color(0xFFEEF3F6)
     val muted = Color(0xFF8C9DAB)
-    val faint = Color(0xFF5A6A78)
+    val faint = Color(0xFF748694) // >=4.5:1 on the dark panel background
     val mint = Color(0xFF5EF2C4)
     val cyan = Color(0xFF3FC2F5)
     val amber = Color(0xFFFFC27A)
@@ -160,7 +162,7 @@ internal fun SecondaryButton(
     tint: Color = K.text
 ) {
     OutlinedButton(
-        onClick = onClick, enabled = enabled && !busy, modifier = modifier.heightIn(min = 46.dp),
+        onClick = onClick, enabled = enabled && !busy, modifier = modifier.heightIn(min = 48.dp),
         shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, K.strokeStrong),
         colors = ButtonDefaults.outlinedButtonColors(containerColor = K.surfaceHigh, contentColor = tint,
             disabledContainerColor = K.surface, disabledContentColor = K.faint)
@@ -216,9 +218,10 @@ internal fun Segmented(
             val active = value == selected
             val bg by animateColorAsState(if (active) K.surfaceHigh else Color.Transparent, label = "seg")
             Box(
-                Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(bg)
+                Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp)).background(bg)
                     .then(if (active) Modifier.border(1.dp, K.strokeStrong, RoundedCornerShape(10.dp)) else Modifier)
                     .clickable(enabled = enabled, role = Role.RadioButton) { onSelect(value) }
+                    .semantics { selected = active }
                     .padding(vertical = 9.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -255,7 +258,7 @@ internal fun Banner(text: String, tone: Tone, onDismiss: (() -> Unit)? = null) {
         Icon(KIcons.Warning, null, tint = color, modifier = Modifier.padding(top = 1.dp).size(18.dp))
         Spacer(Modifier.width(10.dp))
         Text(text, color = K.text, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f).padding(top = 1.dp))
-        if (onDismiss != null) IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+        if (onDismiss != null) IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
             Icon(KIcons.Close, "Dismiss", tint = K.muted, modifier = Modifier.size(16.dp))
         }
     }
