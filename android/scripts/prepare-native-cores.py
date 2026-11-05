@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = [ROOT / "internal/aether/android-cores.json",
              ROOT / "internal/byedpi/android-cores.json",
              ROOT / "internal/xraycfg/android-cores.json"]
+# Inner executable SHA-256 derived from the release ZIP only after archive
+# checksum validation, then embedded in Go before gomobile bind.
+DERIVE_FROM_ARCHIVE = "DERIVE_FROM_PINNED_ARCHIVE"
 
 
 def digest(data):
@@ -80,7 +83,8 @@ def archive_payloads(archive, abi):
                 if item.is_dir() or item.file_size > 100 << 20:
                     raise ValueError("bad Xray executable ZIP entry")
                 data = source.read(item)
-                if digest(data) != expected[item.filename]["sha256"]:
+                if (expected[item.filename]["sha256"] != DERIVE_FROM_ARCHIVE
+                        and digest(data) != expected[item.filename]["sha256"]):
                     raise ValueError("Xray executable checksum mismatch")
                 check_elf(data, abi)
                 payloads[item.filename] = data
@@ -106,6 +110,14 @@ def archive_payloads(archive, abi):
 
 
 def prepare(manifest, cache, destination, abis, verify_only):
+    needs_derivation = any(
+        item["sha256"] == DERIVE_FROM_ARCHIVE
+        for entry in manifest["abis"].values()
+        for item in entry["files"]
+    )
+    if needs_derivation and (manifest["repository"] != "https://github.com/patterniha/Xray-core"
+                             or manifest["version"] != "v26.11.1"):
+        raise ValueError("archive-derived digest is limited to pinned PattNG Xray")
     cache.mkdir(parents=True, exist_ok=True)
     for name in abis:
         if name not in manifest["abis"]:
@@ -135,6 +147,11 @@ def prepare(manifest, cache, destination, abis, verify_only):
         if digest(archive.read_bytes()) != abi["sha256"]:
             raise ValueError("cached native archive checksum mismatch; file preserved")
         payloads = archive_payloads(archive, abi)
+        # This hash comes from an executable inside the already verified ZIP.
+        # Its Go manifest must be compiled only after this preparation step.
+        for item in abi["files"]:
+            if item["sha256"] == DERIVE_FROM_ARCHIVE:
+                item["sha256"] = digest(payloads[item["source"]])
         if not verify_only:
             target = destination / name
             target.mkdir(parents=True, exist_ok=True)
@@ -182,6 +199,8 @@ def main():
                     if abi not in manifest["abis"] and manifest.get("optional_abis"):
                         continue
                     for item in manifest["abis"][abi]["files"]:
+                        if item["sha256"] == DERIVE_FROM_ARCHIVE:
+                            raise ValueError("prepare native cores before compiling Go JNI")
                         name = f'lib/{abi}/{item["name"]}'
                         if digest(apk.read(name)) != item["sha256"]:
                             raise ValueError(f"APK changed or stripped pinned executable: {name}")
@@ -190,6 +209,10 @@ def main():
     for path in MANIFESTS:
         manifest = json.loads(path.read_text())
         prepare(manifest, args.cache_dir, args.output, args.abis, args.verify_only)
+        if not args.verify_only and path == ROOT / "internal/xraycfg/android-cores.json":
+            if DERIVE_FROM_ARCHIVE not in json.dumps(manifest):
+                # Only materialize after full pinned archive and ELF validation.
+                path.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 if __name__ == "__main__":

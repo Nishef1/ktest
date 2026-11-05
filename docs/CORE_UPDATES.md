@@ -1,5 +1,30 @@
 # Updating native cores safely
 
+## PattNG core alignment (2026-11-05)
+
+KTest now prefers the patterniha/PattNG release lineage wherever PattNG
+maintains a distinct network core: `patterniha/Xray-core v26.11.1` for
+Windows and Android ARM64. Both ZIPs are SHA-256 pinned. The Android
+executable digest is derived **only after** verifying the pinned archive
+and its inner ELF, then written to the local Go-embedded manifest by
+`android/scripts/prepare-native-cores.py`. This must run **before**
+`gomobile bind` (enforced by Android APK and native smoke workflows).
+The Android runtime rejects mismatched executables. APK verification
+rejects an unresolved hash. The source manifest's derivation sentinel is
+intentionally not an executable checksum: never compile the Android Go
+bridge without first running the native preparation.
+
+PattNG uses `heiher/hev-socks5-tunnel` as a submodule at v2.19.3, not a
+separate fork. KTest pins the same upstream HEV AAR (fixing Android JNI
+TLS relocation), while retaining PattNG-lineage Aether v2.4.0.
+Experimental Xray `finalMask.merge` and `dialMode=oob.0` remain off
+by default: KTest's Xray is a local fragmentation path or TUN-to-Go
+adapter, not an unconfigured remote proxy.
+
+This is source/build integration, not evidence of live ISP bypass.
+Re-run Windows packaging and Android APK CI, plus device TCP/UDP/DNS/IPv6,
+leak, handover and recovery tests before shipping.
+
 **Upgrade boundary (2026-10-24):** Reviewed Aether v2.4.0 update; native Android and desktop locks are regenerated from the published release, without changing Xray, HEV or ByeDPI. New CI and real-device tests are required; historical CI does not establish real ISP connectivity. See [v2.4.0 audit](AETHER_240_AUDIT_2026-10-24.md).
 
 KTest does not update a live tunnel in-place. Release pins are explicit in

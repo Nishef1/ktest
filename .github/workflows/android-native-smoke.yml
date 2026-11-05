@@ -44,6 +44,11 @@ jobs:
           test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - name: Verify and pin PattNG Xray before compiling Go JNI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 android/scripts/prepare-native-cores.py --abis arm64-v8a
       - name: Compile actual Go JNI bridge for arm64
         shell: bash
         run: |

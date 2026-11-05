@@ -1,12 +1,12 @@
-# Verified upstream versions — reviewed 2026-10-24
+# Verified upstream versions — updated 2026-11-05
 
 Official release pages were checked before selection. This repository does not bundle external executables.
 
 | Component | Version checked | Published | Use in ktest | Official source |
 | --- | --- | --- | --- | --- |
 | Aether | **v2.4.0** | 2026-10-24 | Reviewed update for Android/Desktop: WARP API edge fallback, H2/TLS and reconnect fixes; signed APK and real-network acceptance still required | https://github.com/patterniha/Aether/releases/tag/v2.4.0 |
-| Xray-core | **v26.10.21** | 2026-10-21 | Pinned official Windows executable and Android ARM64 `libxray.so`; local TLS-fragment route and Android TUN adapter | https://github.com/XTLS/Xray-core/releases/tag/v26.10.21 |
-| HEV | **2.19.0** | Pinned | Android TUN fallback; app minimum API 29 follows the upstream manifest | https://github.com/heiher/hev-socks5-tunnel |
+| Xray-core (PattNG fork) | **v26.11.1** | 2026-11-01 | PattNG fork used on Windows and Android ARM64; ZIP SHA-256 pinned, ELF digest derived at build and embedded before Go JNI compilation | https://github.com/patterniha/Xray-core/releases/tag/v26.11.1 |
+| HEV | **2.19.3** | 2026-10-25 | Android TUN fallback; same upstream revision PattNG submodules; fixes JNI TLS relocation | https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.19.3 |
 | ByeDPI | **v0.17.3** | Pinned | Hash-pinned Android ARM/ARM64 local anti-DPI helper; candidate strategies are not proven for every ISP | https://github.com/hufrea/byedpi/releases/tag/v0.17.3 |
 | Go | **1.27.2** | 2026-10-08 | Minimum toolchain updated; security fixes include TLS/HTTP | https://go.dev/doc/devel/release |
 | actions/checkout | **v7.0.1** | 2026-07-20 | CI on maintained `@v7` major | https://github.com/actions/checkout/releases |

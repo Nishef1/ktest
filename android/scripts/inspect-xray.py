@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Inspect the unchanged official Xray Android archive before KTest pins its ELF."""
+"""Inspect the pinned PattNG Xray fork Android archive before KTest pins its ELF."""
 import hashlib
 import io
 import struct
 import urllib.request
 import zipfile
 
-URL = "https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-android-arm64-v8a.zip"
-EXPECTED = "d81604f35a56c98ea6091142c1c744f4895c7384bc2e1c85cd910612c70794e9"
+URL = "https://github.com/patterniha/Xray-core/releases/download/v26.11.1/Xray-android-arm64-v8a.zip"
+EXPECTED = "e35403384aeafc5857cc7ed0a5c5c01dd10bc97992599840b6d77ef29031c3a6"
 with urllib.request.urlopen(URL, timeout=120) as src:
     raw = src.read(48 << 20)
 if hashlib.sha256(raw).hexdigest() != EXPECTED:

@@ -1,5 +1,14 @@
 # KTest Android — existing native cores with shared Go integration
 
+> **Core update, 2026-11-05:** KTest now pins the PattNG lineage:
+> `patterniha/Xray-core v26.11.1` (Windows/Android ARM64),
+> `patterniha/Aether v2.4.0`, and upstream HEV `2.19.3` as used by
+> PattNG (which has no separate HEV fork). Native preparation verifies
+> the pinned Xray release ZIP and writes its executable SHA-256 into
+> the Go manifest **before** `gomobile bind`. Historical version
+> numbers below document earlier test snapshots; live Android and ISP
+> acceptance remain outstanding.
+>
 Android uses the **existing upstream networking cores**, a narrow shared Go integration layer and a native UI. Aether owns MASQUE/WireGuard, native gateway scans/reconnect and its Tor/Psiphon backends. Xray, ByeDPI and Windscribe retain their respective roles. Do not reimplement these engines in Go or Kotlin, or port the entire CLI supervisor as an Android prerequisite. The [engineering roadmap](../docs/ROADMAP.md) records responsibility boundaries, remaining work and the code reuse audit.
 
 ## Current verification status (2026-10-21)

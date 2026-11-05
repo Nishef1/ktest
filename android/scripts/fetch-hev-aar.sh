@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Reuse the pinned upstream AAR for manifest/source checks or authorized builds.
-VERSION="2.19.0"
-EXPECTED="fbbf014c1c4c6d1e0922db88542abd9dc726600473bdfdc8039ed157b4ba02b0"
+VERSION="2.19.3"
+EXPECTED="ab6c581e6157680cfe5687ee7bbdcf95405c006c2db3701879ec44b9e5f83836"
 BASE="https://github.com/heiher/hev-socks5-tunnel/releases/download"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEST="$ROOT/android/app/libs/hev-socks5-tunnel.aar"

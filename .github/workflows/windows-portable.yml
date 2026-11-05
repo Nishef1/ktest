@@ -45,7 +45,7 @@ jobs:
             $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
             if ($actual -ne $sha256) { throw "SHA-256 mismatch for $path" }
           }
-          DownloadVerified "https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-windows-64.zip" "build/xray.zip" "fc58c39ee2f2717b4c54d28d374362389e5319b20ae44aea76ea45a5243ec827"
+          DownloadVerified "https://github.com/patterniha/Xray-core/releases/download/v26.11.1/Xray-windows-64.zip" "build/xray.zip" "9f7cfd2f14a4974339de3e0a8fd23447e7bb8a0e04c2df10cd324d188947032c"
           Expand-Archive -LiteralPath build/xray.zip -DestinationPath build/xray -Force
           $xray = Get-ChildItem -Path build/xray -Filter xray.exe -File -Recurse | Select-Object -First 1
           if ($null -eq $xray) { throw "Official Xray zip did not contain xray.exe" }

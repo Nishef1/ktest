@@ -30,7 +30,7 @@ android {
 
     defaultConfig {
         applicationId = "com.nishef.ktest"
-        // Pinned HEV 2.19.0 requires Android 10; do not override its manifest.
+        // Pinned HEV 2.19.3 requires Android 10; do not override its manifest.
         minSdk = 29
         targetSdk = 35
         // Monotonic Android package revision; not a CPU architecture version.
