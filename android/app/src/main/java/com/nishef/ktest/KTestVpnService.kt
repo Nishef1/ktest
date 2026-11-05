@@ -253,10 +253,10 @@ class KTestVpnService : VpnService() {
     }
 
     @Synchronized private fun closeTunnel() {
-        // Normal stop already closed the tunnel on Dispatchers.IO before
-        // stopSelf(). Avoid repeating native process teardown in onDestroy's
-        // main-thread callback when there is no tunnel left to close.
-        if (tun == null && state == "disconnected") return
+        // A service instance that no longer owns a TUN fd must not stop
+        // the process-global Go adapter: a replacement instance may already
+        // have attached a new TUN during a recovery or permission handoff.
+        if (tun == null) return
         Mobilebridge.stopVpnTun()
         runCatching { setUnderlyingNetworks(null) }
         runCatching { tun?.close() }
