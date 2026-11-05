@@ -147,9 +147,11 @@ class ProxyService : Service() {
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
                 // Our own TUN can briefly appear as a new default network on
                 // some devices; it is not an underlying Wi-Fi/cellular handover.
-                // A VPN becoming the system default is not a Wi-Fi/cellular
-                // handover; rebuilding here tears down the just-started TUN.
-                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
+                // KTest's own VPN is not a physical network handover. Keep
+                // proxy-only compatibility with a user-managed third-party VPN.
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    (activeRequest?.getBooleanExtra(EXTRA_VPN, false) == true ||
+                        KTestVpnService.state in setOf("starting", "preparing", "tun_running_unverified", "stopping"))) return
                 if (network.networkHandle != expectedHandle &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
                     invalidateBalancedNetwork(network)
@@ -363,6 +365,7 @@ class ProxyService : Service() {
                             // until VpnService actually establishes HEV and attaches its
                             // TUN fd; fail instead of claiming whole-device coverage.
                             if (vpn) {
+                                connectionState = "activating_vpn"
                                 // Clear a previous session's failed/revoked state first, or the
                                 // wait loop below can read it before the new start runs.
                                 KTestVpnService.markStarting()
@@ -464,7 +467,7 @@ class ProxyService : Service() {
                     val title = activeRequest?.getStringExtra(EXTRA_TITLE) ?: "KTest"
                     getSystemService(NotificationManager::class.java).notify(
                         NOTIFICATION_ID,
-                        notification(title, verifiedExitIP.isNotBlank(),
+                        notification(title, connectionState == "connected" && verifiedExitIP.isNotBlank(),
                             limited = connectionState == "limited")
                     )
                 }
@@ -674,7 +677,7 @@ class ProxyService : Service() {
                 else -> "Connecting · $title"
             })
             .setContentText(when {
-                active -> "Verified IP: $verifiedExitIP · local SOCKS/VPN path"
+                active -> "Public HTTPS exit verified · local SOCKS/VPN path"
                 limited -> "Local route active; public Internet not confirmed"
                 else -> "Starting and verifying the route…"
             })
@@ -683,6 +686,7 @@ class ProxyService : Service() {
             .setWhen(System.currentTimeMillis())
             .setContentIntent(open)
             .setOngoing(true)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setCategory(Notification.CATEGORY_SERVICE)
             .addAction(Notification.Action.Builder(null, if (active) "Disconnect" else "Cancel", stop).build())
             .build()

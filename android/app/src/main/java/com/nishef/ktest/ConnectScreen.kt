@@ -166,7 +166,8 @@ private fun Hero(
                     modifier = Modifier.padding(horizontal = 22.dp))
             }
             LinkState.Connecting -> Text(
-                if (ProxyService.connectionState == "verifying") "Checking public HTTPS access before enabling the system VPN"
+                if (ProxyService.connectionState == "verifying") "Checking public HTTPS access before VPN activation"
+                else if (ProxyService.connectionState == "activating_vpn") "Activating VPN and attaching packet forwarding"
                 else when (phase) {
                     "starting_core" -> "Starting ${mode.title}…"
                     "verifying_upstream" -> "Waiting for the tunnel and a working exit"
@@ -194,10 +195,16 @@ private fun Hero(
                 if (native) add("starting_core" to "Start core")
                 if (native || upstream.isNotBlank()) add("verifying_upstream" to "Verify exit")
                 if (mode.id == "balanced" || mode.id == "fast") add("calibrating" to "Calibrate")
+                add("verifying" to "Verify HTTPS")
+                if (coverage != "proxy") add("activating_vpn" to "Activate VPN")
             }
             if (steps.size > 1) {
                 Spacer(Modifier.height(16.dp))
-                PhaseSteps(steps, phase)
+                val current = when (ProxyService.connectionState) {
+                    "verifying", "activating_vpn" -> ProxyService.connectionState
+                    else -> phase
+                }
+                PhaseSteps(steps, current)
             }
         }
         if (state == LinkState.Active) {

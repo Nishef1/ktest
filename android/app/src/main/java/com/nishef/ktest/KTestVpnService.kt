@@ -268,7 +268,7 @@ class KTestVpnService : VpnService() {
     // accidentally hide the remaining foreground proxy notification.
     private fun releaseForegroundNotification() {
         if (ProxyService.connectionState in setOf(
-                "connecting", "verifying", "connected", "limited", "recovering", "disconnecting"
+                "connecting", "verifying", "activating_vpn", "connected", "limited", "recovering", "disconnecting"
             )) {
             stopForeground(STOP_FOREGROUND_DETACH)
             runCatching {
@@ -285,8 +285,14 @@ class KTestVpnService : VpnService() {
         val open = PendingIntent.getActivity(this, 1,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val stop = PendingIntent.getService(this, 2,
-            Intent(this, KTestVpnService::class.java).apply { action = ACTION_STOP },
+        val stopIntent = if (ProxyService.connectionState in setOf(
+                "connecting", "verifying", "activating_vpn", "connected", "limited", "recovering"
+            )) {
+            Intent(this, ProxyService::class.java).apply { action = ProxyService.ACTION_STOP }
+        } else {
+            Intent(this, KTestVpnService::class.java).apply { action = ACTION_STOP }
+        }
+        val stop = PendingIntent.getService(this, 2, stopIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_ktest)
@@ -294,7 +300,8 @@ class KTestVpnService : VpnService() {
             .setContentText(detail)
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Stop VPN", stop).build())
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .addAction(Notification.Action.Builder(null, "Disconnect", stop).build())
             .build()
     }
 }
