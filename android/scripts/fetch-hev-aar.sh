@@ -8,10 +8,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEST="$ROOT/android/app/libs/hev-socks5-tunnel.aar"
 mkdir -p "$(dirname "$DEST")"
 if [[ -f "$DEST" ]]; then
-  echo "$EXPECTED  $DEST" | sha256sum --check --status || {
-    echo "Existing HEV AAR has an unexpected digest" >&2; exit 1;
-  }
-  exit 0
+  if echo "$EXPECTED  $DEST" | sha256sum --check --status; then
+    exit 0
+  fi
+  # Existing installs may have the previously pinned 2.19.0 AAR. Only
+  # replace that known artifact, and only after verifying the new download.
+  PREVIOUS="fbbf014c1c4c6d1e0922db88542abd9dc726600473bdfdc8039ed157b4ba02b0"
+  if ! echo "$PREVIOUS  $DEST" | sha256sum --check --status; then
+    echo "Existing HEV AAR is not an approved previous version" >&2; exit 1
+  fi
 fi
 TMP="$(mktemp "$ROOT/android/app/libs/.hev-XXXXXXXX")"
 trap 'rm -f "$TMP"' EXIT
