@@ -54,3 +54,17 @@ For Windows: 80x24 and narrow console sizes, high contrast, disabled VT/NO_COLOR
 screen-reader speech order, UAC/TUN permission and cleanup after interruption.
 Network success must be measured on the actual ISP using comparable profiles;
 CI never proves censorship bypass.
+
+## Settings and Tools follow-up
+
+- Corrected stale native-core attribution: Xray is the PattNG v26.11.1
+  fork and HEV is 2.19.3.
+- The "Verify Aether bundle" action accurately describes its scope:
+  Aether, Psiphon and Lyrebird. It does not claim to validate every
+  library in the APK; Xray/ByeDPI are runtime-validated independently.
+- Removed a duplicated "preview" version suffix, enlarged settings rows,
+  used a numeric keyboard for port fields and made linked source notices
+  single accessible tap targets.
+- Replaced seven cramped CDN provider segmented options across two rows
+  with one accessible dropdown, and made copyable edge addresses one
+  minimum-48dp tap target.

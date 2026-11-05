@@ -23,6 +23,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -110,7 +112,7 @@ private fun CoroutineScope.runTool(
 @Composable
 internal fun ToolsScreen(s: ToolsState, scope: CoroutineScope, onCopy: (String) -> Unit, scanAllowed: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        ScreenTitle("Tools", "Desktop diagnostics, running on your current Android network.")
+        ScreenTitle("Tools", "On-device diagnostics for your current network.")
         Spacer(Modifier.height(4.dp))
         ToolCard(s, "diagnose", KIcons.Globe, "Network diagnosis", "DNS, TCP and TLS checked separately") {
             DiagnoseTool(s, scope)
@@ -141,16 +143,19 @@ private fun ToolCard(
     val arrow by animateFloatAsState(if (open) 180f else 0f, label = "arrow")
     Panel(padding = 0.dp) {
         Row(
-            Modifier.fillMaxWidth().clickable { s.expanded = if (open) null else id }.padding(16.dp),
+            Modifier.fillMaxWidth()
+                .clickable(role = Role.Button) { s.expanded = if (open) null else id }
+                .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
+                .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconTile(icon, if (open) K.mint else K.muted)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, color = K.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text(summary, color = K.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(summary, color = K.muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            Icon(KIcons.ExpandMore, if (open) "Collapse" else "Expand", tint = K.muted, modifier = Modifier.rotate(arrow))
+            Icon(KIcons.ExpandMore, null, tint = K.muted, modifier = Modifier.rotate(arrow))
         }
         AnimatedVisibility(open, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
             Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 18.dp),
@@ -372,10 +377,26 @@ private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -
     val controlsBusy = busy || s.cdnExportBusy || pollError != null || !s.cdnStatusLoaded || !scanAllowed
     val budget = if (s.cdnBudget.roundToInt() >= 310) 0L else s.cdnBudget.roundToInt().toLong()
     val budgetLabel = if (budget == 0L) "Until stopped" else "$budget IPs"
-    Segmented(listOf("cloudflare" to "Cloudflare", "akamai" to "Akamai", "fastly" to "Fastly", "google" to "Google"),
-        s.cdnProvider, { s.cdnProvider = it }, enabled = !controlsBusy)
-    Segmented(listOf("meta" to "Meta", "cloudfront" to "CloudFront", "gcore" to "Gcore"),
-        s.cdnProvider, { s.cdnProvider = it }, enabled = !controlsBusy)
+    // One full-width provider selector replaces two cramped segmented rows.
+    // Seven provider labels cannot remain legible at narrow phone widths.
+    val providers = listOf("cloudflare" to "Cloudflare", "akamai" to "Akamai",
+        "fastly" to "Fastly", "google" to "Google", "meta" to "Meta",
+        "cloudfront" to "CloudFront", "gcore" to "Gcore")
+    var providerOpen by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        SecondaryButton("CDN provider: " +
+            (providers.firstOrNull { it.first == s.cdnProvider }?.second ?: "Choose"),
+            { providerOpen = true }, Modifier.fillMaxWidth(), enabled = !controlsBusy, icon = KIcons.Globe)
+        DropdownMenu(expanded = providerOpen, onDismissRequest = { providerOpen = false },
+            containerColor = K.surfaceHigh) {
+            providers.forEach { (id, label) ->
+                DropdownMenuItem(
+                    text = { Text(label, color = if (id == s.cdnProvider) K.mint else K.text) },
+                    trailingIcon = { if (id == s.cdnProvider) Icon(KIcons.Check, null, tint = K.mint) },
+                    onClick = { s.cdnProvider = id; providerOpen = false })
+            }
+        }
+    }
     Segmented(listOf("ipv4" to "IPv4", "ipv6" to "IPv6"), s.cdnFamily,
         { s.cdnFamily = it }, enabled = !controlsBusy)
     Note(if (s.cdnFamily == "ipv6") "IPv6-only scan. Requires a working IPv6 route; no IPv4 fallback is attempted."
@@ -521,8 +542,16 @@ private fun CDNScanTool(s: ToolsState, scope: CoroutineScope, onCopy: (String) -
             val color = if (tls && http) K.mint else if (tcp) K.amber else K.red
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(K.bg).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(result.optString("ip"), color = color, fontFamily = K.mono, fontSize = 14.sp,
-                    modifier = Modifier.fillMaxWidth().clickable { onCopy(result.optString("ip")) })
+                val edgeIp = result.optString("ip")
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(role = Role.Button) { onCopy(edgeIp) }
+                    .semantics { contentDescription = "Copy edge IP $edgeIp" },
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(edgeIp, color = color, fontFamily = K.mono, fontSize = 14.sp,
+                        modifier = Modifier.weight(1f))
+                    Icon(KIcons.Copy, null, tint = K.muted, modifier = Modifier.size(18.dp))
+                }
                 Text(when {
                     tls && http -> "Provider HTTPS verified · target proof not tested"
                     tls -> "TLS only · provider HTTP not verified"

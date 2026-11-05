@@ -18,6 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,16 +53,16 @@ private data class Notice(val name: String, val detail: String, val license: Str
 private val notices = listOf(
     Notice("ByeDPI v0.17.3", "hufrea · local anti-DPI strategies shared with desktop", "MIT",
         "https://github.com/hufrea/byedpi/tree/v0.17.3"),
-    Notice("Xray v26.10.21", "XTLS · official ARMv8 native TLS fragmentation core", "MPL-2.0",
-        "https://github.com/XTLS/Xray-core/releases/tag/v26.10.21"),
+    Notice("Xray v26.11.1", "patterniha / PattNG fork · ARMv8 TUN and TLS fragmentation", "MPL-2.0",
+        "https://github.com/patterniha/Xray-core/releases/tag/v26.11.1"),
     Notice("Aether v2.4.0", "patterniha release · MASQUE / WireGuard / Tor / Psiphon core", "AGPL-3.0",
         "https://github.com/patterniha/Aether/releases/tag/v2.4.0"),
     Notice("psiphon-tunnel-core", "CluvexStudio fork, shirokhorshid @ 83aa73b", "GPL-3.0",
         "https://github.com/CluvexStudio/psiphon-tunnel-core/tree/83aa73b9b982e7421e00117f5b0c5aceb5dda452"),
     Notice("lyrebird", "Tor Project pluggable transports @ fc105a0", "BSD",
         "https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/-/tree/fc105a03c0e0acc2479301c361c012ffed359c43"),
-    Notice("hev-socks5-tunnel 2.19.0", "heiher · Android VPN/TUN-to-SOCKS packet adapter (beta)", "MIT",
-        "https://github.com/heiher/hev-socks5-tunnel"),
+    Notice("hev-socks5-tunnel 2.19.3", "heiher upstream · same revision pinned by PattNG", "MIT",
+        "https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.19.3"),
     Notice("KTest", "Go connection core and this app", "Source", "https://github.com/Nishef1/ktest")
 )
 
@@ -128,7 +131,8 @@ internal fun SettingsScreen(
         Spacer(Modifier.height(4.dp))
 
         Panel {
-            Row(Modifier.fillMaxWidth().clickable { showPorts = !showPorts },
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .clickable(role = Role.Button) { showPorts = !showPorts },
                 verticalAlignment = Alignment.CenterVertically) {
                 IconTile(KIcons.Route, K.cyan)
                 Spacer(Modifier.width(14.dp))
@@ -139,8 +143,10 @@ internal fun SettingsScreen(
                 Icon(KIcons.ExpandMore, "Change ports", tint = K.muted)
             }
             if (showPorts) {
-                KField(socksPort, { socksPort = it; portSaved = false }, "SOCKS5 port", enabled = targetsEditable, mono = true)
-                KField(httpPort, { httpPort = it; portSaved = false }, "HTTP port", enabled = targetsEditable, mono = true)
+                KField(socksPort, { socksPort = it; portSaved = false }, "SOCKS5 port",
+                    enabled = targetsEditable, mono = true, keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+                KField(httpPort, { httpPort = it; portSaved = false }, "HTTP port",
+                    enabled = targetsEditable, mono = true, keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                 SecondaryButton("Save ports", {
                     val socks = socksPort.toIntOrNull()
                     val http = httpPort.toIntOrNull()
@@ -168,7 +174,7 @@ internal fun SettingsScreen(
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text("KTest Connection", color = K.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Version ${BuildConfig.VERSION_NAME} · preview", color = K.muted, fontSize = 12.sp)
+                    Text("Version ${BuildConfig.VERSION_NAME}", color = K.muted, fontSize = 12.sp)
                 }
             }
             Note("Updates are checked only when you ask. No background downloads or silent installs.")
@@ -194,13 +200,13 @@ internal fun SettingsScreen(
                 IconTile(KIcons.Chip, K.cyan)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Native cores", color = K.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Aether, Psiphon and Lyrebird executables", color = K.muted, fontSize = 12.sp)
+                    Text("Aether core bundle", color = K.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Aether · Psiphon · Lyrebird", color = K.muted, fontSize = 12.sp)
                 }
             }
-            Text("Checks every packaged executable against the pinned SHA-256 manifest. Nothing is downloaded or started.",
+            Text("Verifies the three Aether-bundle executables against pinned SHA-256 values. Nothing is downloaded or started.",
                 color = K.muted, fontSize = 12.sp, lineHeight = 17.sp)
-            SecondaryButton(if (s.bundleBusy) "Verifying…" else "Verify packaged cores", {
+            SecondaryButton(if (s.bundleBusy) "Verifying…" else "Verify Aether bundle", {
                 s.bundleBusy = true; s.bundleError = null; s.bundle = null
                 scope.launch {
                     try { s.bundle = withContext(Dispatchers.IO) { JSONObject(Mobilebridge.inspectAndroidBundle(nativeLibraryDir)) } }
@@ -210,13 +216,14 @@ internal fun SettingsScreen(
             }, Modifier.fillMaxWidth(), busy = s.bundleBusy, icon = KIcons.Shield)
             s.bundleError?.let { Note(it, Tone.Danger) }
             s.bundle?.let { b ->
-                Note("All packaged executables match the pinned manifest.", Tone.Good)
+                Note("Aether, Psiphon and Lyrebird match the pinned manifest.", Tone.Good)
                 KeyValue("Aether release", b.optString("version"), mono = true)
                 KeyValue("ABI", b.optString("abi"), mono = true)
                 for ((label, key) in listOf("Aether" to "aether", "Psiphon" to "psiphon", "Lyrebird" to "lyrebird")) {
                     KeyValue(label, b.optString(key).substringAfterLast('/'), K.muted, mono = true)
                 }
             }
+            Note("Xray and ByeDPI have separate runtime SHA-256 checks; the HEV AAR is pinned and verified during APK packaging.")
         }
 
         Panel {
@@ -229,7 +236,7 @@ internal fun SettingsScreen(
                         "tun_running_unverified" -> "Packet adapter running · Internet not yet verified"
                         "failed" -> "Adapter failed"
                         "revoked" -> "Permission revoked"
-                        else -> if (vpn.optBoolean("available")) "Ready" else "Not available yet"
+                        else -> if (vpn.optBoolean("available")) "Packet adapter available" else "Not available yet"
                     }, color = K.muted, fontSize = 12.sp)
                 }
                 Tag(if (vpn.optBoolean("available")) "Beta" else "Locked", if (vpn.optBoolean("available")) K.mint else K.faint)
@@ -399,11 +406,14 @@ internal fun SettingsScreen(
 
         Panel {
             SectionLabel("Open-source notices")
-            Text("KTest ships these unmodified upstream programs. Their source code is available at the links below.",
+            Text("KTest packages these release binaries without modifying them. Source and license details are available below.",
                 color = K.muted, fontSize = 12.sp, lineHeight = 17.sp)
             notices.forEachIndexed { i, n ->
                 Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { openUrl(n.url) }.padding(vertical = 6.dp),
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(12.dp))
+                        .clickable(role = Role.Button) { openUrl(n.url) }
+                        .semantics { contentDescription = "Open ${n.name} source" }
+                        .padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -412,7 +422,7 @@ internal fun SettingsScreen(
                     }
                     Tag(n.license, K.cyan)
                     Spacer(Modifier.width(6.dp))
-                    Icon(KIcons.OpenInNew, "Open source", tint = K.faint, modifier = Modifier.size(16.dp))
+                    Icon(KIcons.OpenInNew, null, tint = K.faint, modifier = Modifier.size(16.dp))
                 }
                 if (i < notices.lastIndex) Hairline()
             }
