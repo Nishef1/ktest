@@ -47,14 +47,24 @@ class ProxyService : Service() {
         const val EXTRA_METHOD = "method"
         const val EXTRA_TITLE = "title"
         const val EXTRA_VPN = "vpn"
-        private const val CHANNEL = "ktest_proxy"
-        private const val NOTIFICATION_ID = 42
+        // App-wide foreground notification shared with KTestVpnService.
+        internal const val CHANNEL = "ktest_proxy"
+        internal const val NOTIFICATION_ID = 42
+        const val ACTION_VERIFY_EXIT = "com.nishef.ktest.VERIFY_EXIT"
         @Volatile var lastError: String? = null
         /** UI-safe lifecycle signal; distinct from the Go listener's running bit. */
         @Volatile var connectionState: String = "disconnected"
             private set
         /** SystemClock.elapsedRealtime() when the current session became active; 0 otherwise. */
         @Volatile var connectedAt: Long = 0
+        @Volatile var verifiedExitIP: String = ""
+            private set
+        @Volatile var verifiedExitCountry: String = ""
+            private set
+        @Volatile var exitCheckError: String = ""
+            private set
+        @Volatile var exitCheckInProgress: Boolean = false
+            private set
 
         /** Set a per-network cache key before connecting or measuring; no SSID/BSSID is stored. */
         internal fun prepareUnderlyingNetwork(context: Context) {
@@ -88,6 +98,8 @@ class ProxyService : Service() {
 
     private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
+    private val exitCheckMutex = Mutex()
+    @Volatile private var sessionGeneration = 0L
     private var startup: Job? = null
     @Volatile private var wanted = false
     @Volatile private var stopping = false
@@ -100,6 +112,31 @@ class ProxyService : Service() {
     @Volatile private var reconnectEpoch = 0
     private var automaticRecoveryAttempts = 0
 
+    // A listening local proxy and an active TUN are not public Internet proof.
+    // The HTTPS trace is requested through KTest's own SOCKS policy. A filtered
+    // trace endpoint gives a limited status without blocking local traffic.
+    private suspend fun verifyPublicExit(generation: Long): Boolean = exitCheckMutex.withLock {
+        if (!wanted || generation != sessionGeneration) return@withLock false
+        exitCheckInProgress = true
+        try {
+            val result = runCatching { JSONObject(Mobilebridge.publicIP(true)) }
+            if (!wanted || generation != sessionGeneration) return@withLock false
+            val ip = result.getOrNull()?.optString("ip").orEmpty()
+            if (ip.isNotBlank()) {
+                verifiedExitIP = ip
+                verifiedExitCountry = result.getOrNull()?.optString("country").orEmpty()
+                exitCheckError = ""
+                true
+            } else {
+                exitCheckError = result.exceptionOrNull()?.message
+                    ?: "Public IP check did not return a verifiable exit"
+                false
+            }
+        } finally {
+            exitCheckInProgress = false
+        }
+    }
+
     // Reconnect after a network handover to refresh DNS and transport state.
     private fun watchBalancedNetwork(expectedHandle: Long) {
         clearNetworkWatch()
@@ -109,8 +146,9 @@ class ProxyService : Service() {
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
                 // Our own TUN can briefly appear as a new default network on
                 // some devices; it is not an underlying Wi-Fi/cellular handover.
-                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-                    KTestVpnService.state in setOf("starting", "preparing", "tun_running_unverified", "stopping")) return
+                // A VPN becoming the system default is not a Wi-Fi/cellular
+                // handover; rebuilding here tears down the just-started TUN.
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
                 if (network.networkHandle != expectedHandle &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
                     invalidateBalancedNetwork(network)
@@ -222,7 +260,7 @@ class ProxyService : Service() {
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, "Local proxy status", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL, "KTest connection", NotificationManager.IMPORTANCE_LOW)
         )
     }
 
@@ -247,6 +285,11 @@ class ProxyService : Service() {
                 wanted = true
                 lastError = null
                 connectedAt = 0
+                val generation = ++sessionGeneration
+                verifiedExitIP = ""
+                verifiedExitCountry = ""
+                exitCheckError = ""
+                exitCheckInProgress = false
                 startForeground(NOTIFICATION_ID, notification(title))
                 startup = worker.launch {
                     try {
@@ -309,6 +352,12 @@ class ProxyService : Service() {
                             }
                         }
                         if (wanted) {
+                            // Warm the upstream before installing a system VPN route.
+                            // Do not report Connected until a real HTTPS request
+                            // through the local SOCKS proxy has returned an IP.
+                            connectionState = "verifying"
+                            verifyPublicExit(generation)
+                            if (!wanted) error("Connection canceled during exit verification")
                             // A live local proxy does not prove a device-wide VPN. Wait
                             // until VpnService actually establishes HEV and attaches its
                             // TUN fd; fail instead of claiming whole-device coverage.
@@ -331,10 +380,13 @@ class ProxyService : Service() {
                             }
                             if (!wanted) error("Connection stopped during VPN startup")
                             connectedAt = SystemClock.elapsedRealtime()
-                            connectionState = "connected"
-                            getSystemService(NotificationManager::class.java)
-                                .notify(NOTIFICATION_ID, notification(title, true))
+                            connectionState = if (verifiedExitIP.isNotBlank()) "connected" else "limited"
+                            getSystemService(NotificationManager::class.java).notify(
+                                NOTIFICATION_ID,
+                                notification(title, verifiedExitIP.isNotBlank(), limited = verifiedExitIP.isBlank())
+                            )
                         }
+                        var nextExitCheck = SystemClock.elapsedRealtime() + 30_000L
                         while (wanted && isActive) {
                             val status = JSONObject(Mobilebridge.proxyStatus())
                             if (!status.optBoolean("running")) {
@@ -357,6 +409,14 @@ class ProxyService : Service() {
                                 connectionState = "failed"
                                 wanted = false
                                 break
+                            }
+                            if (verifiedExitIP.isBlank() && SystemClock.elapsedRealtime() >= nextExitCheck) {
+                                nextExitCheck = SystemClock.elapsedRealtime() + 30_000L
+                                if (verifyPublicExit(generation) && wanted && generation == sessionGeneration) {
+                                    connectionState = "connected"
+                                    getSystemService(NotificationManager::class.java)
+                                        .notify(NOTIFICATION_ID, notification(title, true))
+                                }
                             }
                             delay(1000)
                         }
@@ -396,6 +456,23 @@ class ProxyService : Service() {
                     }
                 }
             }
+            ACTION_VERIFY_EXIT -> {
+                if (wanted && connectionState in setOf("connected", "limited") && !exitCheckInProgress) {
+                    val generation = sessionGeneration
+                    val title = activeRequest?.getStringExtra(EXTRA_TITLE) ?: "KTest"
+                    worker.launch {
+                        if (verifyPublicExit(generation) && wanted && generation == sessionGeneration) {
+                            connectionState = "connected"
+                        }
+                        if (wanted && generation == sessionGeneration) {
+                            getSystemService(NotificationManager::class.java).notify(
+                                NOTIFICATION_ID,
+                                notification(title, verifiedExitIP.isNotBlank(), limited = verifiedExitIP.isBlank())
+                            )
+                        }
+                    }
+                }
+            }
             ACTION_RECONNECT -> {
                 val request = pendingReconnect
                 if (request == null || stopping) return START_NOT_STICKY
@@ -407,6 +484,10 @@ class ProxyService : Service() {
                 reconnectJob = null
                 wanted = false
                 connectedAt = 0
+                sessionGeneration++
+                verifiedExitIP = ""
+                verifiedExitCountry = ""
+                exitCheckError = ""
                 stopVpn()
                 stopping = true
                 startForeground(NOTIFICATION_ID, notification(request.getStringExtra(EXTRA_TITLE) ?: "KTest"))
@@ -466,6 +547,10 @@ class ProxyService : Service() {
                 activeRequest = null
                 wanted = false
                 connectedAt = 0
+                sessionGeneration++
+                verifiedExitIP = ""
+                verifiedExitCountry = ""
+                exitCheckError = ""
                 stopVpn()
                 stopping = true
                 val oldStartup = startup
@@ -524,6 +609,10 @@ class ProxyService : Service() {
         }
         activeRequest = null
         connectedAt = 0
+        sessionGeneration++
+        verifiedExitIP = ""
+        verifiedExitCountry = ""
+        exitCheckError = ""
         stopVpn()
         startup?.cancel()
         Mobilebridge.cancelProxyStart()
@@ -553,7 +642,7 @@ class ProxyService : Service() {
         }
     }
 
-    private fun notification(title: String, active: Boolean = false): Notification {
+    private fun notification(title: String, active: Boolean = false, limited: Boolean = false): Notification {
         val open = PendingIntent.getActivity(
             this, 1, Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
@@ -566,8 +655,16 @@ class ProxyService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_ktest)
             .setColor(0xFF5EF2C4.toInt())
-            .setContentTitle(if (active) "Connected · $title" else "Connecting · $title")
-            .setContentText(if (active) "Local proxy active for apps you configure" else "Starting and verifying the route…")
+            .setContentTitle(when {
+                active -> "Connected · $title"
+                limited -> "Proxy ready · public IP unverified"
+                else -> "Connecting · $title"
+            })
+            .setContentText(when {
+                active -> "Verified IP: $verifiedExitIP · local SOCKS/VPN path"
+                limited -> "Local route active; public Internet not confirmed"
+                else -> "Starting and verifying the route…"
+            })
             .setShowWhen(active)
             .setUsesChronometer(active)
             .setWhen(System.currentTimeMillis())

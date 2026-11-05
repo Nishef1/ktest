@@ -132,12 +132,17 @@ private fun Hero(
     coverage: String, vpnActive: Boolean, connectBlocked: Boolean, manualTesting: Boolean, onPower: () -> Unit
 ) {
     val phase = status.optString("phase")
+    val exitConfirmed = ProxyService.verifiedExitIP.isNotBlank()
     Column(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         PowerOrb(state, connectBlocked, onPower)
         Spacer(Modifier.height(14.dp))
         Text(
             when (state) {
-                LinkState.Active -> if (coverage != "proxy" && !vpnActive) "Connected · VPN inactive" else "Connected"
+                LinkState.Active -> when {
+                    !exitConfirmed -> "Route ready · IP unverified"
+                    coverage != "proxy" && !vpnActive -> "Connected · VPN inactive"
+                    else -> "Connected"
+                }
                 LinkState.Connecting -> "Connecting…"
                 LinkState.Disconnecting -> "Disconnecting…"
                 LinkState.Unavailable -> "Not available yet"
@@ -152,15 +157,17 @@ private fun Hero(
                 // One plain answer: what is covered.
                 val vpnMissing = coverage != "proxy" && !vpnActive
                 Text(when {
+                    !exitConfirmed -> "The local packet/proxy path is ready, but public HTTPS exit verification has not succeeded. Internet access is not confirmed."
                     vpnMissing -> "Apps configured for the local proxy can use it, but device-wide VPN is not active. Check Settings for the packet-adapter error."
                     coverage == "proxy" -> "Apps configured to use the local proxy can use it."
                     else -> "System VPN is active; destination access depends on the route selected for each connection."
-                }, color = if (vpnMissing) K.amber else K.muted,
+                }, color = if (vpnMissing || !exitConfirmed) K.amber else K.muted,
                     fontSize = 12.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 22.dp))
             }
             LinkState.Connecting -> Text(
-                when (phase) {
+                if (ProxyService.connectionState == "verifying") "Checking public HTTPS access before enabling the system VPN"
+                else when (phase) {
                     "starting_core" -> "Starting ${mode.title}…"
                     "verifying_upstream" -> "Waiting for the tunnel and a working exit"
                     "calibrating" -> "Calibrating routes before connection"
@@ -196,7 +203,7 @@ private fun Hero(
         if (state == LinkState.Active) {
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Tag(mode.title, K.mint)
+                Tag(mode.title, if (exitConfirmed) K.mint else K.amber)
                 if (coverage != "proxy") Tag(if (vpnActive) "Packet VPN active" else "VPN inactive", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
                 // Public exit location is shown in the fixed top IP panel.
@@ -253,13 +260,14 @@ private fun PhaseSteps(steps: List<Pair<String, String>>, phase: String) {
 @Composable
 private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> Unit) {
     val active = state == LinkState.Active
+    val exitConfirmed = ProxyService.verifiedExitIP.isNotBlank()
     val connecting = state == LinkState.Connecting
     val busy = connecting || state == LinkState.Disconnecting
     val enabled = active || connecting ||
         (state != LinkState.Disconnecting && state != LinkState.Unavailable && !connectBlocked)
     val iconColor by animateColorAsState(
         when (state) {
-            LinkState.Active -> K.mint
+            LinkState.Active -> if (exitConfirmed) K.mint else K.amber
             LinkState.Connecting -> K.cyan
             LinkState.Disconnecting -> K.amber
             LinkState.Idle -> if (connectBlocked) K.faint else K.text
@@ -295,7 +303,7 @@ private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> U
         Canvas(Modifier.fillMaxSize()) {
             val r = size.minDimension / 2
             val glow = when (state) {
-                LinkState.Active -> K.mint
+                LinkState.Active -> if (exitConfirmed) K.mint else K.amber
                 LinkState.Connecting -> K.cyan
                 LinkState.Disconnecting -> K.amber
                 else -> K.strokeStrong
@@ -304,14 +312,16 @@ private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> U
                 center, r), r)
             if (active) for (k in 0..1) {
                 val p = (motion + k * .5f) % 1f
-                drawCircle(K.mint.copy(alpha = (1f - p) * .28f), r * (.66f + p * .32f), style = Stroke(1.5.dp.toPx()))
+                drawCircle((if (exitConfirmed) K.mint else K.amber).copy(alpha = (1f - p) * .28f), r * (.66f + p * .32f), style = Stroke(1.5.dp.toPx()))
             }
             val ringR = r * .72f
             val ringTopLeft = Offset(center.x - ringR, center.y - ringR)
             val ringSize = Size(ringR * 2, ringR * 2)
             drawCircle(K.stroke, ringR, style = Stroke(6.dp.toPx()))
             when {
-                active -> drawCircle(Brush.sweepGradient(listOf(K.mint, K.cyan, K.mint), center), ringR, style = Stroke(6.dp.toPx()))
+                active -> drawCircle(Brush.sweepGradient(
+                    if (exitConfirmed) listOf(K.mint, K.cyan, K.mint) else listOf(K.amber, K.faint, K.amber),
+                    center), ringR, style = Stroke(6.dp.toPx()))
                 busy -> rotate(motion * 360f) {
                     val progressColor = if (state == LinkState.Disconnecting) K.amber else K.cyan
                     drawArc(Brush.sweepGradient(listOf(Color.Transparent, progressColor, K.mint), center),
@@ -319,7 +329,8 @@ private fun PowerOrb(state: LinkState, connectBlocked: Boolean, onClick: () -> U
                 }
             }
             drawCircle(Brush.radialGradient(listOf(K.surfaceHigh, K.surface), center.copy(y = center.y - r * .2f), r * .7f), r * .6f)
-            drawCircle(if (active) K.mint.copy(alpha = .35f) else K.strokeStrong, r * .6f, style = Stroke(1.dp.toPx()))
+            drawCircle(if (active) (if (exitConfirmed) K.mint else K.amber).copy(alpha = .35f) else K.strokeStrong,
+                r * .6f, style = Stroke(1.dp.toPx()))
         }
         Icon(KIcons.Power, null, tint = iconColor, modifier = Modifier.size(64.dp))
     }
@@ -358,21 +369,37 @@ internal fun flagOf(country: String): String =
 
 @Composable
 private fun PublicIpPanel(connected: Boolean) {
-    // "Before" is the plain network, kept from the last disconnected check.
+    // ProxyService owns connected-IP verification. The UI only reads its
+    // result; a separate probe here would race and contradict notification.
+    val context = androidx.compose.ui.platform.LocalContext.current
     var before by remember { mutableStateOf(lastDirectIp) }
-    var after by remember { mutableStateOf<JSONObject?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var busyDirect by remember { mutableStateOf(false) }
+    var directError by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(connected, refresh) {
-        busy = true; error = null
-        val result = runCatching {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { JSONObject(Mobilebridge.publicIP(connected)) }
+        if (connected) {
+            if (refresh > 0) {
+                context.startService(android.content.Intent(context, ProxyService::class.java).apply {
+                    action = ProxyService.ACTION_VERIFY_EXIT
+                })
+            }
+            return@LaunchedEffect
         }
-        result.onSuccess { if (connected) after = it else { before = it; lastDirectIp = it; after = null } }
-            .onFailure { error = it.message }
-        busy = false
+        busyDirect = true
+        directError = null
+        val result = runCatching {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { JSONObject(Mobilebridge.publicIP(false)) }
+        }
+        result.onSuccess { before = it; lastDirectIp = it }
+            .onFailure { directError = it.message }
+        busyDirect = false
     }
+    val exitIp = ProxyService.verifiedExitIP
+    val checkedExit = if (connected && exitIp.isNotBlank()) {
+        JSONObject().put("ip", exitIp).put("country", ProxyService.verifiedExitCountry)
+    } else null
+    val busy = if (connected) ProxyService.exitCheckInProgress else busyDirect
+    val error = if (connected) ProxyService.exitCheckError else directError
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionLabel("IP & country")
@@ -385,8 +412,8 @@ private fun PublicIpPanel(connected: Boolean) {
             }
         }
         IpRow("Before", before, K.muted)
-        IpRow("Exit", if (connected) after else null, K.mint, placeholder = if (connected) "Checking…" else "Not connected")
-        // Reserve this line so a delayed IP lookup cannot shift the power button.
+        IpRow("Exit", checkedExit, if (checkedExit != null) K.mint else K.amber,
+            placeholder = if (connected) "IP not verified" else "Not connected")
         Text(error?.take(90) ?: " ", color = K.amber, maxLines = 1,
             overflow = TextOverflow.Ellipsis, fontSize = 11.sp, modifier = Modifier.fillMaxWidth())
     }

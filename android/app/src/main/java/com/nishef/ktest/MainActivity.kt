@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val connectingPhases = setOf("preparing", "starting_core", "verifying_upstream", "calibrating")
+private val connectingPhases = setOf("preparing", "starting_core", "verifying_upstream", "verifying", "calibrating")
 
 // A saved native method can disappear after a core upgrade or a mode change.
 // Validate it against the same Go-owned method catalog used by the selector.
@@ -116,9 +116,10 @@ private fun KTestApp() {
     val routeTargets = remember { RouteTargetsState() }
     val serviceConnectionState = ProxyService.connectionState
     val backendRunning = status.optBoolean("running")
-    val serviceTransitioning = serviceConnectionState in setOf("connecting", "recovering", "disconnecting")
-    val running = serviceConnectionState == "connected" ||
-        (backendRunning && serviceConnectionState !in setOf("connecting", "recovering", "disconnecting", "failed"))
+    val serviceTransitioning = serviceConnectionState in setOf("connecting", "recovering", "verifying", "disconnecting")
+    // A listening Go SOCKS port is not a verified exit. The owning service
+    // distinguishes connected and limited after a real HTTPS IP preflight.
+    val running = serviceConnectionState in setOf("connected", "limited")
     val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
     val manualTesting = routePlan.manualBusy
     val offline = !running && !connecting && !disconnecting && !connectAfterConsent && !routePlan.busy &&
@@ -135,7 +136,7 @@ private fun KTestApp() {
         !scanBusy && scanStatusReady && activeMode.id in listOf("balanced", "fast")
     val linkState = when {
         disconnecting || serviceConnectionState == "disconnecting" -> LinkState.Disconnecting
-        serviceConnectionState in setOf("connecting", "recovering") -> LinkState.Connecting
+        serviceConnectionState in setOf("connecting", "recovering", "verifying") -> LinkState.Connecting
         serviceConnectionState == "failed" && !connecting -> if (activeMode.available) LinkState.Idle else LinkState.Unavailable
         running -> LinkState.Active
         (connecting || connectAfterConsent) && !manualTesting -> LinkState.Connecting
@@ -227,7 +228,7 @@ private fun KTestApp() {
                         connectRequestedAt = 0L
                     }
                 }
-                serviceState in setOf("connecting", "recovering") -> {
+                serviceState in setOf("connecting", "recovering", "verifying") -> {
                     connecting = true
                     disconnecting = false
                 }
@@ -246,7 +247,7 @@ private fun KTestApp() {
                         ?: status.optString("error").takeIf { it.isNotBlank() }
                         ?: "Connection failed"
                 }
-                backendActive || serviceState == "connected" -> {
+                serviceState in setOf("connected", "limited") -> {
                     connecting = false
                     disconnecting = false
                     connectRequestedAt = 0L

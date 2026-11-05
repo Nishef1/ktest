@@ -39,8 +39,9 @@ class KTestVpnService : VpnService() {
         const val ACTION_START = "com.nishef.ktest.VPN_START"
         const val ACTION_STOP = "com.nishef.ktest.VPN_STOP"
         const val EXTRA_UNDERLYING_NETWORK_HANDLE = "underlying_network_handle"
-        private const val CHANNEL = "ktest_system_vpn"
-        private const val NOTIFICATION_ID = 43
+        // Share the foreground notification with ProxyService: one status icon.
+        private const val CHANNEL = ProxyService.CHANNEL
+        private const val NOTIFICATION_ID = ProxyService.NOTIFICATION_ID
         @Volatile var state: String = "disconnected"
             private set
         @Volatile var lastError: String? = null
@@ -71,7 +72,7 @@ class KTestVpnService : VpnService() {
         Mobilebridge.setAndroidXrayTunPaths(applicationInfo.nativeLibraryDir, filesDir.canonicalPath)
         Mobilebridge.setAndroidVpnPacketAdapter(HevPacketAdapter(this))
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, "KTest VPN", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL, "KTest connection", NotificationManager.IMPORTANCE_LOW)
         )
     }
 
@@ -119,21 +120,25 @@ class KTestVpnService : VpnService() {
                         }
                         val tunDevice = builder.establish()
                             ?: error("Android did not establish the TUN interface")
-                        if (underlyingHandle > 0) {
-                            val underlying = android.net.Network.fromNetworkHandle(underlyingHandle)
-                            val manager = getSystemService(android.net.ConnectivityManager::class.java)
-                            if (manager.getNetworkCapabilities(underlying)?.hasCapability(
-                                    android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET
-                                ) == true) {
-                                setUnderlyingNetworks(arrayOf(underlying))
-                            }
-                        }
-
+                        // Attaching the packet adapter is time-critical: Android
+                        // has already switched routes after Builder.establish().
                         tun = tunDevice
                         // Go prefers the pinned Xray TUN inbound and falls back
                         // to HEV if startup fails. Both feed the same adaptive
                         // Go SOCKS policy; Kotlin never selects site routes.
                         Mobilebridge.attachVpnTun(tunDevice.fd.toLong())
+                        // Set network metadata AFTER the TUN packet path is live.
+                        if (underlyingHandle > 0) {
+                            runCatching {
+                                val underlying = android.net.Network.fromNetworkHandle(underlyingHandle)
+                                val manager = getSystemService(android.net.ConnectivityManager::class.java)
+                                if (manager.getNetworkCapabilities(underlying)?.hasCapability(
+                                        android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET
+                                    ) == true) {
+                                    setUnderlyingNetworks(arrayOf(underlying))
+                                }
+                            }
+                        }
                         if (!isActive || startGeneration != runGeneration) {
                             Mobilebridge.stopVpnTun()
                             throw CancellationException("VPN startup canceled")
@@ -267,7 +272,7 @@ class KTestVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_ktest)
-            .setContentTitle("KTest VPN")
+            .setContentTitle("KTest connection")
             .setContentText(detail)
             .setContentIntent(open)
             .setOngoing(true)
