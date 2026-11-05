@@ -170,8 +170,11 @@ def prepare(manifest, cache, destination, abis, verify_only):
                     staged_path.replace(output)
                 finally:
                     staged_path.unlink(missing_ok=True)
-        if not verify_only and manifest["repository"] == "https://github.com/XTLS/Xray-core":
-            # The exact pinned official archive supplies the license verbatim.
+        if not verify_only and manifest["repository"] in {
+                "https://github.com/XTLS/Xray-core",
+                "https://github.com/patterniha/Xray-core",
+        }:
+            # The exact pinned release archive supplies the license verbatim.
             with zipfile.ZipFile(archive) as xray_archive:
                 license_text = xray_archive.read("LICENSE")
             if len(license_text) == 0 or len(license_text) > 1 << 20:
