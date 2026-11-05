@@ -171,7 +171,7 @@ class KTestVpnService : VpnService() {
                             if (startGeneration == runGeneration) {
                                 if (adapterStopped) lastError = "Connection stopped; VPN packet adapter became unhealthy"
                                 state = "disconnected"
-                                stopForeground(STOP_FOREGROUND_REMOVE)
+                                releaseForegroundNotification()
                                 stopSelfResult(startId)
                             }
                         }
@@ -185,7 +185,7 @@ class KTestVpnService : VpnService() {
                             if (startGeneration == runGeneration) {
                                 lastError = errorMessage
                                 state = "failed"
-                                stopForeground(STOP_FOREGROUND_REMOVE)
+                                releaseForegroundNotification()
                                 stopSelfResult(startId)
                             }
                         }
@@ -245,7 +245,7 @@ class KTestVpnService : VpnService() {
             withContext(Dispatchers.Main) {
                 state = stopTargetState
                 stopTargetError?.let { lastError = it }
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                releaseForegroundNotification()
                 stopping = false
                 stopSelf()
             }
@@ -261,6 +261,24 @@ class KTestVpnService : VpnService() {
         runCatching { setUnderlyingNetworks(null) }
         runCatching { tun?.close() }
         tun = null
+    }
+
+    // A foreground notification may be associated with both running services.
+    // Detach it when the proxy still owns the session; removing it here could
+    // accidentally hide the remaining foreground proxy notification.
+    private fun releaseForegroundNotification() {
+        if (ProxyService.connectionState in setOf(
+                "connecting", "verifying", "connected", "limited", "recovering", "disconnecting"
+            )) {
+            stopForeground(STOP_FOREGROUND_DETACH)
+            runCatching {
+                startService(Intent(this, ProxyService::class.java).apply {
+                    action = ProxyService.ACTION_REFRESH_NOTIFICATION
+                })
+            }
+        } else {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
     }
 
     private fun notification(detail: String): Notification {

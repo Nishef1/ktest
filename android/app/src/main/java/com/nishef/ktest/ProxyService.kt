@@ -51,6 +51,7 @@ class ProxyService : Service() {
         internal const val CHANNEL = "ktest_proxy"
         internal const val NOTIFICATION_ID = 42
         const val ACTION_VERIFY_EXIT = "com.nishef.ktest.VERIFY_EXIT"
+        const val ACTION_REFRESH_NOTIFICATION = "com.nishef.ktest.REFRESH_STATUS"
         @Volatile var lastError: String? = null
         /** UI-safe lifecycle signal; distinct from the Go listener's running bit. */
         @Volatile var connectionState: String = "disconnected"
@@ -454,6 +455,18 @@ class ProxyService : Service() {
                             }
                         }
                     }
+                }
+            }
+            ACTION_REFRESH_NOTIFICATION -> {
+                // When the VPN-only foreground owner stops, keep the proxy's
+                // shared notification visible and restore the correct action.
+                if (wanted) {
+                    val title = activeRequest?.getStringExtra(EXTRA_TITLE) ?: "KTest"
+                    getSystemService(NotificationManager::class.java).notify(
+                        NOTIFICATION_ID,
+                        notification(title, verifiedExitIP.isNotBlank(),
+                            limited = connectionState == "limited")
+                    )
                 }
             }
             ACTION_VERIFY_EXIT -> {

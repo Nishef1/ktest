@@ -5,7 +5,9 @@
 The old ProxyService and KTestVpnService were foreground services with
 different notification IDs (42 and 43) and channels. They now use the
 same package notification ID (42) and channel. Both remain foreground
-services and each still promotes itself promptly. This is intended to
+services and each still promotes itself promptly. If VPN alone stops while
+the proxy foreground service is still active, VPN detaches rather than
+removing the shared notice and asks the proxy to refresh its status. This is intended to
 present one active status-bar notification rather than two.
 
 Go proxy listener readiness is not equivalent to public Internet access.
