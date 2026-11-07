@@ -42,6 +42,12 @@ The previously pinned Aether v2.3.2 release continues to build Tor support with 
 
 An `Aether to Tor` / `Aether to Psiphon` label selects an Aether backend; it does not authorize adding a WARP hop to the current Tor-only/Psiphon-only policies. Aether does not replace Windscribe, Xray or ByeDPI merely by having Tor/Psiphon support. See [mode contracts](CONNECTION_MODES.md).
 
+## Re-checked 2026-11-07
+
+- **Resolved in source:** the two P1 items below. `sessionNeedsTLSCalibration` skips MASQUE calibration for Psiphon/Tor/Windscribe and forced non-MASQUE Aether methods; `fragment=off` drops the TCP `tlshello-0-len` exit-node variants and keeps only the UDP-noise fallback (`TestAetherFragmentOffSkipsTCPExitNodeMasksButKeepsUDPNoise`, `TestExitNodeFragmentOffDisablesOnlyTCPHelloMasks`). The list is kept for history.
+- **Windscribe through Aether, desktop:** on 2026-11-07 the Windscribe app was Connected (OpenVPN TCP/443, Ashburn) with its HTTP proxy on ktest, and `windscribe-test -verify-vpn` matched the system HTTPS exit IP to the CLI's VPN IP. This confirms the sampled request only; other apps, DNS and the specific carrier were not tested. Windscribe CLI status parsing now accepts the newer `Login:` / `Connection:` / `IP: ... (VPN)` layout and no longer depends on the account's login line.
+- **Still open (needs hardware or a live network):** every physical-device item, performance benchmarks, per-method Aether/Tor/Psiphon acceptance, TalkBack checks and release signing/notices.
+
 ## Current audit priorities (2026-10-21)
 
 1. **P1 — avoid irrelevant calibration:** filter the selected Aether method before MASQUE/F&F calibration; a forced WireGuard method currently can still enter the MASQUE calibration path.
