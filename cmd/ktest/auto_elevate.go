@@ -27,6 +27,15 @@ func autoElevate(args []string) bool {
 	if len(args) > 0 && len(args) > 1 && args[1] == elevatedSessionArg {
 		return false
 	}
+	for _, a := range args {
+		switch a {
+		case "-h", "-help", "--help":
+			return false // help text needs no Administrator
+		}
+	}
+	if info, err := os.Stdin.Stat(); err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return false // piped or scheduled runs must never wait on a UAC prompt
+	}
 	if exe, err := os.Executable(); err != nil || strings.Contains(strings.ToLower(exe), "go-build") {
 		// `go run` deletes its temporary executable when the parent exits.
 		return false
