@@ -190,19 +190,18 @@ private fun Hero(
         }
         if (state == LinkState.Connecting) {
             val native = mode.id in nativeModes && (mode.id != "aether" || upstream.isBlank())
+            // At most three steps: start, verify, activate VPN.
             val steps = buildList {
-                add("preparing" to "Prepare")
-                if (native) add("starting_core" to "Start core")
-                if (native || upstream.isNotBlank()) add("verifying_upstream" to "Verify exit")
-                if (mode.id == "balanced" || mode.id == "fast") add("calibrating" to "Calibrate")
-                add("verifying" to "Verify HTTPS")
+                add(if (native) "starting_core" to "Start core" else "preparing" to "Prepare")
+                add("verifying" to "Verify")
                 if (coverage != "proxy") add("activating_vpn" to "Activate VPN")
             }
             if (steps.size > 1) {
                 Spacer(Modifier.height(16.dp))
-                val current = when (ProxyService.connectionState) {
-                    "verifying", "activating_vpn" -> ProxyService.connectionState
-                    else -> phase
+                val current = when (val c = ProxyService.connectionState.takeIf { it == "verifying" || it == "activating_vpn" } ?: phase) {
+                    "preparing" -> if (native) "starting_core" else "preparing"
+                    "verifying_upstream", "calibrating" -> "verifying"
+                    else -> c
                 }
                 PhaseSteps(steps, current)
             }
@@ -238,7 +237,7 @@ private fun PhaseSteps(steps: List<Pair<String, String>>, phase: String) {
     val pulse = rememberInfiniteTransition(label = "step").animateFloat(
         .35f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "stepPulse"
     )
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 12.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         steps.forEachIndexed { index, (_, label) ->
             val done = index < current
             val active = index == current
@@ -254,10 +253,10 @@ private fun PhaseSteps(steps: List<Pair<String, String>>, phase: String) {
                         fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(5.dp))
-                Text(label, fontSize = 11.sp, color = when { done -> K.mint; active -> K.text; else -> K.faint })
+                Text(label, fontSize = 11.sp, maxLines = 1, softWrap = false, color = when { done -> K.mint; active -> K.text; else -> K.faint })
             }
             if (index < steps.lastIndex) {
-                Box(Modifier.padding(horizontal = 6.dp).padding(bottom = 18.dp).width(34.dp).height(2.dp)
+                Box(Modifier.weight(1f).padding(horizontal = 6.dp).padding(bottom = 18.dp).height(2.dp)
                     .clip(CircleShape).background(if (done) K.mint else K.stroke))
             }
         }
