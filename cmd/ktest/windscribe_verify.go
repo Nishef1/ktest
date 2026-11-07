@@ -20,18 +20,16 @@ type wsCLIStatus struct {
 func windscribeStatusIssue(raw string, state windscribeState, loggedIn bool) string {
 	raw = normalizeWindscribeStatus(raw)
 	if !loggedIn {
+		// The account's login is Windscribe's business, never reported here:
+		// only whether the CLI told us the tunnel state.
 		for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
 			field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-			if ok && strings.EqualFold(strings.TrimSpace(field), "Login state") {
-				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "error:") {
-					return "Windscribe connection status is not available; check the connection in the app"
-				}
-				if !strings.EqualFold(strings.TrimSpace(value), "logged in") {
-					return "Windscribe desktop app is not logged in; open the app and log in"
-				}
+			if ok && strings.EqualFold(strings.TrimSpace(field), "Login state") &&
+				strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "error:") {
+				return "Windscribe connection status is not available; check the connection in the app"
 			}
 		}
-		return "Windscribe CLI returned no recognizable login state; inspect windscribe-cli status"
+		return "Windscribe CLI returned no recognizable connection state; inspect windscribe-cli status"
 	}
 	if state == windscribeUnknown {
 		// Windscribe 2.25.6 reports failed connection attempts as

@@ -62,7 +62,7 @@ func TestParseWindscribeStatus(t *testing.T) {
 		{"connecting", "Login state: Logged in\nConnect state: Connecting\n", windscribeConnecting, true},
 		{"reconnecting", "Login state: Logged in\nConnect state: Reconnecting\n", windscribeConnecting, true},
 		{"disconnected", "Login state: Logged in\nConnect state: Disconnected\n", windscribeDisconnected, true},
-		{"loggedout", "Login state: Not logged in\nConnect state: Disconnected\n", windscribeUnknown, false},
+		{"login line ignored when disconnected", "Login state: Not logged in\nConnect state: Disconnected\n", windscribeDisconnected, true},
 		{"API SSL error with live tunnel", "Login state: Error: SSL error\nConnect state: Connected: London - 1984\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeConnected, false},
 		{"API error during handshake", "Login state: Error: Network error\nConnect state: Connecting\nProtocol: TCP:443\n", windscribeConnecting, false},
 		{"API error during tunnel test", "Login state: Error: SSL error\n*Connect state: Connected: London\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeConnecting, false},
@@ -70,7 +70,8 @@ func TestParseWindscribeStatus(t *testing.T) {
 		{"API error without tunnel evidence", "Login state: Error: SSL error\nConnect state: Connected: London\n", windscribeConnecting, false},
 		{"API error without public exit", "Login state: Error: SSL error\nConnect state: Connected: London\nProtocol: TCP:443\nVPN IP: 10.0.0.1\n", windscribeConnecting, false},
 		{"API error without connection state", "Login state: Error: SSL error\n", windscribeUnknown, false},
-		{"explicit logout with stale tunnel", "Login state: Not logged in\nConnect state: Connected: London\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeUnknown, false},
+		{"login line ignored when connected", "Login state: Not logged in\nConnect state: Connected: London\nProtocol: TCP:443\nVPN IP: 212.102.63.30\n", windscribeConnected, true},
+		{"no login line at all", "Connect state: Connected: London\nProtocol: TCP:443\n", windscribeConnected, true},
 		{"ambiguous", "Login state: Logged in\nConnect state: Warming up\n", windscribeUnknown, true},
 		{"empty", "", windscribeUnknown, false},
 	}
@@ -128,11 +129,11 @@ func TestWindscribeOverrideRequiresAbsolutePath(t *testing.T) {
 
 func TestWindscribeStatusIssueDoesNotEchoCredentials(t *testing.T) {
 	message := windscribeStatusIssue("Login state: Not logged in\nToken: NOT_FOR_LOGS\n", windscribeUnknown, false)
-	if !strings.Contains(message, "not logged in") || strings.Contains(message, "NOT_FOR_LOGS") {
+	if strings.Contains(message, "logged in") || strings.Contains(message, "NOT_FOR_LOGS") {
 		t.Fatalf("unsafe login diagnosis: %q", message)
 	}
 	message = windscribeStatusIssue("No parsable state", windscribeUnknown, false)
-	if !strings.Contains(message, "login state") {
+	if !strings.Contains(message, "connection state") {
 		t.Fatalf("missing CLI status diagnosis: %q", message)
 	}
 	message = windscribeStatusIssue("Login state: Logged in\nConnect state: Unknown", windscribeUnknown, true)

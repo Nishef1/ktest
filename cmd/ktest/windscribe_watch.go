@@ -103,6 +103,12 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 				return windscribeDisconnected, false
 			}
 		}
+		// The tunnel state comes from the local Windscribe service and does
+		// not depend on the account, so a known tunnel state is trusted even
+		// when the CLI's login line says otherwise or is absent.
+		if !accountAPIError && state != windscribeUnknown {
+			return state, true
+		}
 		return windscribeUnknown, false
 	}
 	return state, true
