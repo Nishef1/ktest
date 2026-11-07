@@ -344,3 +344,37 @@ func TestParseWindscribeStatusNewCLILayout(t *testing.T) {
 		t.Fatalf("disconnected: state=%v loggedIn=%v", state, loggedIn)
 	}
 }
+
+func TestParseWindscribeStatusNewCLIOtherStates(t *testing.T) {
+	cases := []struct {
+		name, raw string
+		want      windscribeState
+	}{
+		{"connecting", "Login:  Logged in\nConnection:  Connecting to Ashburn\n", windscribeConnecting},
+		{"disconnected public ip", "Login:  Logged in\nConnection:  Disconnected\nIP:  8.8.4.4 (public)\n", windscribeDisconnected},
+		{"logged out still reports state", "Login:  Logged out\nConnection:  Connected to Ashburn\nIP:  1.2.3.4 (VPN)\n", windscribeConnected},
+	}
+	for _, c := range cases {
+		got, _ := parseWindscribeStatus(c.raw)
+		if got != c.want {
+			t.Errorf("%s: state=%v want %v", c.name, got, c.want)
+		}
+	}
+	if ip := parseWindscribeVPNIP("Connection: Disconnected\nIP: 8.8.4.4 (public)\n"); ip != "" {
+		t.Errorf("public IP mapped to VPN IP: %q", ip)
+	}
+}
+
+func TestAutoVerifyOnceDedupesPerIP(t *testing.T) {
+	m := &windscribeMonitor{verifiedIP: "1.2.3.4"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.autoVerifyOnce(ctx, "1.2.3.4") // already verified: must not change anything
+	if m.verifiedIP != "1.2.3.4" {
+		t.Fatalf("verifiedIP=%q", m.verifiedIP)
+	}
+	m.autoVerifyOnce(ctx, "5.6.7.8")
+	if m.verifiedIP != "5.6.7.8" {
+		t.Fatalf("new IP not recorded: %q", m.verifiedIP)
+	}
+}

@@ -220,6 +220,7 @@ type windscribeMonitor struct {
 	disconnectedSamples int
 	onTCPConnected      func() // optional, once the CLI confirms TCP Connected
 	issue               string // why the last status was unknown
+	verifiedIP          string // VPN IP already checked by the automatic data check
 }
 
 func (m *windscribeMonitor) State() windscribeState {
@@ -356,6 +357,8 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 	changed := state != previous
 	if state == windscribeConnected {
 		m.connectedOnce = true
+	} else {
+		m.verifiedIP = "" // check again after any reconnect, even to the same IP
 	}
 	if state == windscribeDisconnected {
 		m.disconnectedSamples++
@@ -419,6 +422,9 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 			m.t.Note("Windscribe VPN IP (CLI): unavailable; requested/entry addresses are not the VPN exit IP")
 		}
 	}
+	if state == windscribeConnected && vpnIP != "" && m.cli != "" && strings.HasPrefix(strings.ToLower(protocol), "tcp:") {
+		m.autoVerifyOnce(ctx, vpnIP)
+	}
 	if (changed || protocolChanged) && (state == windscribeConnecting || state == windscribeConnected) &&
 		protocol != "" && !strings.HasPrefix(strings.ToLower(protocol), "tcp:") {
 		m.t.Note("Windscribe protocol %s: this VPN tunnel is not carried by ktest's HTTP bootstrap; use OpenVPN TCP to test local anti-DPI", protocol)
@@ -434,6 +440,36 @@ func (m *windscribeMonitor) refresh(ctx context.Context) {
 			m.t.Note("Windscribe reconnect command failed: %v", e)
 		}
 	}
+}
+
+// autoVerifyOnce runs the same single-request data check as
+// `windscribe-test -verify-vpn` once per reported VPN IP, shortly after the
+// CLI says Connected, so nobody has to run it by hand. It is read-only: it
+// never reconnects, changes a location or touches the firewall. A routing
+// that needs a moment to settle gets one delayed retry.
+func (m *windscribeMonitor) autoVerifyOnce(ctx context.Context, vpnIP string) {
+	m.mu.Lock()
+	if m.verifiedIP == vpnIP {
+		m.mu.Unlock()
+		return
+	}
+	m.verifiedIP = vpnIP
+	m.mu.Unlock()
+	go func() {
+		for attempt, delay := range []time.Duration{4 * time.Second, 8 * time.Second} {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			vctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+			code := verifyWindscribeVPN(vctx, m.cli, m.t)
+			cancel()
+			if code == 0 || attempt == 1 || m.State() != windscribeConnected {
+				return
+			}
+		}
+	}()
 }
 
 // CLI observation is optional for the user-space Windscribe HTTP bridge.
