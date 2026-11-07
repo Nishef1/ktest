@@ -44,6 +44,7 @@ func (s windscribeState) String() string {
 // A '*' prefix means Windscribe's tunnel test is still pending; network
 // interference also must not be counted as a safely established VPN.
 func parseWindscribeStatus(raw string) (windscribeState, bool) {
+	raw = normalizeWindscribeStatus(raw)
 	var state windscribeState
 	loggedIn := false
 	accountAPIError := false
@@ -107,7 +108,44 @@ func parseWindscribeStatus(raw string) (windscribeState, bool) {
 	return state, true
 }
 
+// normalizeWindscribeStatus maps the newer CLI layout
+// ("Login:", "Connection: Connected to X", "IP: a.b.c.d (VPN)") onto the
+// field names used by 2.25.x ("Login state:", "Connect state: Connected: X",
+// "VPN IP:"). Already-normalized text passes through unchanged. A bare
+// "IP:" without the "(VPN)" marker is the real address and is never mapped.
+func normalizeWindscribeStatus(raw string) string {
+	lines := strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		pending := ""
+		if strings.HasPrefix(trimmed, "*") {
+			pending = "*"
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "*"))
+		}
+		field, value, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch strings.ToLower(strings.TrimSpace(field)) {
+		case "login":
+			lines[i] = "Login state: " + value
+		case "connection":
+			if rest, found := strings.CutPrefix(value, "Connected to "); found {
+				value = "Connected: " + rest
+			}
+			lines[i] = pending + "Connect state: " + value
+		case "ip":
+			if ip, found := strings.CutSuffix(value, "(VPN)"); found {
+				lines[i] = "VPN IP: " + strings.TrimSpace(ip)
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func parseWindscribeProtocol(raw string) string {
+	raw = normalizeWindscribeStatus(raw)
 	for _, line := range strings.Split(raw, "\n") {
 		field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 		if ok && strings.EqualFold(field, "Protocol") {
@@ -120,6 +158,7 @@ func parseWindscribeProtocol(raw string) string {
 // The CLI's VPN IP is the reported public exit, not the CONNECT target or
 // carrier entry. Never substitute an entry address when this field is absent.
 func parseWindscribeVPNIP(raw string) string {
+	raw = normalizeWindscribeStatus(raw)
 	for _, line := range strings.Split(raw, "\n") {
 		field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 		if ok && strings.EqualFold(field, "VPN IP") {

@@ -321,3 +321,25 @@ func TestWindscribeAetherUnknownCLIStartsLocalCarrierOnly(t *testing.T) {
 		t.Fatal("missing CLI must never be considered a connected VPN")
 	}
 }
+
+func TestParseWindscribeStatusNewCLILayout(t *testing.T) {
+	raw := "Login:       Logged in\r\nConnection:  Connected to Ashburn - Bles Park\r\nProtocol:    TCP:443\r\nIP:          152.233.50.181 (VPN)\r\nFirewall:    Off\r\n"
+	state, loggedIn := parseWindscribeStatus(raw)
+	if state != windscribeConnected || !loggedIn {
+		t.Fatalf("state=%v loggedIn=%v, want connected/true", state, loggedIn)
+	}
+	if got := parseWindscribeProtocol(raw); got != "TCP:443" {
+		t.Fatalf("protocol=%q", got)
+	}
+	if got := parseWindscribeVPNIP(raw); got != "152.233.50.181" {
+		t.Fatalf("vpn ip=%q", got)
+	}
+	// A bare IP without the (VPN) marker is the real address, never the exit.
+	if got := parseWindscribeVPNIP("Login: Logged in\nIP: 8.8.4.4\n"); got != "" {
+		t.Fatalf("bare IP mapped to VPN IP: %q", got)
+	}
+	state, loggedIn = parseWindscribeStatus("Login:       Logged in\nConnection:  Disconnected\n")
+	if state != windscribeDisconnected || !loggedIn {
+		t.Fatalf("disconnected: state=%v loggedIn=%v", state, loggedIn)
+	}
+}

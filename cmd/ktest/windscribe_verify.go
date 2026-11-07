@@ -18,6 +18,7 @@ type wsCLIStatus struct {
 // Decode only known status fields. Never echo arbitrary CLI output: it may
 // contain account names or sensitive diagnostic details.
 func windscribeStatusIssue(raw string, state windscribeState, loggedIn bool) string {
+	raw = normalizeWindscribeStatus(raw)
 	if !loggedIn {
 		for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
 			field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
