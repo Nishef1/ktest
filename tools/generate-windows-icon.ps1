@@ -15,40 +15,57 @@ function New-IconBitmap([int]$size) {
         $graphics.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
         $graphics.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
-        $background = [Drawing.Drawing2D.LinearGradientBrush]::new(
-            [Drawing.Point]::new(0, 0), [Drawing.Point]::new($size, $size),
-            [Drawing.Color]::FromArgb(255, 14, 34, 48),
-            [Drawing.Color]::FromArgb(255, 5, 8, 12))
-        try { $graphics.FillRectangle($background, 0, 0, $size, $size) } finally { $background.Dispose() }
+        # Rounded tile with transparent corners (Windows does not mask icons
+        # the way Android adaptive icons are masked).
+        $margin = $size * 0.035
+        $radius = $size * 0.22
+        $tile = [Drawing.RectangleF]::new($margin, $margin, $size - 2 * $margin, $size - 2 * $margin)
+        $tilePath = [Drawing.Drawing2D.GraphicsPath]::new()
+        try {
+            $d = $radius * 2
+            $tilePath.AddArc($tile.Left, $tile.Top, $d, $d, 180, 90)
+            $tilePath.AddArc($tile.Right - $d, $tile.Top, $d, $d, 270, 90)
+            $tilePath.AddArc($tile.Right - $d, $tile.Bottom - $d, $d, $d, 0, 90)
+            $tilePath.AddArc($tile.Left, $tile.Bottom - $d, $d, $d, 90, 90)
+            $tilePath.CloseFigure()
+            $background = [Drawing.Drawing2D.LinearGradientBrush]::new(
+                [Drawing.PointF]::new(0, 0), [Drawing.PointF]::new($size, $size),
+                [Drawing.Color]::FromArgb(255, 14, 34, 48),
+                [Drawing.Color]::FromArgb(255, 5, 8, 12))
+            try { $graphics.FillPath($background, $tilePath) } finally { $background.Dispose() }
+        } finally { $tilePath.Dispose() }
 
+        $center = $size / 2.0
         $glowPath = [Drawing.Drawing2D.GraphicsPath]::new()
         try {
-            $glowPath.AddEllipse($size * 0.185, $size * 0.185, $size * 0.63, $size * 0.63)
+            $glowPath.AddEllipse($size * 0.18, $size * 0.18, $size * 0.64, $size * 0.64)
             $glow = [Drawing.Drawing2D.PathGradientBrush]::new($glowPath)
             try {
-                $glow.CenterColor = [Drawing.Color]::FromArgb(80, 94, 242, 196)
+                $glow.CenterColor = [Drawing.Color]::FromArgb(64, 94, 242, 196)
                 $glow.SurroundColors = @([Drawing.Color]::FromArgb(0, 94, 242, 196))
                 $graphics.FillPath($glow, $glowPath)
             } finally { $glow.Dispose() }
         } finally { $glowPath.Dispose() }
 
+        # Same power glyph as the Android launcher (Material "power settings
+        # new"): ring open at the top with the stem standing in the gap.
+        # Unit grid: 24 units across the glyph, stroke 2, ring radius 8.
+        $u = $size * 0.026
         $accent = [Drawing.Drawing2D.LinearGradientBrush]::new(
-            [Drawing.Point]::new($size * 0.20, $size * 0.18), [Drawing.Point]::new($size * 0.80, $size * 0.82),
+            [Drawing.PointF]::new($center - 9 * $u, $center - 9 * $u), [Drawing.PointF]::new($center + 9 * $u, $center + 9 * $u),
             [Drawing.Color]::FromArgb(255, 94, 242, 196),
             [Drawing.Color]::FromArgb(255, 63, 194, 245))
         try {
-            $stroke = [Drawing.Pen]::new($accent, [Math]::Max(2.0, $size * 0.075))
+            $stroke = [Drawing.Pen]::new($accent, [Math]::Max(2.0, 2 * $u))
             try {
                 $stroke.StartCap = [Drawing.Drawing2D.LineCap]::Round
                 $stroke.EndCap = [Drawing.Drawing2D.LineCap]::Round
-                $box = $size * 0.22
-                $diameter = $size * 0.56
-                $graphics.DrawArc($stroke, $box, $box, $diameter, $diameter, 45, 270)
+                $ringCenterY = $center + 1 * $u
+                # GDI+ angles run clockwise from east; the top is 270. The gap
+                # spans 230..310, so start at 310 and sweep 280.
+                $graphics.DrawArc($stroke, $center - 8 * $u, $ringCenterY - 8 * $u, 16 * $u, 16 * $u, 310, 280)
+                $graphics.DrawLine($stroke, $center, $ringCenterY - 9 * $u + 1 * $u, $center, $ringCenterY + 0 * $u)
             } finally { $stroke.Dispose() }
-
-            $stemWidth = [Math]::Max(2.0, $size * 0.075)
-            $stem = [Drawing.RectangleF]::new(($size - $stemWidth) / 2, $size * 0.16, $stemWidth, $size * 0.27)
-            $graphics.FillRectangle($accent, $stem)
         } finally { $accent.Dispose() }
     } finally { $graphics.Dispose() }
     return $bitmap
