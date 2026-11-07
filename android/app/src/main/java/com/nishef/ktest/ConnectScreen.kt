@@ -148,7 +148,8 @@ private fun Hero(
                 LinkState.Unavailable -> "Not available yet"
                 LinkState.Idle -> if (manualTesting) "Testing routes…" else if (connectBlocked) "Connection paused" else "Tap to connect"
             },
-            color = K.text, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp
+            color = K.text, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp,
+            textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp)
         )
         Spacer(Modifier.height(6.dp))
         when (state) {
@@ -208,7 +209,9 @@ private fun Hero(
         }
         if (state == LinkState.Active) {
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(horizontal = 16.dp)) {
                 Tag(mode.title, if (exitConfirmed) K.mint else K.amber)
                 if (coverage != "proxy") Tag(if (vpnActive) "Packet VPN active" else "VPN inactive", if (vpnActive) K.cyan else K.amber)
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }

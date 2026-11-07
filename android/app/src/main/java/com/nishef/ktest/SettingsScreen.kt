@@ -438,7 +438,7 @@ private fun PrivacyRow(icon: ImageVector, title: String, body: String) {
     Row(verticalAlignment = Alignment.Top) {
         Icon(icon, null, tint = K.mint, modifier = Modifier.padding(top = 2.dp).size(18.dp))
         Spacer(Modifier.width(12.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(title, color = K.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Text(body, color = K.muted, fontSize = 12.sp, lineHeight = 17.sp)
         }

@@ -267,8 +267,10 @@ internal fun Banner(text: String, tone: Tone, onDismiss: (() -> Unit)? = null) {
 @Composable
 internal fun KeyValue(label: String, value: String, valueColor: Color = K.text, mono: Boolean = false) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = K.muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(label, color = K.muted, fontSize = 13.sp, modifier = Modifier.weight(1f, fill = false).padding(end = 12.dp))
+        Spacer(Modifier.weight(1f))
         Text(value, color = valueColor, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(2f, fill = false),
             fontFamily = if (mono) K.mono else FontFamily.Default)
     }
 }
