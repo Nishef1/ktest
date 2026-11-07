@@ -36,6 +36,7 @@ function New-IconBitmap([int]$size) {
         } finally { $tilePath.Dispose() }
 
         $center = $size / 2.0
+        $small = $size -le 48
         $glowPath = [Drawing.Drawing2D.GraphicsPath]::new()
         try {
             $glowPath.AddEllipse($size * 0.18, $size * 0.18, $size * 0.64, $size * 0.64)
@@ -43,20 +44,23 @@ function New-IconBitmap([int]$size) {
             try {
                 $glow.CenterColor = [Drawing.Color]::FromArgb(64, 94, 242, 196)
                 $glow.SurroundColors = @([Drawing.Color]::FromArgb(0, 94, 242, 196))
-                $graphics.FillPath($glow, $glowPath)
+                if (-not $small) { $graphics.FillPath($glow, $glowPath) }
             } finally { $glow.Dispose() }
         } finally { $glowPath.Dispose() }
 
         # Same power glyph as the Android launcher (Material "power settings
         # new"): ring open at the top with the stem standing in the gap.
         # Unit grid: 24 units across the glyph, stroke 2, ring radius 8.
-        $u = $size * 0.026
+        # Small sizes drop the glow and draw a larger, bolder glyph so the ring
+        # and stem stay readable at 16/32 px.
+        $u = if ($small) { $size * 0.036 } else { $size * 0.026 }
+        $weight = if ($small) { [Math]::Max(2.0, 2.6 * $u) } else { [Math]::Max(2.0, 2 * $u) }
         $accent = [Drawing.Drawing2D.LinearGradientBrush]::new(
             [Drawing.PointF]::new($center - 9 * $u, $center - 9 * $u), [Drawing.PointF]::new($center + 9 * $u, $center + 9 * $u),
             [Drawing.Color]::FromArgb(255, 94, 242, 196),
             [Drawing.Color]::FromArgb(255, 63, 194, 245))
         try {
-            $stroke = [Drawing.Pen]::new($accent, [Math]::Max(2.0, 2 * $u))
+            $stroke = [Drawing.Pen]::new($accent, $weight)
             try {
                 $stroke.StartCap = [Drawing.Drawing2D.LineCap]::Round
                 $stroke.EndCap = [Drawing.Drawing2D.LineCap]::Round
