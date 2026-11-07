@@ -155,7 +155,7 @@ func benchmarkAetherRoute(ctx context.Context, socks string, speed bool) aetherM
 	r.State = "verified"
 	if _, _, err := parseForeignTrace("ip=" + ip + "\nloc=" + country); err != nil {
 		r.State = "carrier"
-		r.Failure = "carrier works; exit located in Iran"
+		r.Failure = "carrier works; Cloudflare reports country IR (WARP shows the client country, not the exit location)"
 	}
 	if speed && ctx.Err() == nil {
 		started := time.Now()

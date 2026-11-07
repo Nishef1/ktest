@@ -166,7 +166,9 @@ func measurementScore(r aetherMeasurement, mode ConnectionMode) float64 {
 		weight = 500
 	}
 	score := r.LatencyMS + penalty*weight
-	if mode == ModeFast && r.BytesPerSecond > 0 {
+	// A Windscribe OpenVPN stream is a bulk transfer over this carrier, so a
+	// route that is only marginally lower-latency but much slower must not win.
+	if (mode == ModeFast || mode == ModeWindscribeAether) && r.BytesPerSecond > 0 {
 		score /= 1 + min(2.0, r.BytesPerSecond/(1<<20))
 	}
 	return score
@@ -233,7 +235,7 @@ func (r aetherMeasurement) detail() string {
 	}
 	s := fmt.Sprintf("%.0fms · %d/%d samples · observed %s (%s)", r.LatencyMS, r.Successes, r.Attempts, r.ExitIP, r.Country)
 	if r.State == "carrier" {
-		s += " · exit located in Iran"
+		s += " · country IR is Cloudflare's report, not the exit location"
 	}
 	if r.BytesPerSecond > 0 {
 		s += fmt.Sprintf(" · %.0f KiB/s small-transfer sample", r.BytesPerSecond/1024)

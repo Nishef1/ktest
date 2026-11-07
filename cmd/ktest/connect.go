@@ -1567,7 +1567,7 @@ func exitReadyNote(mode ConnectionMode, p *smartproxy.Proxy) string {
 		return "exit outside Iran available"
 	}
 	if mode == ModeAether {
-		return "WARP exit available (located in Iran)"
+		return "WARP exit available (Cloudflare reports country IR, which for WARP is not the exit location)"
 	}
 	if mode == ModeWindscribeAether {
 		return "WARP carrier ready; connect Windscribe now"

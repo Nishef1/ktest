@@ -138,3 +138,17 @@ func TestProfileStateStaysWithTransportAfterReorderingAndECHRefresh(t *testing.T
 		t.Fatal("network identity was not isolated/hashed")
 	}
 }
+
+func TestWindscribeCarrierScoreFavoursThroughput(t *testing.T) {
+	slow := aetherMeasurement{State: "carrier", Attempts: 9, Successes: 8, LatencyMS: 500, ExitIP: "104.28.214.161", Country: "IR", BytesPerSecond: 100 << 10}
+	fast := slow
+	fast.LatencyMS = 520
+	fast.BytesPerSecond = 3 << 20
+	if measurementScore(fast, ModeWindscribeAether) >= measurementScore(slow, ModeWindscribeAether) {
+		t.Fatal("a much faster carrier lost to a marginally lower-latency slow one")
+	}
+	// Other modes are unchanged: latency alone decides outside Fast.
+	if measurementScore(fast, ModeAether) <= measurementScore(slow, ModeAether) {
+		t.Fatal("Aether mode scoring changed")
+	}
+}
