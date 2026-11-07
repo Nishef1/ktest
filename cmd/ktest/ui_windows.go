@@ -26,5 +26,6 @@ func enableVT(f *os.File) bool {
 		}
 	}
 	kernel.NewProc("SetConsoleOutputCP").Call(65001)
+	setConsoleIcon()
 	return true
 }

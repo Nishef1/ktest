@@ -1,19 +1,25 @@
+# THE build workflow: runs on every push to main and by hand. One run builds
+# the Windows ZIP and the Android ARMv8 APK together.
 # One run, one version: builds the Android ARMv8 preview APK and the Windows
 # portable ZIP in parallel (the same workflows that run on push, called with an
 # explicit version), then lists both files. Optionally keeps them in a draft
 # prerelease so they do not expire with the Actions artifacts (14 days).
-name: Release build (Android ARMv8 + Windows)
-run-name: Release build v${{ inputs.version }}
+name: "Build ALL (Windows + Android ARMv8)"
+run-name: ${{ inputs.version && format('Build ALL v{0}', inputs.version) || 'Build ALL (Windows + Android ARMv8) · push' }}
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: Version for both builds, for example 0.5.0-preview
-        required: true
+        description: Version for both builds, for example 0.5.0-preview (empty = dev build)
+        required: false
+        default: ""
         type: string
       version_code:
-        description: Android versionCode (higher than the last installed APK; the last was 23)
-        required: true
+        description: Android versionCode (higher than the last installed APK; empty = default)
+        required: false
+        default: ""
         type: string
       publish:
         description: Also keep both files in a draft prerelease named after the version
@@ -43,7 +49,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: release
-          pattern: "*v${{ inputs.version }}*"
+          pattern: "${{ inputs.version && format('*v{0}*', inputs.version) || '*' }}"
           merge-multiple: true
       - name: List the build
         shell: bash
@@ -51,7 +57,7 @@ jobs:
           set -euo pipefail
           ls -l release
           {
-            echo "## KTest v${{ inputs.version }}"
+            echo "## KTest ${{ inputs.version || 'dev build' }}"
             echo
             echo "Commit: \`${GITHUB_SHA}\`"
             echo

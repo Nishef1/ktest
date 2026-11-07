@@ -1,4 +1,4 @@
-name: verify
+name: "Go tests (verify)"
 on:
   push:
   pull_request:

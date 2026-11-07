@@ -1,28 +1,20 @@
-# Manual runs and scoped changes on main build previews as Actions artifacts.
+# Reusable part of "Build ALL". Start builds from "Build ALL (Windows + Android ARMv8)".
 # Production signing and release publication remain separate.
-name: Android APK (ARMv8 preview)
+name: "Part: Android ARMv8 APK (called by Build ALL)"
 on:
   workflow_dispatch:
   workflow_call:
     inputs:
       version:
-        description: Release version (versionName), for example 0.5.0-preview
+        description: Release version (versionName); empty keeps the defaults
         type: string
-        required: true
+        required: false
+        default: ""
       version_code:
-        description: Monotonic Android versionCode
+        description: Monotonic Android versionCode; empty keeps the default
         type: string
-        required: true
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/android-build.yml"
-      - "android/app/**"
-      - "android/scripts/**"
-      - "mobilebridge/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
+        required: false
+        default: ""
 permissions:
   contents: read
 jobs:
