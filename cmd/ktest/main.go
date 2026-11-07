@@ -28,6 +28,9 @@ import (
 )
 
 func main() {
+	if autoElevate(os.Args[1:]) {
+		return
+	}
 	killChildrenOnExit()
 	exitWithGoRun()
 	code := run(os.Args[1:])
@@ -38,6 +41,7 @@ func main() {
 const usageText = `ktest: free access toolkit
 
   ktest                    menu
+                           (Windows: reopens itself as Administrator in Windows Terminal; KTEST_NO_ELEVATE=1 turns that off)
   ktest connect            connect with saved choices (initial policy: Balanced)
     -mode fast             faster ordinary-site routing; AI requires a foreign exit
     -mode aether           Aether WARP/Psiphon search; verified foreign exit

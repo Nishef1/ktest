@@ -48,7 +48,10 @@ func PhysicalNetwork(ctx context.Context) (nic string, dns []string, err error) 
 
 // Elevate starts this program again with the given arguments in a new window,
 // asking Windows for Administrator rights (the user sees the UAC prompt and
-// decides). It returns once the request was handed to Windows.
+// decides). It prefers Windows Terminal, so the elevated window keeps the
+// modern console instead of the legacy host a plain elevated console gets,
+// and falls back to a direct launch when Windows Terminal is not installed.
+// It returns once the request was handed to Windows.
 func Elevate(args []string) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -59,16 +62,36 @@ func Elevate(args []string) error {
 	for i, a := range args {
 		quoted[i] = syscall.EscapeArg(a)
 	}
-	shell := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
-	verb, _ := syscall.UTF16PtrFromString("runas")
-	file, _ := syscall.UTF16PtrFromString(exe)
-	params, _ := syscall.UTF16PtrFromString(strings.Join(quoted, " "))
-	wd, _ := syscall.UTF16PtrFromString(dir)
-	ret, _, callErr := shell.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), uintptr(unsafe.Pointer(params)), uintptr(unsafe.Pointer(wd)), 1)
+	// Windows Terminal reads ';' as a command separator; keep such arguments
+	// on the direct path rather than let them be split.
+	if wt, lookErr := exec.LookPath("wt.exe"); lookErr == nil && !strings.Contains(strings.Join(args, ""), ";") {
+		params := strings.Join(append([]string{"-d", syscall.EscapeArg(dir), syscall.EscapeArg(exe)}, quoted...), " ")
+		ret, callErr := shellExecuteRunAs(wt, params, dir)
+		if ret > 32 {
+			return nil
+		}
+		// 2/3 mean the file or path is missing and 31 no association: only
+		// then try the plain launch. Any other refusal (for example a
+		// declined UAC prompt) must not trigger a second prompt.
+		if ret != 2 && ret != 3 && ret != 31 {
+			return fmt.Errorf("Windows did not start the elevated window (%v)", callErr)
+		}
+	}
+	ret, callErr := shellExecuteRunAs(exe, strings.Join(quoted, " "), dir)
 	if ret <= 32 {
 		return fmt.Errorf("Windows did not start the elevated window (%v)", callErr)
 	}
 	return nil
+}
+
+func shellExecuteRunAs(file, params, dir string) (uintptr, error) {
+	shell := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+	verb, _ := syscall.UTF16PtrFromString("runas")
+	f, _ := syscall.UTF16PtrFromString(file)
+	p, _ := syscall.UTF16PtrFromString(params)
+	wd, _ := syscall.UTF16PtrFromString(dir)
+	ret, _, callErr := shell.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(f)), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(wd)), 1)
+	return ret, callErr
 }
 
 // Start requires an already functioning SOCKS5 proxy. It never silently
