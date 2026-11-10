@@ -155,16 +155,17 @@ private fun Hero(
         when (state) {
             LinkState.Active -> {
                 Uptime()
-                // One plain answer: what is covered.
+                // Only explain when something is wrong; a healthy connection
+                // needs no sentence under the timer.
                 val vpnMissing = coverage != "proxy" && !vpnActive
-                Text(when {
-                    !exitConfirmed -> "The local packet/proxy path is ready, but public HTTPS exit verification has not succeeded. Internet access is not confirmed."
-                    vpnMissing -> "Apps configured for the local proxy can use it, but device-wide VPN is not active. Check Settings for the packet-adapter error."
-                    coverage == "proxy" -> "Apps configured to use the local proxy can use it."
-                    else -> "System VPN is active; destination access depends on the route selected for each connection."
-                }, color = if (vpnMissing || !exitConfirmed) K.amber else K.muted,
-                    fontSize = 12.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 22.dp))
+                if (!exitConfirmed || vpnMissing) {
+                    Text(if (!exitConfirmed)
+                        "The local packet/proxy path is ready, but public HTTPS exit verification has not succeeded. Internet access is not confirmed."
+                    else
+                        "Apps configured for the local proxy can use it, but device-wide VPN is not active. Check Settings for the packet-adapter error.",
+                        color = K.amber, fontSize = 12.sp, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 22.dp))
+                }
             }
             LinkState.Connecting -> Text(
                 if (ProxyService.connectionState == "verifying") "Checking public HTTPS access before VPN activation"
@@ -385,7 +386,30 @@ private fun PublicIpPanel(connected: Boolean) {
     var busyDirect by remember { mutableStateOf(false) }
     var directError by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
-    LaunchedEffect(connected, refresh) {
+    // Bumped whenever the real (non-VPN) default network changes, so the
+    // "Before" address follows Wi-Fi/cellular switches without restarting the app.
+    var networkKey by remember { mutableIntStateOf(0) }
+    DisposableEffect(context) {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+        var lastHandle = -1L
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) {
+                if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) return
+                if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
+                if (network.networkHandle == lastHandle) return
+                val first = lastHandle == -1L
+                lastHandle = network.networkHandle
+                if (!first) {
+                    before = null
+                    lastDirectIp = null
+                    networkKey++
+                }
+            }
+        }
+        val registered = runCatching { cm.registerDefaultNetworkCallback(cb) }.isSuccess
+        onDispose { if (registered) runCatching { cm.unregisterNetworkCallback(cb) } }
+    }
+    LaunchedEffect(connected, refresh, networkKey) {
         if (connected) {
             if (refresh > 0) {
                 context.startService(android.content.Intent(context, ProxyService::class.java).apply {
@@ -396,11 +420,22 @@ private fun PublicIpPanel(connected: Boolean) {
         }
         busyDirect = true
         directError = null
-        val result = runCatching {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { JSONObject(Mobilebridge.publicIP(false)) }
+        // Let a fresh network settle, then retry a few times: a lookup made
+        // while the link is still coming up fails and would otherwise stay
+        // empty until the app is restarted.
+        if (networkKey > 0) kotlinx.coroutines.delay(700)
+        for (wait in longArrayOf(0, 2_000, 5_000, 12_000)) {
+            if (wait > 0) kotlinx.coroutines.delay(wait)
+            val result = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { JSONObject(Mobilebridge.publicIP(false)) }
+            }
+            val ok = result.getOrNull()
+            if (ok != null && ok.optString("ip").isNotBlank()) {
+                before = ok; lastDirectIp = ok; directError = null
+                break
+            }
+            directError = result.exceptionOrNull()?.message ?: "Could not read the current public IP"
         }
-        result.onSuccess { before = it; lastDirectIp = it }
-            .onFailure { directError = it.message }
         busyDirect = false
     }
     val exitIp = ProxyService.verifiedExitIP
@@ -420,7 +455,7 @@ private fun PublicIpPanel(connected: Boolean) {
                 Icon(KIcons.Search, "Check IP again", tint = K.muted, modifier = Modifier.size(16.dp))
             }
         }
-        IpRow("Before", before, K.muted)
+        IpRow("Before", before, K.muted, placeholder = if (busyDirect) "Checking…" else "Unavailable")
         IpRow("Exit", checkedExit, if (checkedExit != null) K.mint else K.amber,
             placeholder = if (connected) "IP not verified" else "Not connected")
         Text(error?.take(90) ?: " ", color = K.amber, maxLines = 1,

@@ -70,6 +70,9 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT)
         )
+        // With 3-button navigation Android otherwise paints a translucent scrim
+        // over the bar; the app already draws its own gradient behind it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
         super.onCreate(savedInstanceState)
         setContent { KTheme { KTestApp() } }
     }
@@ -99,6 +102,9 @@ private fun KTestApp() {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val scrolls = listOf(rememberScrollState(), rememberScrollState(), rememberScrollState())
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    // The floating tab bar sits above the system navigation bar (3-button mode
+    // is taller than gesture mode), so scrolled content must clear both.
+    val navBarHeight = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     var modeId by rememberSaveable { mutableStateOf(prefs.getString("mode", "balanced") ?: "balanced") }
     var upstream by remember { mutableStateOf(prefs.getString("upstream_$modeId", "") ?: "") }
     var nativeMethod by remember { mutableStateOf(validNativeMethod(modeId, prefs.getString("method_$modeId", "auto") ?: "auto")) }
@@ -330,7 +336,7 @@ private fun KTestApp() {
                 transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(150)) }) { page ->
                 Column(
                     Modifier.fillMaxSize().verticalScroll(scrolls[page])
-                        .padding(horizontal = 20.dp).padding(top = 8.dp, bottom = if (keyboardVisible) 24.dp else 120.dp)
+                        .padding(horizontal = 20.dp).padding(top = 8.dp, bottom = if (keyboardVisible) 24.dp else 120.dp + navBarHeight)
                 ) {
                     when (page) {
                         0 -> ConnectScreen(
@@ -487,10 +493,8 @@ private fun Header(state: LinkState) {
     ) {
         AppMark(34.dp)
         Spacer(Modifier.width(11.dp))
-        Column(Modifier.weight(1f)) {
-            Text("KTest", color = K.text, fontSize = 19.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.2.sp)
-            Text("CONNECTION", color = K.muted, fontSize = 9.sp, letterSpacing = 2.4.sp, fontWeight = FontWeight.Medium)
-        }
+        Text("KTest", color = K.text, fontSize = 19.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.2.sp,
+            modifier = Modifier.weight(1f))
         when (state) {
             LinkState.Active -> StatusPill("Connected", K.mint)
             LinkState.Connecting -> StatusPill("Connecting", K.cyan)

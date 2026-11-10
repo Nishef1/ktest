@@ -3,6 +3,7 @@ package mobilebridge
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -91,4 +92,17 @@ func autoPrepareNetworkEdges(parent context.Context, dir, mode string) {
 		}(provider)
 	}
 	wg.Wait()
+}
+
+// rankFastestFirst orders verified edges by measured latency so consumers that
+// take the saved list in order (LoadVerified keeps it) try the quickest first.
+func rankFastestFirst(in []edges.ScanResult) []edges.ScanResult {
+	out := append([]edges.ScanResult(nil), in...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ElapsedMS != out[j].ElapsedMS {
+			return out[i].ElapsedMS < out[j].ElapsedMS
+		}
+		return out[i].TCPMS < out[j].TCPMS
+	})
+	return out
 }
