@@ -205,7 +205,7 @@ private fun KTestApp() {
 
     // Poll connection state separately from diagnostics. Slow route/CDN/VPN
     // capability calls must not delay the connect-button animation or state.
-    LaunchedEffect(Unit) {
+    WhileVisible {
         while (isActive) {
             val fresh = runCatching {
                 withContext(Dispatchers.IO) { JSONObject(Mobilebridge.proxyStatus()) }
@@ -276,7 +276,7 @@ private fun KTestApp() {
     }
 
     // Diagnostics are valuable, but they are not on the connection feedback path.
-    LaunchedEffect(Unit) {
+    WhileVisible {
         while (isActive) {
             vpnCapability = runCatching {
                 withContext(Dispatchers.IO) { JSONObject(Mobilebridge.vpnCapability()) }
@@ -300,7 +300,9 @@ private fun KTestApp() {
             } catch (e: Exception) {
                 tools.cdnStatusError = e.message ?: "Could not read CDN scan status"
             }
-            delay(1_500)
+            // Fast while a route test or CDN scan shows live progress; relaxed otherwise.
+            val live = routePlan.busy || tools.cdnStatus.optBoolean("running")
+            delay(if (live) 1_500 else 4_000)
         }
     }
     LaunchedEffect(status.optString("phase")) {

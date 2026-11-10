@@ -422,7 +422,7 @@ class ProxyService : Service() {
                                         .notify(NOTIFICATION_ID, notification(title, true))
                                 }
                             }
-                            delay(1000)
+                            delay(2000)
                         }
                     } catch (e: TimeoutCancellationException) {
                         // withTimeout reports expiry as a cancellation; it is a real failure.

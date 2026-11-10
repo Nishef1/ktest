@@ -160,7 +160,7 @@ class KTestVpnService : VpnService() {
                         // VpnCapability() attempts automatic Xray -> HEV recovery
                         // before reporting the packet path inactive.
                         while (isActive) {
-                            delay(1500)
+                            delay(3000)
                             if (!JSONObject(Mobilebridge.vpnCapability()).optBoolean("active")) {
                                 adapterStopped = true
                                 break

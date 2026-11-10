@@ -389,6 +389,13 @@ func (a *automaticExit) watch(n *nativeCore) {
 		case <-n.done:
 			return
 		case <-tick.C:
+			// Relayed data from this core within the last interval already
+			// proves it works; skip the probe so the radio is not woken for
+			// an idle-time check while real traffic is flowing.
+			if last := smartproxy.LastCoreDownstream(n.address); !last.IsZero() && time.Since(last) < time.Minute {
+				failures = 0
+				continue
+			}
 			ctx, stop := context.WithTimeout(a.ctx, 10*time.Second)
 			_, err := verifyModeUpstream(ctx, a.mode, n.address)
 			stop()

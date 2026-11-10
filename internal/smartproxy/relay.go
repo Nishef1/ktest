@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -34,6 +36,7 @@ type countedReader struct {
 	n     *atomic.Int64
 	first *atomic.Int64 // UnixNano of the first byte, when tracked
 	last  *atomic.Int64 // UnixNano of the latest byte, when tracked
+	also  *atomic.Int64 // UnixNano of the latest byte from a loopback core, when tracked
 }
 
 func (c countedReader) Read(b []byte) (int, error) {
@@ -47,8 +50,44 @@ func (c countedReader) Read(b []byte) (int, error) {
 		if c.last != nil {
 			c.last.Store(now)
 		}
+		if c.also != nil {
+			c.also.Store(now)
+		}
 	}
 	return n, err
+}
+
+// coreActivity records the latest downstream byte per loopback upstream core
+// (the packaged native cores listen on 127.0.0.1). Real relayed data proves
+// that core works, so the periodic health probe can be skipped while it flows.
+// Only loopback addresses are keyed, so the map stays tiny.
+var coreActivity sync.Map // "127.0.0.1:port" -> *atomic.Int64 (UnixNano)
+
+func coreActivityFor(c net.Conn) *atomic.Int64 {
+	addr, ok := c.RemoteAddr().(*net.TCPAddr)
+	if !ok || addr == nil || !addr.IP.IsLoopback() {
+		return nil
+	}
+	key := addr.AddrPort().String()
+	if v, ok := coreActivity.Load(key); ok {
+		return v.(*atomic.Int64)
+	}
+	v, _ := coreActivity.LoadOrStore(key, new(atomic.Int64))
+	return v.(*atomic.Int64)
+}
+
+// LastCoreDownstream reports when relayed data last arrived from the loopback
+// upstream at addr ("127.0.0.1:port"); zero when none was seen.
+func LastCoreDownstream(addr string) time.Time {
+	if ap, err := netip.ParseAddrPort(addr); err == nil {
+		addr = ap.String()
+	}
+	if v, ok := coreActivity.Load(addr); ok {
+		if ns := v.(*atomic.Int64).Load(); ns != 0 {
+			return time.Unix(0, ns)
+		}
+	}
+	return time.Time{}
 }
 
 func pipe(a, b net.Conn) relayResult { return pipeWatch(a, b, nil) }
@@ -105,7 +144,7 @@ func pipeWatch(a, b net.Conn, w *stallWatch) relayResult {
 			}
 		}()
 	}
-	go cp(a, countedReader{r: b, n: &down, last: &lastDown}, true)
+	go cp(a, countedReader{r: b, n: &down, last: &lastDown, also: coreActivityFor(b)}, true)
 	go cp(b, countedReader{r: a, n: &up, first: &firstUp}, false)
 	first := <-done
 	close(stop)

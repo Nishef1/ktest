@@ -224,7 +224,7 @@ private fun Hero(
 @Composable
 private fun Uptime() {
     var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
-    LaunchedEffect(Unit) {
+    WhileVisible {
         while (true) { now = android.os.SystemClock.elapsedRealtime(); delay(1000) }
     }
     val since = ProxyService.connectedAt
@@ -667,7 +667,7 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
                 color = K.muted, fontSize = 12.sp, lineHeight = 16.sp)
         }
         var coreLog by remember { mutableStateOf("") }
-        LaunchedEffect(Unit) {
+        WhileVisible {
             while (true) {
                 coreLog = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     runCatching { Mobilebridge.nativeLog() }.getOrDefault("")
