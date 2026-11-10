@@ -105,6 +105,9 @@ class KTestVpnService : VpnService() {
                         val builder = Builder()
                             .setSession("KTest")
                             .setMtu(plan.getInt("mtu"))
+                            // Inherit meteredness from the real network so apps do not
+                            // treat every Wi-Fi connection as data-limited behind the VPN.
+                            .setMetered(false)
                             .addAddress(plan.getString("ipv4_address"), plan.getInt("ipv4_prefix"))
                             .addRoute(plan.getString("ipv4_route"), 0)
                             .addDnsServer(plan.getString("ipv4_dns"))

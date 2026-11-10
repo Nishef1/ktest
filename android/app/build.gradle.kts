@@ -60,6 +60,19 @@ android {
         }
     }
 
+    // R8 shrinks code and resources; keep rules for the gomobile and HEV JNI
+    // classes live in proguard-rules.pro. -PktestMinify=false turns it off.
+    val minify = providers.gradleProperty("ktestMinify").orNull != "false"
+    buildTypes {
+        listOf("debug", "release").forEach { name ->
+            getByName(name) {
+                isMinifyEnabled = minify
+                isShrinkResources = minify
+                proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
+            }
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

@@ -613,6 +613,11 @@ class ProxyService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        MemoryTrim.onTrim(level)
+    }
+
     override fun onDestroy() {
         clearNetworkWatch()
         val wasWanted = wanted

@@ -60,6 +60,11 @@ import mobilebridge.Mobilebridge
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        MemoryTrim.onTrim(level)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
