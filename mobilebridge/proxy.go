@@ -657,6 +657,22 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}
 		}()
 	}
+	if managed != nil && mode == "aether" {
+		// The process can outlive its tunnel (network change, dropped QUIC or
+		// WireGuard session). End the session so automatic recovery rebuilds it.
+		go superviseNativeLiveness(ctx, managed, mode, verifyModeUpstream, func() {
+			proxyMu.Lock()
+			stopped := activeProxy == session
+			if stopped {
+				proxyFailure = "Aether tunnel stopped answering; reconnecting"
+				stopLocked()
+			}
+			proxyMu.Unlock()
+			if stopped {
+				StopVpnTun()
+			}
+		})
+	}
 	go func() {
 		<-core.Done()
 		if ctx.Err() == nil {

@@ -322,6 +322,13 @@ class ProxyService : Service() {
                                 }
                                 if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {
+                                    // Wi-Fi <-> cellular handovers leave the native core's
+                                    // QUIC/WireGuard socket on the dead interface: the process
+                                    // lives but nothing flows. Rebuild the session on a handover,
+                                    // exactly as Balanced and Fast do.
+                                    runCatching {
+                                        getSystemService(ConnectivityManager::class.java).activeNetwork
+                                    }.getOrNull()?.let { watchBalancedNetwork(it.networkHandle) }
                                     // Psiphon and Tor need no WARP: by default they dial out
                                     // through Fast's local anti-DPI carrier.
                                     val prefs = getSharedPreferences("ktest_android", MODE_PRIVATE)

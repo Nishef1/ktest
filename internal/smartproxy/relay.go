@@ -63,32 +63,45 @@ func (c countedReader) Read(b []byte) (int, error) {
 // Only loopback addresses are keyed, so the map stays tiny.
 var coreActivity sync.Map // "127.0.0.1:port" -> *atomic.Int64 (UnixNano)
 
-func coreActivityFor(c net.Conn) *atomic.Int64 {
+// coreSent is the upstream counterpart: the latest byte the application sent
+// toward the core. Sent bytes with no answer for a while mean a stuck tunnel.
+var coreSent sync.Map
+
+func loopbackActivity(m *sync.Map, c net.Conn) *atomic.Int64 {
 	addr, ok := c.RemoteAddr().(*net.TCPAddr)
 	if !ok || addr == nil || !addr.IP.IsLoopback() {
 		return nil
 	}
 	key := addr.AddrPort().String()
-	if v, ok := coreActivity.Load(key); ok {
+	if v, ok := m.Load(key); ok {
 		return v.(*atomic.Int64)
 	}
-	v, _ := coreActivity.LoadOrStore(key, new(atomic.Int64))
+	v, _ := m.LoadOrStore(key, new(atomic.Int64))
 	return v.(*atomic.Int64)
 }
 
-// LastCoreDownstream reports when relayed data last arrived from the loopback
-// upstream at addr ("127.0.0.1:port"); zero when none was seen.
-func LastCoreDownstream(addr string) time.Time {
+func coreActivityFor(c net.Conn) *atomic.Int64 { return loopbackActivity(&coreActivity, c) }
+func coreSentFor(c net.Conn) *atomic.Int64     { return loopbackActivity(&coreSent, c) }
+
+func lastActivity(m *sync.Map, addr string) time.Time {
 	if ap, err := netip.ParseAddrPort(addr); err == nil {
 		addr = ap.String()
 	}
-	if v, ok := coreActivity.Load(addr); ok {
+	if v, ok := m.Load(addr); ok {
 		if ns := v.(*atomic.Int64).Load(); ns != 0 {
 			return time.Unix(0, ns)
 		}
 	}
 	return time.Time{}
 }
+
+// LastCoreDownstream reports when relayed data last arrived from the loopback
+// upstream at addr ("127.0.0.1:port"); zero when none was seen.
+func LastCoreDownstream(addr string) time.Time { return lastActivity(&coreActivity, addr) }
+
+// LastCoreUpstream reports when the application last sent data toward the
+// loopback upstream at addr; zero when none was seen.
+func LastCoreUpstream(addr string) time.Time { return lastActivity(&coreSent, addr) }
 
 func pipe(a, b net.Conn) relayResult { return pipeWatch(a, b, nil) }
 
@@ -145,7 +158,7 @@ func pipeWatch(a, b net.Conn, w *stallWatch) relayResult {
 		}()
 	}
 	go cp(a, countedReader{r: b, n: &down, last: &lastDown, also: coreActivityFor(b)}, true)
-	go cp(b, countedReader{r: a, n: &up, first: &firstUp}, false)
+	go cp(b, countedReader{r: a, n: &up, first: &firstUp, also: coreSentFor(b)}, false)
 	first := <-done
 	close(stop)
 	second := <-done
