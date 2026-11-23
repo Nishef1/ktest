@@ -31,7 +31,7 @@ func TestIPFamilyValidationAndPinnedTargets(t *testing.T) {
 		}
 	}
 	for _, family := range []struct {
-		name string
+		name  string
 		items []traceTarget
 	}{
 		{"ipv4", traceTargetsIPv4}, {"ipv6", traceTargetsIPv6},

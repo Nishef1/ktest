@@ -21,10 +21,10 @@ type ipFamilyResult struct {
 }
 
 type publicIPReport struct {
-	IP        string          `json:"ip"`      // first verified public IP, for older Android clients
+	IP        string          `json:"ip"` // first verified public IP, for older Android clients
 	Country   string          `json:"country"`
-	Via       string          `json:"via"`     // "direct" or "connection"
-	Family    string          `json:"family"`  // requested diagnostic family
+	Via       string          `json:"via"`    // "direct" or "connection"
+	Family    string          `json:"family"` // requested diagnostic family
 	IPv4      *ipFamilyResult `json:"ipv4,omitempty"`
 	IPv6      *ipFamilyResult `json:"ipv6,omitempty"`
 	IPv4Error string          `json:"ipv4_error,omitempty"`
