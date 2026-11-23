@@ -267,6 +267,7 @@ type upstreamState struct {
 	wins, fails   int
 	ewmaMS        float64
 	verifiedUntil atomic.Int64
+	familyVerified bool // protected by verifyMu; generic startup proof does not certify a forced family
 	verifyMu      sync.Mutex
 	verifyErr     error
 	retryAfter    time.Time

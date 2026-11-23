@@ -42,6 +42,9 @@ func (p *Proxy) verifyCarrier(ctx context.Context, u *upstreamState) error {
 // requests share one check; a failed/unknown location never permits the dial.
 func (p *Proxy) verifyExit(ctx context.Context, u *upstreamState) error {
 	if p.cfg.VerifyExit == nil {
+		if p.singleFamily() {
+			return fmt.Errorf("single-family foreign exit verifier unavailable")
+		}
 		return nil
 	}
 	u.verifyMu.Lock()
@@ -49,7 +52,7 @@ func (p *Proxy) verifyExit(ctx context.Context, u *upstreamState) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if time.Now().UnixNano() < u.verifiedUntil.Load() {
+	if time.Now().UnixNano() < u.verifiedUntil.Load() && (!p.singleFamily() || u.familyVerified) {
 		return nil
 	}
 	// A frozen route may reverify its SAME already selected foreign exit.
@@ -66,6 +69,7 @@ func (p *Proxy) verifyExit(ctx context.Context, u *upstreamState) error {
 		return u.verifyErr
 	}
 	u.verifiedUntil.Store(time.Now().Add(p.cfg.ExitVerifyTTL).UnixNano())
+	u.familyVerified = p.singleFamily()
 	u.verifyErr, u.retryAfter = nil, time.Time{}
 	return nil
 }

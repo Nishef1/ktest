@@ -88,3 +88,12 @@ func (p *Proxy) DialVerifiedExitDNS(ctx context.Context, host, port string) (net
 	}
 	return p.DialVerifiedExit(context.WithValue(ctx, dnsBootstrapKey{}, true), host, port)
 }
+
+// DialExitCarrierDNS preserves Aether's carrier-only policy (which may
+// geolocate in Iran), without applying the application's family to DNS.
+func (p *Proxy) DialExitCarrierDNS(ctx context.Context, host, port string) (net.Conn, error) {
+	if net.ParseIP(host) == nil {
+		return nil, errors.New("DNS bootstrap requires a numeric resolver address")
+	}
+	return p.DialExitCarrier(context.WithValue(ctx, dnsBootstrapKey{}, true), host, port)
+}

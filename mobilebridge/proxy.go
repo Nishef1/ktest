@@ -473,6 +473,10 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			}()
 			config.EnsureExit = automatic.ensure
 			config.VerifyExit = func(ctx context.Context, u smartproxy.Upstream) error {
+				if family != "both" {
+					_, _, err := egresscheck.ProbeForeignExitFamily(ctx, u.Addr, family)
+					return err
+				}
 				_, err := verifyLocalUpstream(ctx, u.Addr)
 				return err
 			}
@@ -589,6 +593,11 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		// VerifyExit guards AI destinations and stays foreign-only; the
 		// carrier check serves ordinary sites in Aether (ExitRequired).
 		config.VerifyExit = func(ctx context.Context, _ smartproxy.Upstream) error {
+			if family != "both" {
+				if _, _, err := egresscheck.ProbeForeignExitFamily(ctx, upstream, family); err != nil {
+					return err
+				}
+			}
 			checked, err := verifyLocalUpstream(ctx, upstream)
 			if err == nil && mode == "tor" {
 				err = egresscheck.ProbeTorExit(ctx, checked.Address)
@@ -596,6 +605,10 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			return err
 		}
 		config.VerifyCarrier = func(ctx context.Context, _ smartproxy.Upstream) error {
+			if family != "both" {
+				_, _, err := egresscheck.ProbeExitLocationFamily(ctx, upstream, family)
+				return err
+			}
 			_, err := verifyModeUpstream(ctx, mode, upstream)
 			return err
 		}
@@ -606,7 +619,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 		return "{}", nil
 	}
-	if !testOnly && (mode == "balanced" || mode == "fast") && localStateDir != "" {
+	if !testOnly && family == "both" && (mode == "balanced" || mode == "fast") && localStateDir != "" {
 		// The latest tests on this network give each tested site its best
 		// method as the first choice; live learning still decides.
 		if targets, targetErr := loadRouteTargets(localStateDir); targetErr == nil {

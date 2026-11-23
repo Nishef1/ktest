@@ -26,6 +26,36 @@ func ProbeForeignExit(parent context.Context, socks string) (ip, country string,
 }
 
 func ProbeExitLocation(parent context.Context, socks string) (ip, country string, err error) {
+	return probeExitTrace(parent, socks, "www.cloudflare.com", "www.cloudflare.com", "")
+}
+
+// ProbeExitLocationFamily verifies the actual observed public IP family on a
+// numeric destination, independently of the carrier/gateway address family.
+func ProbeExitLocationFamily(parent context.Context, socks, family string) (ip, country string, err error) {
+	if family == "" || family == "both" {
+		return ProbeExitLocation(parent, socks)
+	}
+	var target string
+	switch family {
+	case "ipv4":
+		target = "1.1.1.1"
+	case "ipv6":
+		target = "2606:4700:4700::1111"
+	default:
+		return "", "", errors.New("invalid egress IP family")
+	}
+	return probeExitTrace(parent, socks, "one.one.one.one", target, family)
+}
+
+func ProbeForeignExitFamily(parent context.Context, socks, family string) (ip, country string, err error) {
+	ip, country, err = ProbeExitLocationFamily(parent, socks, family)
+	if err != nil {
+		return ip, country, err
+	}
+	return ParseForeignTrace("ip=" + ip + "\nloc=" + country)
+}
+
+func probeExitTrace(parent context.Context, socks, host, target, family string) (ip, country string, err error) {
 	ctx, cancel := context.WithTimeout(parent, 12*time.Second)
 	defer cancel()
 	tr := &http.Transport{
@@ -35,12 +65,12 @@ func ProbeExitLocation(parent context.Context, socks string) (ip, country string
 		TLSHandshakeTimeout:    8 * time.Second,
 		ResponseHeaderTimeout:  8 * time.Second,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			return smartproxy.DialVia(ctx, socks, "www.cloudflare.com", "443", 8*time.Second)
+			return smartproxy.DialVia(ctx, socks, target, "443", 8*time.Second)
 		},
 	}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 11 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	req, e := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.cloudflare.com/cdn-cgi/trace", nil)
+	req, e := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/cdn-cgi/trace", nil)
 	if e != nil {
 		return "", "", e
 	}
@@ -59,7 +89,11 @@ func ProbeExitLocation(parent context.Context, socks string) (ip, country string
 	if len(data) > 4096 {
 		return "", "", errors.New("unexpected geo-check response")
 	}
-	return ParseExitTrace(string(data))
+	ip, country, err = ParseExitTrace(string(data))
+	if err == nil && family != "" && (net.ParseIP(ip).To4() != nil) != (family == "ipv4") {
+		return "", "", errors.New("egress address family mismatch")
+	}
+	return ip, country, err
 }
 
 func ParseForeignTrace(body string) (ip, country string, err error) {

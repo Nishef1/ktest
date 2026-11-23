@@ -23,6 +23,7 @@ import (
 	"github.com/Nishef1/ktest/internal/connectiondns"
 	"github.com/Nishef1/ktest/internal/connectionsession"
 	"github.com/Nishef1/ktest/internal/dnscheck"
+	"github.com/Nishef1/ktest/internal/egresscheck"
 	"github.com/Nishef1/ktest/internal/edges"
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/revive"
@@ -911,11 +912,11 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	cfg := smartproxy.Config{
 		Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte, DestinationFamily: o.destinationFamily,
 		VerifyExit: func(ctx context.Context, u smartproxy.Upstream) error {
-			_, _, err := probeForeignExit(ctx, u.Addr)
+			_, _, err := egresscheck.ProbeForeignExitFamily(ctx, u.Addr, o.destinationFamily)
 			return err
 		},
 		VerifyCarrier: func(ctx context.Context, u smartproxy.Upstream) error {
-			_, _, err := probeExitLocation(ctx, u.Addr)
+			_, _, err := egresscheck.ProbeExitLocationFamily(ctx, u.Addr, o.destinationFamily)
 			return err
 		},
 		OnEvent: func(e smartproxy.Event) {
@@ -1002,6 +1003,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				host, port, err := net.SplitHostPort(address)
 				if err != nil {
 					return nil, err
+				}
+				if o.mode == ModeAether {
+					return p.DialExitCarrierDNS(ctx, host, port)
 				}
 				return p.DialVerifiedExitDNS(ctx, host, port)
 			}
