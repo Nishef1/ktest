@@ -72,6 +72,9 @@ var menuSections = []struct {
 		connectItem("4", connectionpolicy.Title(string(ModeTor)), "Tor", ModeTor),
 		{key: "5", name: connectionpolicy.Title(string(ModeWindscribe)), desc: "Local bridge / through Aether", mode: ModeWindscribe, action: func(t *terminal, base string, in *input) bool { return t.windscribeMenu(base, in) }},
 		connectItem("6", connectionpolicy.Title(string(ModePsiphon)), "Psiphon", ModePsiphon),
+		{key: "12", name: connectionpolicy.Title("serverless"), desc: "Fragment A / B / OOB · ISP IP, proxy only", action: func(t *terminal, base string, in *input) bool {
+			return t.serverlessMenu(base, in)
+		}},
 	}},
 	{"Coverage", []menuItem{
 		{key: "7", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},
@@ -137,7 +140,7 @@ func (t *terminal) mainMenu(base string) {
 		coverage = "Whole PC (beta)"
 	}
 	statusText := "Disconnected · " + previous + policyName(t.options.mode) + " · " + coverage
-	requiredRows := 24 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
+	requiredRows := 25 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
 	if t.notice != "" {
 		noticeRows := len(wrapText(t.notice, max(u.width()-4, 1)))
 		requiredRows += max(noticeRows-1, 0)

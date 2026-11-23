@@ -8,7 +8,7 @@ import (
 )
 
 func TestModeCatalogIsUniqueAndFaithfulToCLI(t *testing.T) {
-	expected := []string{"balanced", "fast", "aether", "tor", "psiphon"}
+	expected := []string{"balanced", "fast", "aether", "tor", "serverless", "psiphon"}
 	modes := AndroidModes()
 	if len(modes) != len(expected) {
 		t.Fatalf("expected %d modes, got %d", len(expected), len(modes))
@@ -63,5 +63,13 @@ func TestExitModesStartWithoutUpstreams(t *testing.T) {
 		if _, err := smartproxy.New(cfg); err != nil {
 			t.Fatalf("mode %s: %v", id, err)
 		}
+	}
+}
+
+func TestServerlessNeverBecomesForeignExit(t *testing.T) {
+	var cfg smartproxy.Config
+	Configure("serverless", &cfg)
+	if !cfg.LocalOnly || !cfg.RejectExits || cfg.ExitOnly != nil || cfg.ExitRequired != nil {
+		t.Fatalf("serverless escaped its local scope: %+v", cfg)
 	}
 }

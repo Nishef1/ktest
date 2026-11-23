@@ -268,7 +268,7 @@ func TestEnterConnectsWithSavedPolicyWithoutRepeatingSelection(t *testing.T) {
 }
 
 func TestUnknownOptionNamesTheRange(t *testing.T) {
-	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, "Unknown option. Use 1-11, Enter, or 0.") {
+	if out := menuOutput(t, "42\n0\n"); !strings.Contains(out, "Unknown option. Use 1-12, Enter, or 0.") {
 		t.Fatal(out)
 	}
 }

@@ -36,6 +36,9 @@ func allModes() []Mode {
 		{"windscribe", "Windscribe", "Local-only anti-DPI bridge", false,
 			"The desktop WStunnel, Xray and ByeDPI orchestration is not ported.",
 			"OpenVPN TCP re-wrapped in Windscribe WStunnel (chosen SNI, optional own Cloudflare hostname) plus IP-preserving local anti-DPI (Xray TCP fragmentation, ByeDPI, TLS ClientHello desync). Psiphon, Aether, WARP, Tor, plain and remote exits OFF. Windscribe controls public VPN IP."},
+		{"serverless", "Serverless", "Direct ISP · Fragment A/B or OOB (not a foreign VPN)", true,
+			"Your public IP is unchanged. Proxy-only while Serverless runs.",
+			"PattNG Serverless v65: Fragment A, Fragment B or OOB through pinned Xray. Direct ISP IP, NOT a verified foreign exit. Only explicit local proxy on Android and Windows."},
 		{"psiphon", "Aether to Psiphon", "Aether first, then Psiphon through it; CDN fronting as a fallback", true,
 			"No WARP needed; CDN mode uses edges this network verified first. No external SOCKS substitution.",
 			"Aether to Psiphon: Psiphon runs inside a verified WARP tunnel first (Aether first), then on its own with CDN fronting through Fast's local anti-DPI; verified foreign exit required, no Tor or direct fallback for managed apps. Android can pick the exit country."},
@@ -94,6 +97,10 @@ func Configure(id string, cfg *smartproxy.Config) {
 		if id == "fast" {
 			cfg.Stagger = 125 * time.Millisecond
 		}
+	case "serverless":
+		// A pinned loopback-only Xray, never a remote SOCKS substitute.
+		cfg.LocalOnly = true
+		cfg.RejectExits = true
 	case "windscribe":
 		cfg.PreferVerifiedExit = false
 		cfg.RejectExits = true
