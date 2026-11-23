@@ -120,7 +120,7 @@ type Config struct {
 	// Empty and "both" preserve the existing adaptive dual-stack behavior.
 	DestinationFamily string
 	Upstreams         []Upstream
-	Frozen    *FrozenRoutes
+	Frozen            *FrozenRoutes
 	// ExitOnly forces matched names to use only verified foreign exits.
 	// If none is present, fail closed instead of silently revealing the ISP IP.
 	ExitOnly func(string) bool
@@ -262,16 +262,16 @@ type Stat struct {
 
 type upstreamState struct {
 	Upstream
-	carrierMu     sync.Mutex
-	carrierUntil  time.Time
-	wins, fails   int
-	ewmaMS        float64
-	verifiedUntil atomic.Int64
+	carrierMu      sync.Mutex
+	carrierUntil   time.Time
+	wins, fails    int
+	ewmaMS         float64
+	verifiedUntil  atomic.Int64
 	familyVerified bool // protected by verifyMu; generic startup proof does not certify a forced family
-	verifyMu      sync.Mutex
-	verifyErr     error
-	retryAfter    time.Time
-	family        string
+	verifyMu       sync.Mutex
+	verifyErr      error
+	retryAfter     time.Time
+	family         string
 }
 
 type memo struct {

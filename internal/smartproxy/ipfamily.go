@@ -14,7 +14,9 @@ func ValidDestinationFamily(family string) bool {
 	return family == "" || family == "both" || family == "ipv4" || family == "ipv6"
 }
 
-func (p *Proxy) singleFamily() bool { return p.cfg.DestinationFamily != "both" && p.cfg.DestinationFamily != "" }
+func (p *Proxy) singleFamily() bool {
+	return p.cfg.DestinationFamily != "both" && p.cfg.DestinationFamily != ""
+}
 
 func (p *Proxy) familyAllows(host string) bool {
 	ip := net.ParseIP(host)
@@ -66,8 +68,8 @@ func familyDNS(family string, exchange func(context.Context, []byte) ([]byte, er
 		if family == "ipv4" && qtype == 28 || family == "ipv6" && qtype == 1 {
 			response := append([]byte(nil), query[:end]...)
 			response[2] = 0x80 | query[2]&1 // QR, preserve recursion desired
-			response[3] = 0x80             // RA, NOERROR
-			clear(response[6:12])         // zero answer/authority/additional counts
+			response[3] = 0x80              // RA, NOERROR
+			clear(response[6:12])           // zero answer/authority/additional counts
 			return response, nil
 		}
 		if exchange == nil {

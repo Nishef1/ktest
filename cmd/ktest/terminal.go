@@ -145,7 +145,7 @@ func (t *terminal) mainMenu(base string) {
 		previous = "Last: "
 		lastMode = "Serverless " + t.settings.ServerlessVariant
 	}
-	statusText := "Disconnected · " + previous + lastMode + " · " + coverage + " · " + familyLabel(t.options.destinationFamily)
+	statusText := "Disconnected · " + previous + lastMode + " · " + coverage
 	requiredRows := 24 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
 	if t.notice != "" {
 		noticeRows := len(wrapText(t.notice, max(u.width()-4, 1)))
@@ -153,7 +153,7 @@ func (t *terminal) mainMenu(base string) {
 	}
 	u.menuViewHeight(requiredRows)
 	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Free access toolkit"))
-	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(lastMode)+" · "+u.Dim(coverage+" · "+familyLabel(t.options.destinationFamily)))
+	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(lastMode)+" · "+u.Dim(coverage))
 	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
 	u.text("  "+u.Bold(u.Cyan("Enter"))+"  ", "         ", u.Bold("Connect with "+lastMode))
 	for _, s := range menuSections {
@@ -174,6 +174,9 @@ func (t *terminal) mainMenu(base string) {
 				name = "Current Mode: Proxy"
 				if t.options.tun {
 					name = "Current Mode: TUN"
+				}
+				if t.options.destinationFamily == "ipv4" || t.options.destinationFamily == "ipv6" {
+					desc = familyLabel(t.options.destinationFamily)
 				}
 			}
 			u.menuOption(it.key, name, desc)

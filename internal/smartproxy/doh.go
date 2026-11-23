@@ -51,6 +51,9 @@ var DefaultDoH = []DoHEndpoint{
 	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "1.1.1.1:443", ServerName: "cloudflare-dns.com"},
 	{URL: "https://dns.google/resolve", Addr: "8.8.8.8:443", ServerName: "dns.google"},
 	{URL: "https://dns.google/resolve", Addr: "8.8.4.4:443", ServerName: "dns.google"},
+	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "[2606:4700:4700::1111]:443", ServerName: "cloudflare-dns.com"},
+	{URL: "https://cloudflare-dns.com/dns-query", Accept: "application/dns-json", Addr: "[2606:4700:4700::1001]:443", ServerName: "cloudflare-dns.com"},
+	{URL: "https://dns.google/resolve", Addr: "[2001:4860:4860::8888]:443", ServerName: "dns.google"},
 	// Google Public DNS also accepts its HTTP Host on the ordinary Google
 	// front when the resolver's own SNI is filtered. Keep the certificate check
 	// on dns.google even though the wire carries www.google.com.

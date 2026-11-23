@@ -59,14 +59,14 @@ type proxyDiagnostics struct {
 
 type proxyReport struct {
 	DestinationFamily string `json:"destination_family,omitempty"`
-	Running      bool   `json:"running"`
-	Mode         string `json:"mode,omitempty"`
-	Socks        string `json:"socks,omitempty"`
-	HTTP         string `json:"http,omitempty"`
-	Coverage     string `json:"coverage"`
-	Detail       string `json:"detail"`
-	Upstream     string `json:"upstream,omitempty"`
-	ExitLocation string `json:"exit_location,omitempty"`
+	Running           bool   `json:"running"`
+	Mode              string `json:"mode,omitempty"`
+	Socks             string `json:"socks,omitempty"`
+	HTTP              string `json:"http,omitempty"`
+	Coverage          string `json:"coverage"`
+	Detail            string `json:"detail"`
+	Upstream          string `json:"upstream,omitempty"`
+	ExitLocation      string `json:"exit_location,omitempty"`
 	// AIExit: a verified non-Iran exit exists, so AI/TikTok can connect.
 	// An Iran-located WARP still carries ordinary sites in Aether.
 	AIExit          bool   `json:"ai_exit"`
@@ -532,7 +532,10 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	if err != nil {
 		return "", err
 	}
-	config.Resolve, config.Resolve6, err = connectiondns.MobileResolversWithCustom(mode, dnsSOCKS, customDNS)
+	if family != "both" {
+		customDNS = "" // forced-family traffic must not use unrelated plaintext DNS
+	}
+	config.Resolve, config.Resolve6, err = connectiondns.MobileResolversPolicy(mode, dnsSOCKS, customDNS, family != "both")
 	if err != nil {
 		return "", err
 	}

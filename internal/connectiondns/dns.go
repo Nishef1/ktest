@@ -37,6 +37,12 @@ func MobileResolvers(mode, exitSOCKS string) (smartproxy.Resolver, smartproxy.Re
 // Strict exit-only modes intentionally ignore it so a user setting cannot leak
 // protected DNS outside the verified exit.
 func MobileResolversWithCustom(mode, exitSOCKS, customDNS string) (smartproxy.Resolver, smartproxy.Resolver, error) {
+	return MobileResolversPolicy(mode, exitSOCKS, customDNS, false)
+}
+
+// MobileResolversPolicy can require encrypted, numerically bootstrapped
+// DNS even in a local-first mode, without changing the underlying carrier.
+func MobileResolversPolicy(mode, exitSOCKS, customDNS string, encryptedOnly bool) (smartproxy.Resolver, smartproxy.Resolver, error) {
 	strict := mode == "aether" || mode == "psiphon" || mode == "tor"
 	serverless := mode == "serverless"
 	exitSOCKS = strings.TrimSpace(exitSOCKS)
@@ -60,13 +66,20 @@ func MobileResolversWithCustom(mode, exitSOCKS, customDNS string) (smartproxy.Re
 		}
 	}
 	endpoints := append([]smartproxy.DoHEndpoint(nil), smartproxy.DefaultDoH...)
-	if !strict && !serverless {
+	if encryptedOnly {
+		endpoints = nil
+		for _, ep := range smartproxy.DefaultDoH {
+			if ep.Addr != "" && ep.FrontSNI == "" && ep.DialTLS == nil {
+				endpoints = append(endpoints, ep)
+			}
+		}
+	} else if !strict && !serverless {
 		// ECH bootstrap makes DNS possible even without a healthy default
 		// resolver, but its own direct dial is not permitted in strict mode.
 		endpoints = append(endpoints, ECHEndpoint())
 	}
 	var system func(context.Context, string, string) ([]net.IP, error)
-	if strict || serverless {
+	if strict || serverless || encryptedOnly {
 		system = func(context.Context, string, string) ([]net.IP, error) {
 			return nil, errors.New("system DNS disabled for protected or Serverless DNS routes")
 		}
