@@ -145,7 +145,7 @@ func (t *terminal) mainMenu(base string) {
 		previous = "Last: "
 		lastMode = "Serverless " + t.settings.ServerlessVariant
 	}
-	statusText := "Disconnected · " + previous + lastMode + " · " + coverage
+	statusText := "Disconnected · " + previous + lastMode + " · " + coverage + " · " + familyLabel(t.options.destinationFamily)
 	requiredRows := 24 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
 	if t.notice != "" {
 		noticeRows := len(wrapText(t.notice, max(u.width()-4, 1)))
@@ -153,7 +153,7 @@ func (t *terminal) mainMenu(base string) {
 	}
 	u.menuViewHeight(requiredRows)
 	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Free access toolkit"))
-	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(lastMode)+" · "+u.Dim(coverage))
+	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(lastMode)+" · "+u.Dim(coverage+" · "+familyLabel(t.options.destinationFamily)))
 	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
 	u.text("  "+u.Bold(u.Cyan("Enter"))+"  ", "         ", u.Bold("Connect with "+lastMode))
 	for _, s := range menuSections {
@@ -581,7 +581,7 @@ func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) 
 func (t *terminal) connectWithOptions(in *input, o connectOptions) bool {
 	mode := o.mode
 	t.ui.Note("Policy: %s. Coverage: %s", mode, connectionCoverage(o))
-	usesFronting := (mode == ModeBalanced || mode == ModeFast) && !o.noFront
+	usesFronting := (mode == ModeBalanced || mode == ModeFast) && !o.noFront && (o.destinationFamily == "" || o.destinationFamily == "both")
 	if state := certState(); state != "ok" && !t.settings.SkipCertificateOffer && usesFronting {
 		why := map[string]string{
 			"missing":   "Domain fronting (YouTube, X, Instagram, Reddit ...) needs a local certificate that is not set up.",

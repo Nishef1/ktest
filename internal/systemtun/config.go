@@ -50,6 +50,9 @@ func BuildConfig(socksPort int, physicalNIC string) ([]byte, error) {
 
 // Options describes a system-wide tunnel that feeds the ktest Connect proxy.
 type Options struct {
+	// DestinationFamily applies to public managed destinations. LAN and the
+	// exact helper processes remain exempt; this is not a persistent kill switch.
+	DestinationFamily string
 	// SocksPort is the local SOCKS5 port of the proxy that carries everything.
 	SocksPort int
 	// PhysicalNIC is the real network interface; sockets that must not enter the
@@ -84,6 +87,10 @@ var DefaultBlockPage = []string{"10.10.34.0/24"}
 // Unless o.UDP, UDP other than DNS is rejected with ICMP port unreachable so
 // that applications can fall back to TCP without waiting for a silent timeout.
 func BuildSystemConfig(o Options) ([]byte, error) {
+	if o.DestinationFamily != "" && o.DestinationFamily != "both" && o.DestinationFamily != "ipv4" && o.DestinationFamily != "ipv6" {
+		return nil, errors.New("invalid destination family")
+	}
+	singleFamily := o.DestinationFamily == "ipv4" || o.DestinationFamily == "ipv6"
 	if o.SocksPort < 1 || o.SocksPort > 65535 {
 		return nil, errors.New("invalid local SOCKS port")
 	}
@@ -113,7 +120,18 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 	if len(block) > 0 {
 		rules = append(rules, map[string]any{"ip_cidr": block, "action": "route", "outbound": "ktest"})
 	}
+	// Preserve both fake-IP pools ahead of the private/LAN exemption.
+	// Capture both address families even in single-family mode: omitting an
+	// OS route would let an incompatible application use the physical NIC.
+	rules = append(rules, map[string]any{"ip_cidr": []string{"198.18.0.0/15", "2001:2::/48"}, "action": "route", "outbound": "ktest"})
 	rules = append(rules, map[string]any{"ip_is_private": true, "action": "route", "outbound": "physical"})
+	if singleFamily {
+		blockedVersion := 6
+		if o.DestinationFamily == "ipv6" {
+			blockedVersion = 4
+		}
+		rules = append(rules, map[string]any{"ip_version": blockedVersion, "action": "reject", "method": "default", "no_drop": true})
+	}
 	ktest := map[string]any{"type": "socks", "tag": "ktest", "server": "127.0.0.1", "server_port": o.SocksPort, "version": "5", "network": "tcp"}
 	if o.UDP {
 		// Both networks: UDP reaches the proxy as SOCKS5 UDP ASSOCIATE,
@@ -122,16 +140,27 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 	} else {
 		rules = append(rules, map[string]any{"network": "udp", "action": "reject", "method": "default", "no_drop": true})
 	}
+	dnsServers := []any{
+		map[string]any{"type": "local", "tag": "local"},
+		map[string]any{"type": "fakeip", "tag": "fake", "inet4_range": "198.18.0.0/15", "inet6_range": "2001:2::/48"},
+	}
+	dnsRules := []any{}
+	dnsFinal := "local"
+	if singleFamily {
+		blockedQuery := "AAAA"
+		if o.DestinationFamily == "ipv6" {
+			blockedQuery = "A"
+		}
+		dnsRules = append(dnsRules, map[string]any{"query_type": []string{blockedQuery}, "action": "predefined", "rcode": "NOERROR"})
+		// This numeric DNS target is intercepted by the Go SOCKS DNS
+		// handler (port 53), which performs encrypted packet DNS.
+		dnsServers = append(dnsServers, map[string]any{"type": "tcp", "tag": "ktest-dns", "server": "1.1.1.1", "server_port": 53, "detour": "ktest"})
+		dnsFinal = "ktest-dns"
+	}
+	dnsRules = append(dnsRules, map[string]any{"query_type": []string{"A", "AAAA"}, "action": "route", "server": "fake"})
 	root := map[string]any{
 		"log": map[string]any{"level": "warn"},
-		"dns": map[string]any{
-			"servers": []any{
-				map[string]any{"type": "local", "tag": "local"},
-				map[string]any{"type": "fakeip", "tag": "fake", "inet4_range": "198.18.0.0/15"},
-			},
-			"rules": []any{map[string]any{"query_type": []string{"A", "AAAA"}, "action": "route", "server": "fake"}},
-			"final": "local",
-		},
+		"dns": map[string]any{"servers": dnsServers, "rules": dnsRules, "final": dnsFinal},
 		"inbounds": []any{map[string]any{
 			"type": "tun", "tag": "ktest-tun", "interface_name": "ktest-tun",
 			"address": []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
@@ -140,7 +169,7 @@ func BuildSystemConfig(o Options) ([]byte, error) {
 			// mode does NOT guarantee DNS leak protection on multihomed Windows.
 			// Do not assume a leaked/poisoned response can always be recovered
 			// from TLS SNI (ECH, IP-only and non-TLS traffic have no usable SNI).
-			"auto_route": true, "strict_route": false, "stack": "gvisor",
+			"auto_route": true, "strict_route": singleFamily, "dns_mode": "hijack", "stack": "gvisor",
 		}},
 		"outbounds": []any{
 			ktest,

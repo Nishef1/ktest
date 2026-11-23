@@ -25,6 +25,7 @@ func (t *terminal) chooseCoverage(in *input) bool {
 		}
 		t.ui.Println(proxy)
 		t.ui.Println(tun)
+		t.ui.menuOption("3", "Destination IP family", familyLabel(t.options.destinationFamily))
 		t.ui.Printf("\n")
 		t.ui.Note("TUN needs Windows Administrator; LAN and helper processes are exempt.")
 		t.ui.Note("Most UDP is blocked, except in Aether (UDP rides WARP). TUN is not a persistent VPN kill switch.")
@@ -41,6 +42,8 @@ func (t *terminal) chooseCoverage(in *input) bool {
 		switch choice {
 		case "1":
 			t.options.tun = false
+		case "3":
+			return t.chooseDestinationFamily(in)
 		case "2":
 			if runtime.GOOS != "windows" {
 				message = "TUN currently supports Windows only"
@@ -48,7 +51,7 @@ func (t *terminal) chooseCoverage(in *input) bool {
 			}
 			t.options.tun = true
 		default:
-			message = "Select 1, 2, or 0"
+			message = "Select 1, 2, 3, or 0"
 			continue
 		}
 		if t.rememberConnect("tun", strconv.FormatBool(t.options.tun)) {
@@ -294,5 +297,46 @@ func (t *terminal) cdnScanMenu(in *input) bool {
 		if !t.tool(in, func(ctx context.Context) { runQuickScanContext(ctx, args) }) {
 			return false
 		}
+	}
+}
+
+// familyLabel labels managed destinations, not the native tunnel gateway.
+func familyLabel(family string) string {
+	switch family {
+	case "ipv4":
+		return "IPv4 only"
+	case "ipv6":
+		return "IPv6 only"
+	default:
+		return "IPv4 + IPv6"
+	}
+}
+
+func (t *terminal) chooseDestinationFamily(in *input) bool {
+	for {
+		t.ui.menuView()
+		t.ui.Heading("Destination IP family", "Current: "+familyLabel(t.options.destinationFamily))
+		t.ui.Note("Managed TCP/UDP only; native gateways, DNS bootstrap and exempt LAN/helper traffic may use another family.")
+		t.ui.menuOption("1", "IPv4 only", "Reject IPv6 destinations")
+		t.ui.menuOption("2", "Both", "Adaptive IPv4 + IPv6")
+		t.ui.menuOption("3", "IPv6 only", "Reject IPv4 destinations")
+		t.ui.menuOption("0", "Back", "")
+		t.ui.Printf("  Family > ")
+		answer, ok := in.read()
+		if !ok {
+			return false
+		}
+		if answer == "" || isBackChoice(answer) {
+			return true
+		}
+		selected := map[string]string{"1": "ipv4", "2": "both", "3": "ipv6"}[answer]
+		if selected == "" {
+			continue
+		}
+		t.options.destinationFamily = selected
+		if t.rememberConnect("ip-family", selected) {
+			t.notice, t.noticeTone = "Saved destination family: "+familyLabel(selected), toneInfo
+		}
+		return true
 	}
 }

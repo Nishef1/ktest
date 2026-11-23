@@ -87,6 +87,7 @@ func localXrayLauncher(base, variant string, port int, out io.Writer) (launcher,
 // connectOptions configures one connect session (CLI or menu). The defaults are
 // the product; every field is for experiments.
 type connectOptions struct {
+	destinationFamily   string
 	base                string
 	mode                ConnectionMode
 	listen              string
@@ -129,7 +130,7 @@ func frontCARelevant(o connectOptions) bool {
 
 func defaultConnectOptions(base string) connectOptions {
 	return connectOptions{
-		base: base, mode: ModeBalanced, listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12, windscribeReconnect: false,
+		base: base, mode: ModeBalanced, destinationFamily: "both", listen: connectListenDefault, httpListen: connectHTTPDefault, strategies: 12, windscribeReconnect: false,
 		tun:     runtime.GOOS == "windows",
 		ws:      wsOptions{direct: true, sni: defaultWindscribeSNIs},
 		stagger: 250 * time.Millisecond, firstByte: 5 * time.Second, ready: 30 * time.Second,
@@ -141,6 +142,7 @@ func defaultConnectOptions(base string) connectOptions {
 func connectFlagSet(o *connectOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	fs.StringVar(&o.base, "base", o.base, "portable folder holding cores/ and profiles/")
+	fs.StringVar(&o.destinationFamily, "ip-family", o.destinationFamily, "managed destination IP family: both, ipv4, ipv6 (no silent fallback)")
 	fs.StringVar((*string)(&o.mode), "mode", string(o.mode), "balanced, fast, windscribe, windscribe-aether, aether, psiphon, tor")
 	fs.StringVar(&o.windscribeCLI, "windscribe-cli", o.windscribeCLI, "absolute path to Windscribe desktop CLI (auto-detected on Windows)")
 	fs.BoolVar(&o.windscribeReconnect, "windscribe-auto-reconnect", o.windscribeReconnect, "opt in to reconnecting Windscribe after confirmed disconnect (off by default; Windscribe normally manages its own retries)")
@@ -179,6 +181,17 @@ func connectFlagSet(o *connectOptions) *flag.FlagSet {
 }
 
 func validateConnectOptions(o connectOptions) error {
+	if !smartproxy.ValidDestinationFamily(o.destinationFamily) {
+		return errors.New("-ip-family must be both, ipv4 or ipv6")
+	}
+	if o.destinationFamily != "" && o.destinationFamily != "both" {
+		if o.mode.isWindscribe() {
+			return errors.New("Windscribe owns its VPN traffic family; select both in KTest and configure Windscribe separately")
+		}
+		if o.noDoH {
+			return errors.New("single-family destination policy requires encrypted DNS; remove -no-doh")
+		}
+	}
 	host, port, err := net.SplitHostPort(o.listen)
 	if err != nil || port == "" || (host != "localhost" && (net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback())) {
 		return errors.New("-listen must be a loopback host:port")
@@ -542,8 +555,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	sessionStarted := time.Now() // the status panel counts the search from here
 	t.Heading("connect", "Routing mode: "+string(o.mode))
 	t.Note("Coverage: %s", connectionCoverage(o))
+	t.Note("Managed destination IP family: %s", familyLabel(o.destinationFamily))
 	t.Note("%s", o.mode.message())
-	if o.mode.isWindscribe() || o.mode == ModeFast {
+	if o.mode.isWindscribe() || o.mode == ModeFast || o.destinationFamily != "" && o.destinationFamily != "both" {
 		if err := validateConnectOptions(o); err != nil {
 			t.Line(toneFail, "%v", err)
 			return 2
@@ -895,7 +909,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	var liveProxy atomic.Pointer[smartproxy.Proxy]
 	exitDemand := make(chan struct{}, 1)
 	cfg := smartproxy.Config{
-		Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte,
+		Upstreams: ups, Stagger: o.stagger, FirstByteTimeout: o.firstByte, DestinationFamily: o.destinationFamily,
 		VerifyExit: func(ctx context.Context, u smartproxy.Upstream) error {
 			_, _, err := probeForeignExit(ctx, u.Addr)
 			return err
@@ -950,6 +964,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		}
 	}
 	var dohA, dohAAAA smartproxy.Resolver
+	singleFamily := o.destinationFamily != "" && o.destinationFamily != "both"
 	dnsGeneration := func() uint64 {
 		if p := liveProxy.Load(); p != nil {
 			_, generation := p.ExitCarriers()
@@ -977,8 +992,6 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		// The public resolvers are filtered by address on many networks; the ECH
 		// route to Cloudflare's resolver is not, and needs neither DNS nor a path.
 		endpoints := append(append([]smartproxy.DoHEndpoint(nil), smartproxy.DefaultDoH...), echDoHEndpoint())
-		dohA = smartproxy.NewDoH(endpoints, dial, nil)
-		dohAAAA = smartproxy.NewDoHType(endpoints, dial, nil, "AAAA")
 		wireDial := dial
 		if o.mode.exitOnly() {
 			wireDial = func(ctx context.Context, _, address string) (net.Conn, error) {
@@ -990,22 +1003,43 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				if err != nil {
 					return nil, err
 				}
-				return p.DialVerifiedExit(ctx, host, port)
+				return p.DialVerifiedExitDNS(ctx, host, port)
 			}
 		}
+		if singleFamily && o.mode.exitOnly() {
+			// Domain resolution introduced by a forced-family policy must
+			// not send protected names to the physical/system DNS resolver.
+			// JSON DNS requires the ordinary JSON endpoints (not wire DoH).
+			endpoints = nil
+			for _, ep := range smartproxy.DefaultDoH {
+				if ep.Addr != "" && ep.FrontSNI == "" {
+					endpoints = append(endpoints, ep)
+				}
+			}
+			dial = wireDial
+		}
+		dohA = smartproxy.NewDoH(endpoints, dial, nil)
+		dohAAAA = smartproxy.NewDoHType(endpoints, dial, nil, "AAAA")
 		exchange, closePacketDNS := smartproxy.NewWireDoH(connectiondns.PacketEndpoints(!o.mode.exitOnly()), wireDial, nil)
 		cfg.ExchangeDNS = exchange
 		defer closePacketDNS()
 	}
-	cfg.Resolve = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohA, DoHGeneration: dnsGeneration, Logf: logDNS})
-	cfg.Resolve6 = smartproxy.NewTrusted(smartproxy.TrustedOptions{DoH: dohAAAA, DoHGeneration: dnsGeneration, IPv6: true, Logf: logDNS})
+	resolverOptions := smartproxy.TrustedOptions{DoH: dohA, DoHGeneration: dnsGeneration, Logf: logDNS}
+	if singleFamily {
+		resolverOptions.System = func(context.Context, string, string) ([]net.IP, error) {
+			return nil, errors.New("single-family destinations require encrypted DNS")
+		}
+	}
+	cfg.Resolve = smartproxy.NewTrusted(resolverOptions)
+	resolverOptions.DoH, resolverOptions.IPv6 = dohAAAA, true
+	cfg.Resolve6 = smartproxy.NewTrusted(resolverOptions)
 
 	// Domain fronting is a takeover path: it needs the application to trust the
 	// ktest CA, so it is only added when the system says it does.
 	var fronter *front.Fronter
 	frontHistory := &hostAggregate{rows: map[string]*hostRow{}}
 	frontNote := ""
-	if !o.mode.exitOnly() && o.mode != ModeWindscribe {
+	if !singleFamily && !o.mode.exitOnly() && o.mode != ModeWindscribe {
 		// A CDN front can act as an egress/HTTP takeover; its public-IP
 		// semantics are not guaranteed. Local-only means no CDN relay.
 		fronter, frontNote = newFronter(o, cfg.Resolve, t, logDNS, frontHistory)
@@ -1176,7 +1210,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 		coverage = "TUN inactive · local proxy listener only"
 		if verdict != toneFail {
 			tunAttempts++
-			tn = startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t)
+			tn = startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t, o.destinationFamily)
 			defer tn.stop(t)
 			if ctx.Err() != nil {
 				return 0
@@ -1342,7 +1376,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				!time.Now().Before(tunRetryAt) && tunAttempts < 3 {
 				tunAttempts++
 				t.ClearPinnedBox()
-				candidate := startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t)
+				candidate := startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t, o.destinationFamily)
 				if candidate != nil {
 					tn = candidate
 					tunPending = false
