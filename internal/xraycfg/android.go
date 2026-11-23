@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -135,4 +136,47 @@ func TunConfig(socksPort, mtu int) ([]byte, error) {
 func ValidateListen(listen string) bool {
 	ip := net.ParseIP(listen)
 	return ip != nil && ip.IsLoopback()
+}
+
+
+// VerifyAndroidServerlessAssets ensures geosite and geoip were packaged from
+// the same SHA-256-pinned release as the Android executable. An Android app
+// may copy these signed APK data assets into its private files directory;
+// unknown, old, or altered files cannot be executed as route configuration.
+func VerifyAndroidServerlessAssets(dir string) error {
+	if !filepath.IsAbs(dir) || dir == string(filepath.Separator) {
+		return errors.New("serverless Xray requires an absolute private assets directory")
+	}
+	var manifest struct {
+		Assets map[string]string `json:"serverless_assets"`
+	}
+	if err := json.Unmarshal(pinnedAndroid, &manifest); err != nil {
+		return err
+	}
+	if len(manifest.Assets) != 2 {
+		return errors.New("APK was built without pinned Xray serverless geo databases")
+	}
+	for _, name := range []string{"geoip.dat", "geosite.dat"} {
+		want := manifest.Assets[name]
+		if len(want) != 64 {
+			return errors.New("invalid pinned Serverless geo database SHA-256")
+		}
+		path := filepath.Join(dir, name)
+		file, err := os.Open(path)
+		if err != nil {
+			return errors.New("Serverless geo database is missing from app-private storage")
+		}
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > 64<<20 {
+			file.Close()
+			return errors.New("Serverless geo database is not a bounded regular file")
+		}
+		h := sha256.New()
+		_, err = io.Copy(h, file)
+		file.Close()
+		if err != nil || hex.EncodeToString(h.Sum(nil)) != want {
+			return errors.New("Serverless geo database does not match the signed Xray release")
+		}
+	}
+	return nil
 }

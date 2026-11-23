@@ -224,6 +224,18 @@ func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, loc
 }
 
 func startProxyConfigured(parent context.Context, mode, upstream string, native *nativeOptions, localDir, frontDir, localStateDir string, testOnly bool) (report string, startErr error) {
+	serverlessVariant := ""
+	if mode == "serverless" {
+		// The selected variant is not an exit SOCKS address. It launches
+		// exactly one checksum-pinned Xray direct-ISP profile on loopback.
+		if native != nil || localDir == "" || localStateDir == "" || frontDir != "" || testOnly {
+			return "", errors.New("Serverless requires a standalone app-private Xray session")
+		}
+		serverlessVariant, upstream = upstream, ""
+		if serverlessVariant != "A" && serverlessVariant != "B" && serverlessVariant != "OOB" {
+			return "", errors.New("Serverless variant must be A, B or OOB")
+		}
+	}
 	if mode == "fast" && upstream != "" {
 		return "", errors.New("Fast only permits managed Aether exits; use Balanced for an external SOCKS core")
 	}
@@ -295,7 +307,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 	}
 	switch mode {
-	case "balanced", "fast", "aether":
+	case "balanced", "fast", "aether", "serverless":
 	case "psiphon", "tor":
 		if native == nil {
 			return "", errors.New("this mode requires its managed Aether backend")
@@ -361,7 +373,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}()
 		upstream = managed.address
 	}
-	if mode != "balanced" && mode != "fast" && upstream == "" {
+	if mode != "balanced" && mode != "fast" && mode != "serverless" && upstream == "" {
 		return "", errors.New("a local SOCKS5 upstream is required for this mode")
 	}
 	var upstreams []smartproxy.Upstream
@@ -373,7 +385,11 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	var xrayError string
 	keepLocal := false
 	if localDir != "" {
-		localCores, err = launchAndroidLocalCores(startContext, localDir, testOnly)
+		if mode == "serverless" {
+			localCores, err = launchAndroidServerless(startContext, localDir, localStateDir, serverlessVariant)
+		} else {
+			localCores, err = launchAndroidLocalCores(startContext, localDir, testOnly)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -632,7 +648,22 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 				select {
 				case <-ctx.Done():
 				case <-child.done:
-					// Future connections race the remaining methods.
+					if mode == "serverless" {
+						// It is our only active method: a dead Xray cannot leave
+						// a misleading "connected" listener or a stale VPN.
+						proxyMu.Lock()
+						stopped := activeProxy == session
+						if stopped {
+							proxyFailure = "Serverless Xray exited; reconnect to retry the selected profile"
+							stopLocked()
+						}
+						proxyMu.Unlock()
+						if stopped {
+							StopVpnTun()
+						}
+						return
+					}
+					// Balanced/Fast still race the remaining methods.
 					proxy.Remove(child.method)
 				}
 			}()

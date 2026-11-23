@@ -147,6 +147,36 @@ def prepare(manifest, cache, destination, abis, verify_only):
         if digest(archive.read_bytes()) != abi["sha256"]:
             raise ValueError("cached native archive checksum mismatch; file preserved")
         payloads = archive_payloads(archive, abi)
+        # Serverless v65 relies on geosite/geoip databases shipped inside
+        # this same verified PattNG Xray archive. They are non-executable APK
+        # assets, not downloaded or updated at phone connection time.
+        if manifest["repository"] == "https://github.com/patterniha/Xray-core":
+            with zipfile.ZipFile(archive) as upstream:
+                for asset in ("geoip.dat", "geosite.dat"):
+                    matches = [info for info in upstream.infolist()
+                               if Path(info.filename).name == asset and not info.is_dir()]
+                    if len(matches) != 1 or matches[0].file_size > 64 << 20:
+                        raise ValueError("verified Xray archive lacks exactly one bounded " + asset)
+                    blob = upstream.read(matches[0])
+                    if not blob or len(blob) > 64 << 20:
+                        raise ValueError("invalid Xray serverless asset " + asset)
+                    sha = digest(blob)
+                    previous = manifest.get("serverless_assets", {}).get(asset)
+                    if previous is not None and previous != sha:
+                        raise ValueError("Xray serverless asset differs from pinned manifest")
+                    manifest.setdefault("serverless_assets", {})[asset] = sha
+                    if not verify_only:
+                        asset_dir = ROOT / "android/app/src/main/assets/xray"
+                        asset_dir.mkdir(parents=True, exist_ok=True)
+                        target_asset = asset_dir / asset
+                        if not target_asset.exists() or digest(target_asset.read_bytes()) != sha:
+                            with tempfile.NamedTemporaryFile(dir=asset_dir, delete=False) as staged:
+                                staged.write(blob)
+                                staged_path = Path(staged.name)
+                            try:
+                                staged_path.replace(target_asset)
+                            finally:
+                                staged_path.unlink(missing_ok=True)
         # This hash comes from an executable inside the already verified ZIP.
         # Its Go manifest must be compiled only after this preparation step.
         for item in abi["files"]:
@@ -208,6 +238,13 @@ def main():
                         if digest(apk.read(name)) != item["sha256"]:
                             raise ValueError(f"APK changed or stripped pinned executable: {name}")
                     print(f"{abi}: {manifest['repository']} APK native executable hashes verified")
+                if manifest.get("repository") == "https://github.com/patterniha/Xray-core":
+                    assets = manifest.get("serverless_assets", {})
+                    if set(assets) != {"geoip.dat", "geosite.dat"}:
+                        raise ValueError("Xray Serverless assets were not pinned before APK build")
+                    for asset, sha in assets.items():
+                        if digest(apk.read("assets/xray/" + asset)) != sha:
+                            raise ValueError("APK Serverless geo asset checksum mismatch: " + asset)
         return
     for path in MANIFESTS:
         manifest = json.loads(path.read_text())

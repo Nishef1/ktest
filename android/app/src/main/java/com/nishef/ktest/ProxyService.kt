@@ -139,6 +139,30 @@ class ProxyService : Service() {
     }
 
     // Reconnect after a network handover to refresh DNS and transport state.
+    private fun prepareServerlessAssets(): String {
+        val directory = File(filesDir, "xray-serverless-assets")
+        if (Mobilebridge.serverlessAssetsValid(directory.canonicalPath)) return directory.canonicalPath
+        check(directory.isDirectory || directory.mkdirs()) { "Cannot create private Xray asset directory" }
+        // Copy only if absent or damaged; every private copy is checked by Go
+        // against the pinned hashes derived from the signed APK Xray archive.
+        for (name in listOf("geoip.dat", "geosite.dat")) {
+            val output = File(directory, name)
+            val staged = File.createTempFile("xray-", ".tmp", directory)
+            try {
+                assets.open("xray/$name").use { source ->
+                    staged.outputStream().use { destination -> source.copyTo(destination) }
+                }
+                check(staged.renameTo(output)) { "Cannot stage verified Xray data" }
+            } finally {
+                staged.delete()
+            }
+        }
+        check(Mobilebridge.serverlessAssetsValid(directory.canonicalPath)) {
+            "Serverless GeoIP/GeoSite data failed packaged SHA-256 verification"
+        }
+        return directory.canonicalPath
+    }
+
     private fun watchBalancedNetwork(expectedHandle: Long) {
         clearNetworkWatch()
         networkInvalidated = false
@@ -320,7 +344,17 @@ class ProxyService : Service() {
                                         p.getInt("listener_socks_port", 10808).toLong(),
                                         p.getInt("listener_http_port", 10809).toLong())
                                 }
-                                if (mode in listOf("aether", "tor", "psiphon") &&
+                                if (mode == "serverless") {
+                                    // Upstream Serverless has its own DNS/outbound rules.
+                                    // It is explicitly proxy-only; no implicit VPN or foreign exit.
+                                    check(!vpn) { "Serverless is proxy-only; choose Psiphon or Aether for a managed VPN." }
+                                    val net = getSystemService(ConnectivityManager::class.java).activeNetwork
+                                        ?: error("Underlying network unavailable for Serverless")
+                                    watchBalancedNetwork(net.networkHandle)
+                                    prepareServerlessAssets()
+                                    Mobilebridge.startAndroidServerlessProxy(method,
+                                        applicationInfo.nativeLibraryDir, filesDir.canonicalPath)
+                                } else if (mode in listOf("aether", "tor", "psiphon") &&
                                     (mode != "aether" || upstream.isBlank())) {
                                     // Wi-Fi <-> cellular handovers leave the native core's
                                     // QUIC/WireGuard socket on the dead interface: the process

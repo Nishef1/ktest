@@ -47,7 +47,7 @@ internal data class ConnectionMode(
     val limitation: String, val details: String
 )
 
-internal val nativeModes = setOf("aether", "tor", "psiphon")
+internal val nativeModes = setOf("aether", "tor", "psiphon", "serverless")
 
 // The Go catalog retains stable CLI labels and transport policies.
 // Android uses shorter display labels while preserving exact mode IDs.
@@ -110,7 +110,10 @@ internal fun ConnectScreen(
             EndpointsPanel(status, routeReport, checkingRoute, onCheckRoute, onCopy)
         }
         // Connection details are below the core controls.
-        CoverageCard(coverage, onCoverage, !locked)
+        CoverageCard(coverage, onCoverage, !locked && activeMode.id != "serverless")
+        if (activeMode.id == "serverless") {
+            Note("Serverless uses the ISP's original public IP. Only apps configured for the local HTTP/SOCKS5 proxy use this method; this is not a foreign VPN.", Tone.Warn)
+        }
         ModeCard(activeMode, !locked, onMode)
         if (activeMode.id in nativeModes) {
             NativeMethodPanel(activeMode.id, nativeMethod, onNativeMethod, !locked)
@@ -550,7 +553,8 @@ private fun ModeCard(active: ConnectionMode, enabled: Boolean, onMode: (String) 
 private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -> Unit, enabled: Boolean) {
     val choices = remember(mode) {
         runCatching {
-            val catalog = JSONObject(Mobilebridge.aetherProfileCatalog(mode, "auto"))
+            val catalog = JSONObject(if (mode == "serverless") Mobilebridge.serverlessMethodCatalog()
+                else Mobilebridge.aetherProfileCatalog(mode, "auto"))
             val methods = catalog.getJSONArray("methods")
             (0 until methods.length()).map { i ->
                 val item = methods.getJSONObject(i)
@@ -606,9 +610,13 @@ private fun NativeMethodPanel(mode: String, method: String, onMethod: (String) -
             }
         }
         if (choices.isEmpty()) {
-            Note("Native method catalog unavailable. Check the packaged Aether core before starting.", Tone.Warn)
+            Note(if (mode == "serverless") "Serverless profiles unavailable. Check the pinned Xray bundle."
+                else "Native method catalog unavailable. Check the packaged Aether core before starting.", Tone.Warn)
         } else if (choices.none { it.first == method }) {
             Note("The saved method is no longer compatible with this mode. Select a supported method before connecting.", Tone.Warn)
+        }
+        if (mode == "serverless") {
+            Note("Choose Fragment A, Fragment B or OOB (v65). The method uses the network's own IP and DNS policy. No WARP or Psiphon key is needed. Protected services may still reject your ISP address.")
         }
         if (mode == "aether") {
             Note("Aether is a WARP connection, not a switch that enables Psiphon or Tor. H2, H3 and WireGuard require a saved WARP key; missing keys are registered before the first scan.")

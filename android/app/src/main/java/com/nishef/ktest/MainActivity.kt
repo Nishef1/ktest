@@ -86,11 +86,14 @@ private val connectingPhases = setOf("preparing", "starting_core", "verifying_up
 // Aether/Psiphon/Tor mode policies enforce the actual permitted protocols.
 private fun validNativeMethod(mode: String, saved: String): String {
     if (mode !in nativeModes) return "auto"
+    val fallback = if (mode == "serverless") "B" else "auto"
     return runCatching {
-        val methods = JSONObject(Mobilebridge.aetherProfileCatalog(mode, "auto")).getJSONArray("methods")
+        val catalog = if (mode == "serverless") Mobilebridge.serverlessMethodCatalog()
+            else Mobilebridge.aetherProfileCatalog(mode, "auto")
+        val methods = JSONObject(catalog).getJSONArray("methods")
         if ((0 until methods.length()).any { methods.getJSONObject(it).optString("id") == saved }) saved
-        else "auto"
-    }.getOrDefault("auto")
+        else fallback
+    }.getOrDefault(fallback)
 }
 
 @Composable
@@ -132,6 +135,9 @@ private fun KTestApp() {
     // distinguishes connected and limited after a real HTTPS IP preflight.
     val running = serviceConnectionState in setOf("connected", "limited")
     val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
+    // Serverless is a direct-ISP local proxy. Do not coerce the user's saved
+    // VPN preference for other modes or silently route other apps through it.
+    val effectiveCoverage = if (activeMode.id == "serverless") "proxy" else coverage
     val manualTesting = routePlan.manualBusy
     val offline = !running && !connecting && !disconnecting && !connectAfterConsent && !routePlan.busy &&
         !serviceTransitioning && serviceConnectionState != "connected" &&
@@ -190,7 +196,7 @@ private fun KTestApp() {
                     putExtra(ProxyService.EXTRA_TITLE, activeMode.title)
                     putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
                     putExtra(ProxyService.EXTRA_METHOD, nativeMethod)
-                    putExtra(ProxyService.EXTRA_VPN, coverage != "proxy")
+                    putExtra(ProxyService.EXTRA_VPN, effectiveCoverage != "proxy")
                 })
         } catch (e: Exception) {
             error = e.message ?: "Unable to start the connection"
@@ -413,8 +419,13 @@ private fun KTestApp() {
                                     ProxyService.lastError = null
                                 }
                             },
-                            coverage = coverage, vpnActive = vpnState == "tun_running_unverified",
-                            onCoverage = { coverage = it; prefs.edit().putString("coverage", it).apply() },
+                            coverage = effectiveCoverage, vpnActive = vpnState == "tun_running_unverified",
+                            onCoverage = {
+                                if (activeMode.id != "serverless") {
+                                    coverage = it
+                                    prefs.edit().putString("coverage", it).apply()
+                                }
+                            },
                             onPower = {
                                 error = null
                                 when (linkState) {
@@ -435,7 +446,7 @@ private fun KTestApp() {
                                     LinkState.Disconnecting -> Unit
                                     LinkState.Idle, LinkState.Unavailable -> {
                                         if (activeMode.available && !connectBlocked) {
-                                            val consent = if (coverage != "proxy") VpnService.prepare(context) else null
+                                            val consent = if (effectiveCoverage != "proxy") VpnService.prepare(context) else null
                                             if (consent != null) {
                                                 connectAfterConsent = true
                                                 vpnConsent.launch(consent)
