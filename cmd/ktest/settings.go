@@ -15,6 +15,8 @@ import (
 // Connection values use the same parser as the CLI instead of a second schema.
 type userSettings struct {
 	Connect              map[string]string `json:"connect,omitempty"`
+	LastConnection       string            `json:"last_connection,omitempty"` // "serverless" or empty
+	ServerlessVariant    string            `json:"serverless_variant,omitempty"`
 	SkipCertificateOffer bool              `json:"skip_certificate_offer,omitempty"`
 	Tools                toolSettings      `json:"tools,omitempty"`
 }
@@ -60,6 +62,11 @@ func loadPreferences(base string) (userSettings, string, connectOptions, error) 
 	}
 	if settings.Connect == nil {
 		settings.Connect = map[string]string{}
+	}
+	if (settings.LastConnection != "" && settings.LastConnection != "serverless") ||
+		(settings.ServerlessVariant != "" && !validServerlessVariant(settings.ServerlessVariant)) ||
+		(settings.LastConnection == "serverless" && !validServerlessVariant(settings.ServerlessVariant)) {
+		return userSettings{Connect: map[string]string{}}, "", defaults, fmt.Errorf("invalid saved Serverless selection in %s", path)
 	}
 	options := defaults
 	flags := connectFlagSet(&options)
@@ -162,6 +169,10 @@ func (s *userSettings) rememberFlags(flags *flag.FlagSet) bool {
 		}
 		if s.Connect == nil {
 			s.Connect = map[string]string{}
+		}
+		if f.Name == "mode" && s.LastConnection != "" {
+			s.LastConnection = ""
+			changed = true // Explicit CLI -mode -save replaces the last menu selection.
 		}
 		if s.Connect[f.Name] != f.Value.String() {
 			s.Connect[f.Name] = f.Value.String()

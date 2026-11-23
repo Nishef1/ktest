@@ -135,11 +135,17 @@ func (t *terminal) mainMenu(base string) {
 	if t.settings.Connect["mode"] != "" {
 		previous = "Last: "
 	}
+	serverlessLast := t.settings.LastConnection == "serverless" && validServerlessVariant(t.settings.ServerlessVariant)
 	coverage := "Proxy apps only"
-	if t.options.tun {
+	if t.options.tun && !serverlessLast {
 		coverage = "Whole PC (beta)"
 	}
-	statusText := "Disconnected · " + previous + policyName(t.options.mode) + " · " + coverage
+	lastMode := policyName(t.options.mode)
+	if serverlessLast {
+		previous = "Last: "
+		lastMode = "Serverless " + t.settings.ServerlessVariant
+	}
+	statusText := "Disconnected · " + previous + lastMode + " · " + coverage
 	requiredRows := 24 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
 	if t.notice != "" {
 		noticeRows := len(wrapText(t.notice, max(u.width()-4, 1)))
@@ -147,9 +153,9 @@ func (t *terminal) mainMenu(base string) {
 	}
 	u.menuViewHeight(requiredRows)
 	u.Printf("%s  %s\n", u.Bold(u.Cyan("ktest")), u.Dim("Free access toolkit"))
-	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(policyName(t.options.mode))+" · "+u.Dim(coverage))
+	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(lastMode)+" · "+u.Dim(coverage))
 	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
-	u.text("  "+u.Bold(u.Cyan("Enter"))+"  ", "         ", u.Bold("Connect with "+policyName(t.options.mode)))
+	u.text("  "+u.Bold(u.Cyan("Enter"))+"  ", "         ", u.Bold("Connect with "+lastMode))
 	for _, s := range menuSections {
 		u.Printf("  %s\n", u.Dim(strings.ToUpper(s.title)))
 		for _, it := range s.items {
@@ -158,7 +164,10 @@ func (t *terminal) mainMenu(base string) {
 			if it.key == "10" {
 				desc = t.setupDescription(base)
 			}
-			if it.mode != "" && (it.mode == t.options.mode || (it.mode == ModeWindscribe && t.options.mode.isWindscribe())) && t.settings.Connect["mode"] != "" {
+			if !serverlessLast && it.mode != "" && (it.mode == t.options.mode || (it.mode == ModeWindscribe && t.options.mode.isWindscribe())) && t.settings.Connect["mode"] != "" {
+				desc += " · " + u.Cyan("Last used")
+			}
+			if it.key == "7" && serverlessLast {
 				desc += " · " + u.Cyan("Last used")
 			}
 			if it.key == "8" {
@@ -524,7 +533,7 @@ func runInteractiveWith(in io.Reader, out io.Writer, base string, interrupts <-c
 		}
 		switch strings.ToLower(line) {
 		case "":
-			if !t.connectFromMenu(base, stdin, t.options.mode) {
+			if !t.connectLastSelection(base, stdin) {
 				return 0
 			}
 			continue
@@ -549,11 +558,21 @@ func (t *terminal) menuConnectOptions(base string, mode ConnectionMode) connectO
 	return o
 }
 
+// connectLastSelection replays the saved Serverless profile without routing
+// it through the ordinary CLI mode or saved Windows whole-PC coverage.
+func (t *terminal) connectLastSelection(base string, in *input) bool {
+	if t.settings.LastConnection == "serverless" {
+		return t.startServerless(base, in, t.settings.ServerlessVariant)
+	}
+	return t.connectFromMenu(base, in, t.options.mode)
+}
+
 // connectFromMenu offers the certificate first when domain fronting would need
 // it, and Administrator for Whole PC. It reports false when stdin closed.
 func (t *terminal) connectFromMenu(base string, in *input, mode ConnectionMode) bool {
 	t.ui.leaveMenu()
 	t.options.mode = mode
+	t.settings.LastConnection = ""
 	t.rememberConnect("mode", string(mode))
 	o := t.menuConnectOptions(base, mode)
 	return t.connectWithOptions(in, o)
