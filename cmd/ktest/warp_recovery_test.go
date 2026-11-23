@@ -159,7 +159,7 @@ func TestRecoveryKeepsProvenFirstAndRecentFailuresLast(t *testing.T) {
 	}
 	history := networkProfile{Results: map[string]aetherMeasurement{
 		profiles[0].ID(): {ID: profiles[0].ID(), State: "failed", Checked: time.Now().Add(-time.Minute)},
-		profiles[2].ID(): {ID: profiles[2].ID(), State: "verified", Checked: time.Now().Add(-time.Minute), Attempts: 3, Successes: 3, LatencyMS: 80, ExitIP: "198.51.100.7", Country: "DE"},
+		profiles[2].ID(): {ID: profiles[2].ID(), State: "verified", Checked: time.Now().Add(-time.Minute), Attempts: 3, Successes: 3, LatencyMS: 80, ExitIP: "9.9.9.9", Country: "DE"},
 	}}
 	got := profileLabels(recoveryProfilesFirst(profiles, history, ModeAether))
 	want := []string{"proven", "untried", "failed"}
@@ -218,7 +218,7 @@ func TestReplenishmentKeepsOriginalCorePortIndexes(t *testing.T) {
 	history := networkProfile{Results: map[string]aetherMeasurement{
 		profiles[2].ID(): {
 			ID: profiles[2].ID(), State: "verified", Checked: time.Now(),
-			Attempts: 3, Successes: 3, LatencyMS: 60, ExitIP: "198.51.100.9", Country: "DE",
+			Attempts: 3, Successes: 3, LatencyMS: 60, ExitIP: "8.8.8.8", Country: "DE",
 		},
 	}}
 	indices := m.orderedCandidateIndices(nil, history)
