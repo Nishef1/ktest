@@ -129,6 +129,10 @@ class ProxyService : Service() {
                 exitCheckError = ""
                 true
             } else {
+                // A successful check from minutes ago is not current reachability.
+                // Keep the local listener up, but downgrade the displayed proof.
+                verifiedExitIP = ""
+                verifiedExitCountry = ""
                 exitCheckError = result.exceptionOrNull()?.message
                     ?: "Public IP check did not return a verifiable exit"
                 false
@@ -431,7 +435,7 @@ class ProxyService : Service() {
                                 notification(title, verifiedExitIP.isNotBlank(), limited = verifiedExitIP.isBlank())
                             )
                         }
-                        var nextExitCheck = SystemClock.elapsedRealtime() + 30_000L
+                        var nextExitCheck = SystemClock.elapsedRealtime() + 60_000L
                         while (wanted && isActive) {
                             val status = JSONObject(Mobilebridge.proxyStatus())
                             if (!status.optBoolean("running")) {
@@ -455,12 +459,13 @@ class ProxyService : Service() {
                                 wanted = false
                                 break
                             }
-                            if (verifiedExitIP.isBlank() && SystemClock.elapsedRealtime() >= nextExitCheck) {
-                                nextExitCheck = SystemClock.elapsedRealtime() + 30_000L
-                                if (verifyPublicExit(generation) && wanted && generation == sessionGeneration) {
-                                    connectionState = "connected"
+                            if (SystemClock.elapsedRealtime() >= nextExitCheck) {
+                                nextExitCheck = SystemClock.elapsedRealtime() + 60_000L
+                                val verified = verifyPublicExit(generation)
+                                if (wanted && generation == sessionGeneration) {
+                                    connectionState = if (verified) "connected" else "limited"
                                     getSystemService(NotificationManager::class.java)
-                                        .notify(NOTIFICATION_ID, notification(title, true))
+                                        .notify(NOTIFICATION_ID, notification(title, verified, limited = !verified))
                                 }
                             }
                             delay(2000)
@@ -518,13 +523,12 @@ class ProxyService : Service() {
                     val generation = sessionGeneration
                     val title = activeRequest?.getStringExtra(EXTRA_TITLE) ?: "KTest"
                     worker.launch {
-                        if (verifyPublicExit(generation) && wanted && generation == sessionGeneration) {
-                            connectionState = "connected"
-                        }
+                        val verified = verifyPublicExit(generation)
                         if (wanted && generation == sessionGeneration) {
+                            connectionState = if (verified) "connected" else "limited"
                             getSystemService(NotificationManager::class.java).notify(
                                 NOTIFICATION_ID,
-                                notification(title, verifiedExitIP.isNotBlank(), limited = verifiedExitIP.isBlank())
+                                notification(title, verified, limited = !verified)
                             )
                         }
                     }
