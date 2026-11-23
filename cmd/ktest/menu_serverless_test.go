@@ -7,7 +7,7 @@ func TestServerlessListedBesidePsiphon(t *testing.T) {
 	if !ok || psiphon.mode != ModePsiphon {
 		t.Fatal("Psiphon mode disappeared")
 	}
-	serverless, ok := findItem("12")
+	serverless, ok := findItem("7")
 	if !ok || serverless.name != "Serverless" || serverless.action == nil {
 		t.Fatalf("Serverless selector missing: %+v", serverless)
 	}

@@ -72,24 +72,24 @@ var menuSections = []struct {
 		connectItem("4", connectionpolicy.Title(string(ModeTor)), "Tor", ModeTor),
 		{key: "5", name: connectionpolicy.Title(string(ModeWindscribe)), desc: "Local bridge / through Aether", mode: ModeWindscribe, action: func(t *terminal, base string, in *input) bool { return t.windscribeMenu(base, in) }},
 		connectItem("6", connectionpolicy.Title(string(ModePsiphon)), "Psiphon", ModePsiphon),
-		{key: "12", name: connectionpolicy.Title("serverless"), desc: "Fragment A / B / OOB · ISP IP, proxy only", action: func(t *terminal, base string, in *input) bool {
+		{key: "7", name: connectionpolicy.Title("serverless"), desc: "Fragment A / B / OOB · ISP IP, proxy only", action: func(t *terminal, base string, in *input) bool {
 			return t.serverlessMenu(base, in)
 		}},
 	}},
 	{"Coverage", []menuItem{
-		{key: "7", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},
+		{key: "8", name: "Coverage", action: func(t *terminal, _ string, in *input) bool { return t.chooseCoverage(in) }},
 	}},
 	{"Tools", []menuItem{
-		{key: "8", name: "Diagnose", desc: "Check connection problems", action: func(t *terminal, base string, in *input) bool {
+		{key: "9", name: "Diagnose", desc: "Check connection problems", action: func(t *terminal, base string, in *input) bool {
 			return t.diagnoseMenu(base, in)
 		}},
-		{key: "9", name: "Setup", action: func(t *terminal, base string, in *input) bool {
+		{key: "10", name: "Setup", action: func(t *terminal, base string, in *input) bool {
 			return t.setup(base, in)
 		}},
-		{key: "10", name: "CDN scan", action: func(t *terminal, _ string, in *input) bool {
+		{key: "11", name: "CDN scan", action: func(t *terminal, _ string, in *input) bool {
 			return t.cdnScanMenu(in)
 		}},
-		{key: "11", name: "Windscribe test", action: func(t *terminal, base string, in *input) bool { return t.windscribeToolsMenu(base, in) }},
+		{key: "12", name: "Windscribe test", action: func(t *terminal, base string, in *input) bool { return t.windscribeToolsMenu(base, in) }},
 	}},
 }
 
@@ -140,7 +140,7 @@ func (t *terminal) mainMenu(base string) {
 		coverage = "Whole PC (beta)"
 	}
 	statusText := "Disconnected · " + previous + policyName(t.options.mode) + " · " + coverage
-	requiredRows := 25 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
+	requiredRows := 24 + max(len(wrapText(statusText, max(u.width()-4, 1)))-1, 0)
 	if t.notice != "" {
 		noticeRows := len(wrapText(t.notice, max(u.width()-4, 1)))
 		requiredRows += max(noticeRows-1, 0)
@@ -150,19 +150,18 @@ func (t *terminal) mainMenu(base string) {
 	u.text("  ", "  ", u.Dim("Disconnected")+" · "+previous+u.Bold(policyName(t.options.mode))+" · "+u.Dim(coverage))
 	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
 	u.text("  "+u.Bold(u.Cyan("Enter"))+"  ", "         ", u.Bold("Connect with "+policyName(t.options.mode)))
-	u.Println("")
 	for _, s := range menuSections {
 		u.Printf("  %s\n", u.Dim(strings.ToUpper(s.title)))
 		for _, it := range s.items {
 			name := it.name
 			desc := it.desc
-			if it.key == "9" {
+			if it.key == "10" {
 				desc = t.setupDescription(base)
 			}
 			if it.mode != "" && (it.mode == t.options.mode || (it.mode == ModeWindscribe && t.options.mode.isWindscribe())) && t.settings.Connect["mode"] != "" {
 				desc += " · " + u.Cyan("Last used")
 			}
-			if it.key == "7" {
+			if it.key == "8" {
 				name = "Current Mode: Proxy"
 				if t.options.tun {
 					name = "Current Mode: TUN"
@@ -171,7 +170,6 @@ func (t *terminal) mainMenu(base string) {
 			u.menuOption(it.key, name, desc)
 		}
 	}
-	u.Println("")
 	u.menuOption("0", "Exit", "")
 	u.Printf("%s\n", u.Dim(u.rule(min(u.width()-1, 64))))
 	if t.notice != "" {

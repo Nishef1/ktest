@@ -162,7 +162,7 @@ func TestMenuExits(t *testing.T) {
 
 func TestSetupCertificateBackReturnsToSetupThenMainMenu(t *testing.T) {
 	t.Setenv("KTEST_CA_DIR", t.TempDir())
-	out := menuOutput(t, "9\n1\n\n0\n0\n")
+	out := menuOutput(t, "10\n1\n\n0\n0\n")
 	if strings.Count(out, "Certificate health and optional exit components.") != 2 || strings.Count(out, "Free access toolkit") != 2 {
 		t.Fatal("certificate Back did not return to Setup before the main menu:", out)
 	}
@@ -175,18 +175,18 @@ func TestSubmenusKeepInvalidInputAndNestedBackInTheirOwnMenu(t *testing.T) {
 		name, input, screen string
 		visits              int
 	}{
-		{"coverage", "7\ninvalid\nback\n0\n", "traffic coverage", 2},
-		{"diagnostics", "8\ninvalid\n0\n0\n", "Diagnose (Enter", 2},
-		{"setup", "9\ninvalid\n0\n0\n", "Certificate health and optional exit components.", 2},
-		{"certificate", "9\n1\ninvalid\n0\n0\n0\n", "Certificate health and optional exit components.", 2},
+		{"coverage", "8\ninvalid\nback\n0\n", "traffic coverage", 2},
+		{"diagnostics", "9\ninvalid\n0\n0\n", "Diagnose (Enter", 2},
+		{"setup", "10\ninvalid\n0\n0\n", "Certificate health and optional exit components.", 2},
+		{"certificate", "10\n1\ninvalid\n0\n0\n0\n", "Certificate health and optional exit components.", 2},
 		{"certificate offer", "1\ninvalid\nback\n0\n", "Type y to set it up now", 2},
-		{"exit paths", "9\n2\ninvalid\n0\n0\n0\n", "Certificate health and optional exit components.", 2},
-		{"CDN provider", "10\ninvalid\n0\n0\n", "Provider: cloudflare", 2},
-		{"CDN hostname back", "10\ncloudflare\n0\n0\n0\n", "Provider: cloudflare", 2},
-		{"CDN hostname invalid", "10\ncloudflare\nhttps://invalid\n0\n0\n", "Provider: cloudflare", 2},
-		{"Windscribe target", "11\n2\nback\n0\n0\n", "Location or TCP IP", 1},
-		{"Windscribe SNI back", "11\n2\nexample\n0\n0\n0\n0\n", "Location or TCP IP", 2},
-		{"Windscribe SNI invalid", "11\n2\nexample\nhttps://invalid\n0\n0\n0\n", "Location or TCP IP", 2},
+		{"exit paths", "10\n2\ninvalid\n0\n0\n0\n", "Certificate health and optional exit components.", 2},
+		{"CDN provider", "11\ninvalid\n0\n0\n", "Provider: cloudflare", 2},
+		{"CDN hostname back", "11\ncloudflare\n0\n0\n0\n", "Provider: cloudflare", 2},
+		{"CDN hostname invalid", "11\ncloudflare\nhttps://invalid\n0\n0\n", "Provider: cloudflare", 2},
+		{"Windscribe target", "12\n2\nback\n0\n0\n", "Location or TCP IP", 1},
+		{"Windscribe SNI back", "12\n2\nexample\n0\n0\n0\n0\n", "Location or TCP IP", 2},
+		{"Windscribe SNI invalid", "12\n2\nexample\nhttps://invalid\n0\n0\n0\n", "Location or TCP IP", 2},
 		{"Windscribe modes", "5\ninvalid\n0\n0\n", "Windscribe >", 2},
 		{"Aether method back", "3\n2\n0\n0\n0\n", "Aether >", 2},
 	} {
@@ -317,9 +317,9 @@ func TestMenuCoveragePreservesPolicyAndKeepsWindscribeSeparate(t *testing.T) {
 		var output bytes.Buffer
 		menu := &terminal{options: connectOptions{tun: wholePC}, ui: plainTerm(&output)}
 		menu.mainMenu(t.TempDir())
-		want := "7 Current Mode: Proxy"
+		want := "8 Current Mode: Proxy"
 		if wholePC {
-			want = "7 Current Mode: TUN"
+			want = "8 Current Mode: TUN"
 		}
 		found := false
 		for _, line := range strings.Split(output.String(), "\n") {
@@ -561,7 +561,7 @@ func TestCtrlCQuitsFromAnywhereInTheMenus(t *testing.T) {
 		{"main menu", "Select >", nil},
 		{"submenu", "Windscribe >", []string{"5"}},
 		{"nested submenu", "Windscribe test >", []string{"5", "4"}},
-		{"nested prompt", "Provider: cloudflare", []string{"10"}},
+		{"nested prompt", "Provider: cloudflare", []string{"11"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := startSession(t)

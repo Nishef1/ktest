@@ -138,7 +138,6 @@ func ValidateListen(listen string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-
 // VerifyAndroidServerlessAssets ensures geosite and geoip were packaged from
 // the same SHA-256-pinned release as the Android executable. An Android app
 // may copy these signed APK data assets into its private files directory;
