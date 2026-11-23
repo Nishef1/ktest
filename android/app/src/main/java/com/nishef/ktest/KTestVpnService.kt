@@ -112,11 +112,14 @@ class KTestVpnService : VpnService() {
                             .addRoute(plan.getString("ipv4_route"), 0)
                             .addDnsServer(plan.getString("ipv4_dns"))
                             .addDisallowedApplication(packageName)
-                        // The proxy acknowledges SOCKS CONNECT before dialing, so an IPv6
-                        // route without real IPv6 egress makes apps hang on dead v6
-                        // destinations. Without a v6 route Android fails IPv6 inside the
-                        // VPN immediately (no leak) and apps fall back to IPv4.
-                        if (underlyingHasGlobalIpv6()) {
+                        // IPv6 capability belongs to the selected Go SOCKS path,
+                        // not the Wi-Fi/cellular underlay: IPv4-only underlays
+                        // can carry IPv6 through WARP, while native IPv6 does
+                        // not prove the proxy can reach IPv6 destinations.
+                        // Only route IPv6 after this session's pre-VPN HTTPS
+                        // trace through KTest verified an IPv6 public exit.
+                        // Without proof, omit the v6 route (fail closed).
+                        if (verifiedProxyIPv6()) {
                             builder.addAddress(plan.getString("ipv6_address"), plan.getInt("ipv6_prefix"))
                                 .addRoute(plan.getString("ipv6_route"), 0)
                                 .addDnsServer(plan.getString("ipv6_dns"))
@@ -221,15 +224,13 @@ class KTestVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private fun underlyingHasGlobalIpv6(): Boolean = runCatching {
-        val cm = getSystemService(android.net.ConnectivityManager::class.java)
-        val props = cm.getLinkProperties(cm.activeNetwork) ?: return false
-        val global = props.linkAddresses.any { la ->
-            val a = la.address
-            a is java.net.Inet6Address && !a.isLinkLocalAddress && !a.isSiteLocalAddress &&
-                !a.isLoopbackAddress && (a.address[0].toInt() and 0xfe) != 0xfc
-        }
-        global && props.routes.any { it.isDefaultRoute && it.destination.address is java.net.Inet6Address }
+    private fun verifiedProxyIPv6(): Boolean = runCatching {
+        val ipv6 = JSONObject(ProxyService.verifiedExitReport).optJSONObject("ipv6")
+            ?.optString("ip").orEmpty()
+        // The Go trace parser already validates global-unicast IPv6 and
+        // certificate-verified HTTPS. This guards against old/empty reports.
+        ipv6.contains(':') && ProxyService.connectionState in
+            setOf("verifying", "activating_vpn", "connected", "limited")
     }.getOrDefault(false)
 
 
