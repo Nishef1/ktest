@@ -385,6 +385,11 @@ private fun PublicIpPanel(connected: Boolean) {
     // ProxyService owns connected-IP verification. The UI only reads its
     // result; a separate probe here would race and contradict notification.
     val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE) }
+    var displayFamily by rememberSaveable {
+        mutableStateOf(prefs.getString("ip_display_family", "both")
+            ?.takeIf { it == "ipv4" || it == "ipv6" || it == "both" } ?: "both")
+    }
     var before by remember { mutableStateOf(lastDirectIp) }
     var busyDirect by remember { mutableStateOf(false) }
     var directError by remember { mutableStateOf<String?>(null) }
@@ -430,7 +435,9 @@ private fun PublicIpPanel(connected: Boolean) {
         for (wait in longArrayOf(0, 2_000, 5_000, 12_000)) {
             if (wait > 0) kotlinx.coroutines.delay(wait)
             val result = runCatching {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { JSONObject(Mobilebridge.publicIP(false)) }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    JSONObject(Mobilebridge.publicIPForFamily(false, "both"))
+                }
             }
             val ok = result.getOrNull()
             if (ok != null && ok.optString("ip").isNotBlank()) {
@@ -441,12 +448,16 @@ private fun PublicIpPanel(connected: Boolean) {
         }
         busyDirect = false
     }
-    val exitIp = ProxyService.verifiedExitIP
-    val checkedExit = if (connected && exitIp.isNotBlank()) {
-        JSONObject().put("ip", exitIp).put("country", ProxyService.verifiedExitCountry)
+    val checkedExit = if (connected) {
+        runCatching { JSONObject(ProxyService.verifiedExitReport) }.getOrNull()
     } else null
     val busy = if (connected) ProxyService.exitCheckInProgress else busyDirect
     val error = if (connected) ProxyService.exitCheckError else directError
+    val families = when (displayFamily) {
+        "ipv4" -> listOf("ipv4" to "v4")
+        "ipv6" -> listOf("ipv6" to "v6")
+        else -> listOf("ipv4" to "v4", "ipv6" to "v6")
+    }
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionLabel("IP & country")
@@ -458,11 +469,35 @@ private fun PublicIpPanel(connected: Boolean) {
                 Icon(KIcons.Search, "Check IP again", tint = K.muted, modifier = Modifier.size(16.dp))
             }
         }
-        IpRow("Before", before, K.muted, placeholder = if (busyDirect) "Checking…" else "Unavailable")
-        IpRow("Exit", checkedExit, if (checkedExit != null) K.mint else K.amber,
-            placeholder = if (connected) "IP not verified" else "Not connected")
-        Text(error?.take(90) ?: " ", color = K.amber, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, fontSize = 11.sp, modifier = Modifier.fillMaxWidth())
+        Text("Show public IP by destination family", color = K.muted, fontSize = 12.sp)
+        Segmented(
+            listOf("ipv4" to "IPv4 only", "both" to "Both", "ipv6" to "IPv6 only"),
+            displayFamily,
+            { value ->
+                displayFamily = value
+                prefs.edit().putString("ip_display_family", value).apply()
+            }
+        )
+        for ((key, shortName) in families) {
+            val direct = before?.optJSONObject(key)
+            val exit = checkedExit?.optJSONObject(key)
+            IpRow("Before $shortName", direct, K.muted,
+                placeholder = if (busyDirect) "Checking…" else if (before != null)
+                    "Unavailable" else "Not checked")
+            IpRow("Exit $shortName", exit, if (exit != null) K.mint else K.amber,
+                placeholder = if (connected) "Unavailable / not verified" else "Not connected")
+            val failure = if (connected) checkedExit?.optString("${key}_error")
+                else before?.optString("${key}_error")
+            if (!failure.isNullOrBlank()) {
+                Text("${shortName.uppercase()} check: ${failure.take(155)}",
+                    color = K.amber, fontSize = 11.sp, lineHeight = 15.sp)
+            }
+        }
+        Text("This selector controls IP diagnostics and display, not the VPN or proxy's transport family. IPv6-only never uses an IPv4 result as proof.",
+            color = K.muted, fontSize = 11.sp, lineHeight = 15.sp)
+        if (!error.isNullOrBlank()) {
+            Text(error.take(150), color = K.amber, fontSize = 11.sp, lineHeight = 15.sp)
+        }
     }
 }
 
@@ -470,13 +505,19 @@ private fun PublicIpPanel(connected: Boolean) {
 private fun IpRow(label: String, info: JSONObject?, tint: androidx.compose.ui.graphics.Color,
                   placeholder: String = "Checking…") {
     Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = K.muted, fontSize = 12.sp, modifier = Modifier.width(56.dp))
+        Text(label, color = K.muted, fontSize = 12.sp, modifier = Modifier.width(74.dp))
         Text(info?.optString("country")?.takeIf { it.length == 2 }?.let(::flagOf) ?: "🌐",
-            fontSize = 19.sp, modifier = Modifier.width(34.dp))
-        Text(info?.optString("ip")?.takeIf { it.isNotBlank() } ?: placeholder,
-            color = if (info != null) tint else K.faint, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, fontSize = 14.sp,
-            fontFamily = K.mono, modifier = Modifier.weight(1f))
+            fontSize = 19.sp, modifier = Modifier.width(30.dp))
+        // IPv6 may need 39 characters. Wrap and allow long-press to copy it
+        // rather than ellipsizing the only evidence of IPv6 connectivity.
+        androidx.compose.foundation.text.selection.SelectionContainer(
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(info?.optString("ip")?.takeIf { it.isNotBlank() } ?: placeholder,
+                color = if (info != null) tint else K.faint, maxLines = 3,
+                softWrap = true, overflow = TextOverflow.Ellipsis, fontSize = 12.sp,
+                lineHeight = 16.sp, fontFamily = K.mono)
+        }
         Text(info?.optString("country")?.takeIf { it.length == 2 } ?: "  ",
             color = tint, fontSize = 12.sp, modifier = Modifier.width(27.dp))
     }
