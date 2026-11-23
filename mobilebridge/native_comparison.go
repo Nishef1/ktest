@@ -64,10 +64,10 @@ func nativeComparisonCandidates(profiles []aether.Profile) []aether.Profile {
 }
 
 type nativeComparisonSample struct {
-	profile            aether.Profile
+	profile             aether.Profile
 	successes, attempts int
-	latency            time.Duration
-	bytesPerSecond     float64
+	latency             time.Duration
+	bytesPerSecond      float64
 }
 
 // Only a validated HTTPS exit plus successful application requests qualifies.
@@ -206,6 +206,13 @@ func CompareAetherNative(nativeDir, privateDir string) (string, error) {
 			sample.latency = timings[len(timings)/2]
 			sample.bytesPerSecond = nativeTransfer(ctx, core.address)
 		}
+		select {
+		case <-core.done:
+			core.stop()
+			lines = append(lines, p.Label+": core stopped during sampling")
+			continue
+		default:
+		}
 		core.stop()
 		lines = append(lines, fmt.Sprintf("%s: %d/%d requests · %d ms · %.0f KiB/s (0 = not measured)", p.Label, sample.successes, sample.attempts, sample.latency.Milliseconds(), sample.bytesPerSecond/1024))
 		if sample.successes > 0 && (best.successes == 0 || betterNativeSample(sample, best)) {
@@ -221,7 +228,7 @@ func CompareAetherNative(nativeDir, privateDir string) (string, error) {
 	if err := saveNativeTLSHistory(privateDir, key, best.profile); err != nil {
 		return "", fmt.Errorf("native comparison winner could not be saved: %w", err)
 	}
-	return strings.Join(lines, "\n") + "\nSaved winner for MASQUE H2: " + best.profile.Label + " · " + tlsshape.ActiveSummary(best.profile), nil
+	return strings.Join(lines, "\n") + "\nSaved winner for Auto / MASQUE H2: " + best.profile.Label + " · " + tlsshape.ActiveSummary(best.profile), nil
 }
 
 // AetherTLSCapabilities reports the exact APK binary's advertised options.

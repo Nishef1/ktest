@@ -164,3 +164,5 @@ Track remaining family acceptance in [issue #20](https://github.com/Nishef1/ktes
 
 - [x] Android: explicit bounded native H2 comparison using existing MASQUE identity, temporary pinned cores, real HTTPS/application samples and optional small transfer; save only a usable completed comparison. Capability inspection reads actual APK executable help. New advanced knobs are not silently enabled.
 - [ ] Verify the native comparison and advanced capability output on a physical Iranian network; compare more than three candidates only when the observed benefit justifies extra traffic and startup time.
+
+- [x] Keep up to 16 native winner histories across networks, and reuse a compatible H2 winner in Auto as well as explicit H2. Add ranking and candidate-diversity regression tests.

@@ -21,4 +21,10 @@ func TestNativeTLSHistoryOnlyPromotesMatchingInventory(t *testing.T) {
 	if got := preferNativeTLSHistory([]aether.Profile{a}, dir, "network-core-settings"); got[0].Label != "a" {
 		t.Fatal("cache introduced a profile outside the current inventory")
 	}
+	if err := saveNativeTLSHistory(dir, "second-network", a); err != nil {
+		t.Fatal(err)
+	}
+	if got := preferNativeTLSHistory(profiles, dir, "network-core-settings"); got[0].Label != "b" {
+		t.Fatal("switching networks erased verified history")
+	}
 }

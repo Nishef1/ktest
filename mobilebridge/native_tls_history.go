@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
@@ -26,13 +27,15 @@ func nativeTLSHistoryKey(o nativeOptions) string {
 	if !ok {
 		return ""
 	}
-	key := network + "|" + core.SHA256 + "|" + currentAetherTLS().Key() + "|" + o.method
+	key := network + "|" + core.SHA256 + "|" + currentAetherTLS().Key()
 	if o.carrier != "" {
 		key += "|carrier"
 	}
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:16])
 }
+
+var nativeHistoryMu sync.Mutex
 
 func nativeTLSHistoryPath(dir string) string {
 	return filepath.Join(dir, "aether", "native-tls-winner.json")
@@ -42,10 +45,11 @@ func preferNativeTLSHistory(profiles []aether.Profile, dir, key string) []aether
 	if dir == "" || key == "" {
 		return profiles
 	}
-	var hint nativeHint
-	raw, err := os.ReadFile(nativeTLSHistoryPath(dir))
-	if err != nil || len(raw) > 4096 || json.Unmarshal(raw, &hint) != nil ||
-		hint.Key != key || time.Since(hint.Checked) > 24*time.Hour || time.Until(hint.Checked) > time.Minute {
+	nativeHistoryMu.Lock()
+	hints := readNativeTLSHistory(dir)
+	nativeHistoryMu.Unlock()
+	hint, ok := hints[key]
+	if !ok || hint.Key != key || time.Since(hint.Checked) > 24*time.Hour || time.Until(hint.Checked) > time.Minute {
 		return profiles
 	}
 	for i, p := range profiles {
@@ -63,8 +67,21 @@ func saveNativeTLSHistory(dir, key string, profile aether.Profile) error {
 	if dir == "" || key == "" {
 		return os.ErrInvalid
 	}
+	nativeHistoryMu.Lock()
+	defer nativeHistoryMu.Unlock()
 	path := nativeTLSHistoryPath(dir)
-	raw, err := json.Marshal(nativeHint{Key: key, ID: tlsshape.HistoryKey(profile), Checked: time.Now()})
+	hints := readNativeTLSHistory(dir)
+	hints[key] = nativeHint{Key: key, ID: tlsshape.HistoryKey(profile), Checked: time.Now()}
+	for len(hints) > 16 {
+		oldest := ""
+		for id, hint := range hints {
+			if id != key && (oldest == "" || hint.Checked.Before(hints[oldest].Checked)) {
+				oldest = id
+			}
+		}
+		delete(hints, oldest)
+	}
+	raw, err := json.Marshal(hints)
 	if err != nil {
 		return err
 	}
@@ -85,4 +102,22 @@ func saveNativeTLSHistory(dir, key string, profile aether.Profile) error {
 		return closeErr
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// Read the bounded map and migrate the earlier single-entry format safely.
+func readNativeTLSHistory(dir string) map[string]nativeHint {
+	hints := map[string]nativeHint{}
+	raw, err := os.ReadFile(nativeTLSHistoryPath(dir))
+	if err != nil || len(raw) > 32<<10 {
+		return hints
+	}
+	if json.Unmarshal(raw, &hints) == nil && hints != nil {
+		return hints
+	}
+	hints = map[string]nativeHint{}
+	var old nativeHint
+	if json.Unmarshal(raw, &old) == nil && old.Key != "" {
+		hints[old.Key] = old
+	}
+	return hints
 }

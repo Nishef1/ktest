@@ -124,7 +124,7 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
         if (comparing) SecondaryButton("Cancel comparison", {
             Mobilebridge.cancelAetherNativeComparison()
         }, Modifier.fillMaxWidth())
-        Note("Compares up to three real H2 candidates offline with HTTPS and a small transfer. An existing MASQUE identity is required. The verified winner is saved for the H2 method.")
+        Note("Compares up to three real H2 candidates offline with HTTPS and a small transfer. An existing MASQUE identity is required. The verified winner is reused in Auto or the H2 method when compatible.")
         SecondaryButton("Check core TLS capabilities", {
             scope.launch {
                 runCatching {
