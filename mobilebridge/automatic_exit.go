@@ -237,7 +237,9 @@ func (a *automaticExit) profiles() []aether.Profile {
 	profiles = tlsshape.Order(profiles, measured)
 	var hint nativeHint
 	if raw, err := os.ReadFile(a.hintFile()); err == nil && len(raw) < 4096 && json.Unmarshal(raw, &hint) == nil && hint.Key == a.historyKey && hint.Key != "" && time.Since(hint.Checked) < 24*time.Hour && time.Until(hint.Checked) < time.Minute {
-		sort.SliceStable(profiles, func(i, j int) bool { return tlsshape.HistoryKey(profiles[i]) == hint.ID && tlsshape.HistoryKey(profiles[j]) != hint.ID })
+		sort.SliceStable(profiles, func(i, j int) bool {
+			return tlsshape.HistoryKey(profiles[i]) == hint.ID && tlsshape.HistoryKey(profiles[j]) != hint.ID
+		})
 	}
 	return profiles
 }
@@ -337,7 +339,9 @@ func (a *automaticExit) run() {
 		}
 		profiles = a.profiles()
 		if lastWorking != "" {
-			sort.SliceStable(profiles, func(i, j int) bool { return tlsshape.HistoryKey(profiles[i]) == lastWorking && tlsshape.HistoryKey(profiles[j]) != lastWorking })
+			sort.SliceStable(profiles, func(i, j int) bool {
+				return tlsshape.HistoryKey(profiles[i]) == lastWorking && tlsshape.HistoryKey(profiles[j]) != lastWorking
+			})
 		}
 	}
 	for a.ctx.Err() == nil {
