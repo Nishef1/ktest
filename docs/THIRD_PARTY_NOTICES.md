@@ -17,7 +17,17 @@ The ktest menu and scanner are an independent Go orchestration project. The pack
 
 TUN may temporarily change system routes or DNS behavior. Windows requires Administrator approval; it is never silently enabled. An unexpected crash may require manual network adapter recovery.
 
-- **Zapret2 winws2 v1.0.5.2** (bol-van), https://github.com/bol-van/zapret2 — MIT. The optional Windows-only packet engine, two Lua scripts, Cygwin runtime and WinDivert 2.2.2-A files are copied from the public `bol-van/zapret-win-bundle` repository at immutable revision `6eb463a6758fb48cd101bc55dfd057e6e9d98af1`. The portable workflow verifies every file against its pinned Git blob ID and checks the Windows driver's Authenticode signature. Zapret2 and WinDivert license files are shipped as `THIRD_PARTY/Zapret2-MIT.txt` and `THIRD_PARTY/WinDivert-LICENSE.txt`. The executable is never automatically started: only `windscribe-test -zapret fake|split` can enable its IP:443-scoped interception, from an Administrator terminal after user opt-in. Cygwin runtime redistribution obligations also apply; the portable package includes `THIRD_PARTY/Cygwin-GPL-3.0.txt`. Keep the matching Cygwin Runtime source available under its upstream licensing terms (see https://cygwin.com/licensing.html); shipping only the DLL without meeting applicable source obligations is not sufficient. No driver is permanently installed by ktest.\n\n## Android native preparation
+- **Zapret2 winws2 v1.0.5.2** (bol-van), https://github.com/bol-van/zapret2 — MIT. The optional Windows-only packet engine, two Lua scripts, Cygwin runtime and WinDivert 2.2.2-A files are copied from the public `bol-van/zapret-win-bundle` repository at immutable revision `6eb463a6758fb48cd101bc55dfd057e6e9d98af1`. The portable workflow verifies every file against its pinned Git blob ID and checks the Windows driver's Authenticode signature. Zapret2 and WinDivert license files are shipped as `THIRD_PARTY/Zapret2-MIT.txt` and `THIRD_PARTY/WinDivert-LICENSE.txt`. The executable is never automatically started: only `windscribe-test -zapret fake|split` can enable its IP:443-scoped interception, from an Administrator terminal after user opt-in. Cygwin runtime redistribution obligations also apply; the portable package includes `THIRD_PARTY/Cygwin-GPL-3.0.txt`. Keep the matching Cygwin Runtime source available under its upstream licensing terms (see https://cygwin.com/licensing.html); shipping only the DLL without meeting applicable source obligations is not sufficient. No driver is permanently installed by ktest.
+
+## Android native preparation
+
+Android uses the official HEV 2.20.0 AAR from
+https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.20.0
+(sha256:ae8a2e96b80b4eccccd037805a4bb4a278090c89dbcae8bc6fcb7634e9a255b9),
+matching PattNG P74's HEV submodule SHA 75dbc1e9ace6c70d3d1b94df7c283efe1de7effc.
+HEV is an unchanged MIT-licensed packet adapter and backup for Xray TUN;
+the APK ships its license at assets/third_party/HEV-MIT.txt and displays
+the version in open-source notices. It does not select destination routes.
 
 Android uses the unmodified Android executables in the pinned patterniha Aether v2.4.0
 release, not the Windows or generic Linux Aether binary. Archive and per-file

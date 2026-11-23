@@ -1,13 +1,15 @@
-# Verified upstream versions — updated 2026-11-05
+# Verified upstream versions — updated 2026-11-23
 
-Official release pages were checked before selection. This repository does not bundle external executables.
+Official release pages and pinned SHA-256 digests were checked before selection. The Windows portable ZIP and Android APK package selected verified third-party binaries; the repository tracks their manifests and provenance.
 
 | Component | Version checked | Published | Use in ktest | Official source |
 | --- | --- | --- | --- | --- |
 | Aether | **v2.4.0** | 2026-10-24 | Reviewed update for Android/Desktop: WARP API edge fallback, H2/TLS and reconnect fixes; signed APK and real-network acceptance still required | https://github.com/patterniha/Aether/releases/tag/v2.4.0 |
-| Xray-core (PattNG fork) | **v26.11.1** | 2026-11-01 | PattNG fork used on Windows and Android ARM64; ZIP SHA-256 pinned, ELF digest derived at build and embedded before Go JNI compilation | https://github.com/patterniha/Xray-core/releases/tag/v26.11.1 |
-| HEV | **2.19.3** | 2026-10-25 | Android TUN fallback; same upstream revision PattNG submodules; fixes JNI TLS relocation | https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.19.3 |
+| Xray-core (PattNG fork) | **v26.11.23** | 2026-11-23 | Official Windows and Android ARM64 SHA-256 pinned; Android ELF digest derived from verified ZIP before Go JNI build | https://github.com/patterniha/Xray-core/releases/tag/v26.11.23 |
+| HEV | **2.20.0** | 2026-11-13 | Exact PattNG P74 submodule revision `75dbc1e`; smaller idle stack memory, UDP fallback and deadlock fixes; official AAR SHA-256 pinned | https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.20.0 |
 | ByeDPI | **v0.17.3** | Pinned | Hash-pinned Android ARM/ARM64 local anti-DPI helper; candidate strategies are not proven for every ISP | https://github.com/hufrea/byedpi/releases/tag/v0.17.3 |
+| PattNG app | **2.4.0-P74** | 2026-11-23 | Reference-only upstream app; app UI/config is not copied to KTest | https://github.com/patterniha/PattNG/releases/tag/2.4.0-P74 |
+| Serverless-for-Iran | **v65** | 2026-11-23 | Optional Windows offline A/B/OOB profiles; direct ISP IP, no foreign VPN exit; Android auto-routing does not import subscription | https://github.com/patterniha/Serverless-for-Iran |
 | Go | **1.27.2** | 2026-10-08 | Minimum toolchain updated; security fixes include TLS/HTTP | https://go.dev/doc/devel/release |
 | actions/checkout | **v7.0.1** | 2026-07-20 | CI on maintained `@v7` major | https://github.com/actions/checkout/releases |
 | actions/setup-go | **v7.0.0** | 2026-07-16 | CI on maintained `@v7` major | https://github.com/actions/setup-go/releases |

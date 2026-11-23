@@ -1,8 +1,8 @@
 # KTest Android — existing native cores with shared Go integration
 
 > **Core update, 2026-11-05:** KTest now pins the PattNG lineage:
-> `patterniha/Xray-core v26.11.1` (Windows/Android ARM64),
-> `patterniha/Aether v2.4.0`, and upstream HEV `2.19.3` as used by
+> `patterniha/Xray-core v26.11.23` (Windows/Android ARM64),
+> `patterniha/Aether v2.4.0`, and upstream HEV `2.20.0` as used by
 > PattNG (which has no separate HEV fork). Native preparation verifies
 > the pinned Xray release ZIP and writes its executable SHA-256 into
 > the Go manifest **before** `gomobile bind`. Historical version
@@ -92,7 +92,7 @@ Packet DNS failures appear separately in proxy status and the connection screen.
 
 ## Source verification without APK/AAR output
 
-`bash android/scripts/check-sources.sh` generates the actual gomobile Java API, then compiles Kotlin against the unchanged checksum-pinned HEV 2.19.0 AAR and merges its actual manifest in a temporary copy. It requires Linux, Go, JDK 17+, Android platform 36 and Gradle 9.5.0. It leaves `go.mod`/`go.sum` unchanged and builds **no native libraries, AARs or APKs**; the existing HEV AAR is downloaded and verified, not rebuilt. Go CI includes this source check and formatting of `mobilebridge`.
+`bash android/scripts/check-sources.sh` generates the actual gomobile Java API, then compiles Kotlin against the unchanged checksum-pinned HEV 2.20.0 AAR and merges its actual manifest in a temporary copy. It requires Linux, Go, JDK 17+, Android platform 36 and Gradle 9.5.0. It leaves `go.mod`/`go.sum` unchanged and builds **no native libraries, AARs or APKs**; the existing HEV AAR is downloaded and verified, not rebuilt. Go CI includes this source check and formatting of `mobilebridge`.
 
 Passing it establishes Java/Kotlin source compatibility, including callback signatures. It does not establish native linkage, JNI loading, rendered UI, device traffic, leaks, battery use or reconnect on a phone. Production release publication remains separate from preview Actions artifacts.
 
@@ -129,10 +129,10 @@ An older APK signed with a runner-generated random debug key cannot be updated i
 - Selection and verification are distinct: Tor and Psiphon require verified non-Iran/non-Russia egress; Aether requires a working WARP carrier but does not guarantee a foreign IP. A native process launch, SOCKS listener, UI `Auto`, or VPN adapter does not by itself prove any of these. Android `Auto` currently chooses the *first compatible profile*, then the Aether core handles native gateway selection; it does **not** compare multiple Aether methods in parallel. The UI describes that explicitly.
 - Android still needs device/ISP-based checks for sustained Tor, Psiphon and Aether traffic, native-helper crashes, reconnect and resource usage. Neither the APK hashes nor desktop CI prove this.
 
-## Xray 26.10.21 TUN + HEV fallback: distinct responsibilities (ARMv8)
+## Xray 26.11.23 TUN + HEV 2.20.0 fallback: distinct responsibilities (ARMv8)
 
-- KTest retains pinned HEV 2.19.0 as a fallback adapter. When whole-device VPN coverage is enabled, Go first launches the official Xray TUN inbound using Android's existing `VpnService` fd via `XRAY_TUN_FD`. Xray's only outbound is the local Go SOCKS listener, so Xray does not create a separate exit or bypass KTest route policy.
-- For ARM64, Balanced/Fast now launch **one pinned, official XTLS/Xray-core v26.10.21 Android executable** (`libxray.so`) from the APK's read-only `nativeLibraryDir`. Its release ZIP SHA-256, executable SHA-256 and 16 KiB ELF `PT_LOAD` alignment are verified during packaging; the executable's SHA is verified again at runtime. A private temporary JSON configuration exposes only an IPv4 loopback SOCKS5 port with Xray `freedom.fragment` (`tlshello`); the config is removed when the child process exits. The packaged executable never needs to download profile subscriptions, remote accounts or geo assets.
+- KTest retains pinned HEV 2.20.0 as a fallback adapter. When whole-device VPN coverage is enabled, Go first launches the official Xray TUN inbound using Android's existing `VpnService` fd via `XRAY_TUN_FD`. Xray's only outbound is the local Go SOCKS listener, so Xray does not create a separate exit or bypass KTest route policy.
+- For ARM64, Balanced/Fast now launch **one pinned, official XTLS/Xray-core v26.11.23 Android executable** (`libxray.so`) from the APK's read-only `nativeLibraryDir`. Its release ZIP SHA-256, executable SHA-256 and 16 KiB ELF `PT_LOAD` alignment are verified during packaging; the executable's SHA is verified again at runtime. A private temporary JSON configuration exposes only an IPv4 loopback SOCKS5 port with Xray `freedom.fragment` (`tlshello`); the config is removed when the child process exits. The packaged executable never needs to download profile subscriptions, remote accounts or geo assets.
 - In Balanced/Fast, the existing Go engine still chooses and races eligible routes per connection; the local Xray TLS-fragment strategy remains one optional TCP path. The Xray TUN process is a separate packet adapter only. If it fails startup or exits, Go starts HEV on the same TUN fd automatically and reports the selected adapter and fallback reason. Neither a running process nor a local SOCKS handshake proves a target is reachable.
 - Only explicit offline method diagnostics remove ByeDPI `--auto` and `--auto-mode` flags to isolate a measured method. Connected Balanced and Fast retain the original adaptive strategies. No offline result pins live traffic.
 - **Domain visibility:** Xray TUN enables HTTP/TLS/QUIC sniffing before forwarding flows to Go SOCKS. When automatic fallback selects HEV, HEV may supply only the numeric destination address, so Go still uses its existing HTTPS SNI recovery for IP-addressed TLS flows. Non-TLS MTProto is unchanged. An installed CA does not grant all apps user-CA trust, and the local Xray fragmentation profile does not itself use the CA.
@@ -278,7 +278,7 @@ Before calling this an Android port complete, validate the Xray TUN primary path
 
 ### Actual build boundary
 
-The app requires **Android 10 / API 29 or later**, matching HEV 2.19.0. The first real manifest merge rejected the old API 26 setting; no manifest override is used. Local validation produced the real Go bridge for ARMv7, arm64 and x86_64, and built both ARMv7/arm64 and x86_64 debug APKs; the x86_64 candidate was installed on emulator-5554. `-PktestAbis=x86_64` selects emulator packaging; the default ABI set remains ARMv7/arm64. Gradle adds native extraction to the merged manifest through `jniLibs.useLegacyPackaging`. Final native hashes, signatures, device behavior and actual traffic must be verified per candidate.
+The app requires **Android 10 / API 29 or later**, matching current HEV 2.20.0. The initial manifest issue was found with an earlier HEV version. The first real manifest merge rejected the old API 26 setting; no manifest override is used. Local validation produced the real Go bridge for ARMv7, arm64 and x86_64, and built both ARMv7/arm64 and x86_64 debug APKs; the x86_64 candidate was installed on emulator-5554. `-PktestAbis=x86_64` selects emulator packaging; the default ABI set remains ARMv7/arm64. Gradle adds native extraction to the merged manifest through `jniLibs.useLegacyPackaging`. Final native hashes, signatures, device behavior and actual traffic must be verified per candidate.
 
 ### Device observations, 2026-10-18
 
