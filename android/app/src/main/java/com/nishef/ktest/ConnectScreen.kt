@@ -390,7 +390,9 @@ private fun PublicIpPanel(connected: Boolean) {
         mutableStateOf(prefs.getString("ip_display_family", "both")
             ?.takeIf { it == "ipv4" || it == "ipv6" || it == "both" } ?: "both")
     }
-    var before by remember { mutableStateOf(lastDirectIp) }
+    var before by remember(displayFamily) {
+        mutableStateOf(lastDirectIp?.takeIf { it.optString("family") == displayFamily })
+    }
     var busyDirect by remember { mutableStateOf(false) }
     var directError by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
@@ -417,7 +419,7 @@ private fun PublicIpPanel(connected: Boolean) {
         val registered = runCatching { cm.registerDefaultNetworkCallback(cb) }.isSuccess
         onDispose { if (registered) runCatching { cm.unregisterNetworkCallback(cb) } }
     }
-    LaunchedEffect(connected, refresh, networkKey) {
+    LaunchedEffect(connected, refresh, networkKey, displayFamily) {
         if (connected) {
             if (refresh > 0) {
                 context.startService(android.content.Intent(context, ProxyService::class.java).apply {
@@ -436,7 +438,7 @@ private fun PublicIpPanel(connected: Boolean) {
             if (wait > 0) kotlinx.coroutines.delay(wait)
             val result = runCatching {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    JSONObject(Mobilebridge.publicIPForFamily(false, "both"))
+                    JSONObject(Mobilebridge.publicIPForFamily(false, displayFamily))
                 }
             }
             val ok = result.getOrNull()
@@ -482,7 +484,7 @@ private fun PublicIpPanel(connected: Boolean) {
             val direct = before?.optJSONObject(key)
             val exit = checkedExit?.optJSONObject(key)
             IpRow("Before $shortName", direct, K.muted,
-                placeholder = if (busyDirect) "Checking…" else if (before != null)
+                placeholder = if (busyDirect) "Checking…" else if (before != null || !directError.isNullOrBlank())
                     "Unavailable" else "Not checked")
             IpRow("Exit $shortName", exit, if (exit != null) K.mint else K.amber,
                 placeholder = if (connected) "Unavailable / not verified" else "Not connected")
