@@ -152,3 +152,15 @@ func HistoryKey(p aether.Profile) string {
 		p.Value("--fragment-size") + "\x00" + p.Value("--fragment-delay")))
 	return fmt.Sprintf("%x", sum[:16])
 }
+
+// The -6 flag selects the outer carrier family, independently of application
+// destination policy. Never credit an IPv6 profile with IPv4 measurements.
+func resultForProfile(r *Result, p aether.Profile) *Result {
+	if r == nil {
+		return nil
+	}
+	if p.Has("-6") {
+		return r.IPv6
+	}
+	return r
+}

@@ -154,7 +154,7 @@ func TestApplyAndOrder(t *testing.T) {
 		if p.Label == "WARP, MASQUE over HTTP/2, fragmented" {
 			fragmented = &shaped[i]
 		}
-		if p.Method() == "masque-h2" && !p.Has("--ech") && p.Value("--masque-sni") != "speed.cloudflare.com" {
+		if p.Method() == "masque-h2" && !p.Has("--ech") && !p.Has("-6") && p.Value("--masque-sni") != "speed.cloudflare.com" {
 			t.Errorf("%s: measured name not applied", p.Label)
 		}
 		if p.Has("--ech") && p.Has("--masque-sni") {
@@ -279,5 +279,29 @@ func TestWinnerPreservesMaskAndExplicitOff(t *testing.T) {
 		if candidate.ExitNode() != "" || candidate.Has("--fragment") {
 			t.Fatal("explicit off violated")
 		}
+	}
+}
+
+func TestSeparateCarrierFamilyWinners(t *testing.T) {
+	o, _ := ParseOptions("auto", "auto", "auto")
+	r := &Result{Options: o.Key(), Trials: []Trial{
+		{Shape: Shape{DefaultSNI, Firefox, NoFragment}, Attempts: 2, OK: 2, MS: 90},
+	}, IPv6: &Result{Options: o.Key(), Trials: []Trial{
+		{Shape: Shape{"speed.cloudflare.com", Go, "16-32/2-10"}, Attempts: 2, OK: 2, MS: 80},
+	}}}
+	profiles := []aether.Profile{
+		{Label: "v4", Args: []string{"--masque", "--h2"}},
+		{Label: "v6", Args: []string{"--masque", "--h2", "-6"}},
+	}
+	got := Order(Apply(profiles, o, r), r)
+	if !got[0].Has("-6") || Prediction(r, got[0]) != "hello passed calibration" {
+		t.Fatalf("IPv6 measured winner not first: %v", got[0])
+	}
+	if got[0].Value("--tls-ciphers") == "" || got[0].Value("--masque-sni") != "speed.cloudflare.com" {
+		t.Fatal("IPv6 did not get its own tuple")
+	}
+	r.IPv6 = nil
+	if Prediction(r, got[0]) != "" {
+		t.Fatal("IPv6 credited with IPv4 evidence")
 	}
 }

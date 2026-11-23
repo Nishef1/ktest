@@ -135,6 +135,11 @@ func CalibrateAetherTLS(privateDir string) (string, error) {
 }
 
 func summarizeCalibration(r tlsshape.Result) string {
+	if r.IPv6 != nil {
+		six := *r.IPv6
+		r.IPv6 = nil
+		return "IPv4 carrier: " + summarizeCalibration(r) + "\nIPv6 carrier: " + summarizeCalibration(six)
+	}
 	if len(r.Gateways) == 0 {
 		return "No WARP HTTP/2 gateway accepted a TCP connection: the addresses themselves are blocked, which F&F cannot change."
 	}

@@ -39,13 +39,7 @@ func chosenSNI(o Options, r *Result) string {
 // is F&F exactly as Patterniha publishes it for MASQUE H2. ECH profiles keep
 // their name: with ECH the visible name is the ECH key's, not --masque-sni.
 func Apply(profiles []aether.Profile, o Options, r *Result) []aether.Profile {
-	sni := chosenSNI(o, r)
 	fixed, _ := FingerprintByName(o.Fingerprint)
-	alt := SemiPython
-	if r != nil && r.AltFingerprint != "" {
-		alt = r.AltFingerprint
-	}
-	altFP, _ := FingerprintByName(alt)
 	var out []aether.Profile
 	seen := map[string]bool{}
 	emit := func(p aether.Profile) {
@@ -55,8 +49,8 @@ func Apply(profiles []aether.Profile, o Options, r *Result) []aether.Profile {
 			out = append(out, p)
 		}
 	}
-	if winner, ok := Winner(r, o); ok {
-		for _, p := range profiles {
+	for _, p := range profiles {
+		if winner, ok := Winner(resultForProfile(r, p), o); ok {
 			if q, ok := measuredProfile(p, winner); ok {
 				emit(q)
 			}
@@ -67,6 +61,13 @@ func Apply(profiles []aether.Profile, o Options, r *Result) []aether.Profile {
 			emit(p)
 			continue
 		}
+		measured := resultForProfile(r, p)
+		sni := chosenSNI(o, measured)
+		alt := SemiPython
+		if measured != nil && measured.AltFingerprint != "" {
+			alt = measured.AltFingerprint
+		}
+		altFP, _ := FingerprintByName(alt)
 		q := aether.Profile{Label: p.Label, Args: append([]string(nil), p.Args...)}
 		if sni != "" && sni != DefaultSNI && !q.Has("--ech") && !q.Has("--masque-sni") {
 			q.Args = append(q.Args, "--masque-sni", sni)
@@ -77,8 +78,8 @@ func Apply(profiles []aether.Profile, o Options, r *Result) []aether.Profile {
 			case "off":
 				q.Args = without(q.Args, "--fragment")
 			case Auto:
-				if r != nil && r.Fragment != DefaultFragment {
-					fragment = r.Fragment
+				if measured != nil && measured.Fragment != DefaultFragment {
+					fragment = measured.Fragment
 				}
 			default:
 				fragment = o.Fragment
@@ -162,11 +163,15 @@ func shapeOf(p aether.Profile) (Shape, bool) {
 }
 
 func predict(r Result, p aether.Profile) int {
+	result := resultForProfile(&r, p)
+	if result == nil {
+		return predictUnknown
+	}
 	s, ok := shapeOf(p)
 	if !ok {
 		return predictUnknown
 	}
-	t, ok := r.Lookup(s)
+	t, ok := result.Lookup(s)
 	switch {
 	case !ok || t.Attempts == 0:
 		return predictUnknown
@@ -201,8 +206,8 @@ func Order(profiles []aether.Profile, r *Result) []aether.Profile {
 		if a == 0 {
 			si, _ := shapeOf(out[i])
 			sj, _ := shapeOf(out[j])
-			ti, _ := r.Lookup(si)
-			tj, _ := r.Lookup(sj)
+			ti, _ := resultForProfile(r, out[i]).Lookup(si)
+			tj, _ := resultForProfile(r, out[j]).Lookup(sj)
 			return betterTrial(ti, tj)
 		}
 		return false

@@ -75,6 +75,11 @@ func sessionTLSShape(ctx context.Context, o connectOptions, network string, u *t
 }
 
 func calibrationSummary(r tlsshape.Result) string {
+	if r.IPv6 != nil {
+		six := *r.IPv6
+		r.IPv6 = nil
+		return "IPv4 carrier: " + calibrationSummary(r) + " | IPv6 carrier: " + calibrationSummary(six)
+	}
 	if len(r.Gateways) == 0 {
 		return "No WARP HTTP/2 gateway accepted a TCP connection: the addresses themselves are blocked, which F&F cannot change"
 	}
@@ -92,6 +97,15 @@ func calibrationSummary(r tlsshape.Result) string {
 }
 
 func printTLSCalibration(u *term, r tlsshape.Result) {
+	if r.IPv6 != nil {
+		six := *r.IPv6
+		r.IPv6 = nil
+		u.Note("IPv4 carrier:")
+		printTLSCalibration(u, r)
+		u.Note("IPv6 carrier:")
+		printTLSCalibration(u, six)
+		return
+	}
 	for _, t := range r.Trials {
 		switch {
 		case t.OK == t.Attempts && t.OK > 0:

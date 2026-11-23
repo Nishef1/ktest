@@ -20,7 +20,7 @@ const DefaultFragment = "8-16/2-10"
 // SNICandidates are tried when the name is left to the measurement. The
 // MASQUE gateway does not check the name; the network's filter may, so only
 // names that look like ordinary Cloudflare traffic are offered.
-var SNICandidates = []string{DefaultSNI, "cloudflare.com", "one.one.one.one", "speed.cloudflare.com", "developers.cloudflare.com", "blog.cloudflare.com"}
+var SNICandidates = []string{DefaultSNI, "cloudflare.com", "speed.cloudflare.com", "developers.cloudflare.com", "blog.cloudflare.com", "consumer-masque.cloudflareclient.com"}
 
 // FragmentCandidates are Aether --fragment ranges, "size/delay" in bytes and
 // milliseconds, tried when the range is left to the measurement.

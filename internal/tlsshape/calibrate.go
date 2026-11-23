@@ -22,7 +22,9 @@ import (
 var Gateways = []string{"162.159.198.8:443", "162.159.198.23:443", "162.159.198.32:443", "162.159.198.189:443",
 	"162.159.198.249:443", "162.159.198.1:443", "162.159.198.2:443", "162.159.198.64:443", "162.159.198.100:443", "162.159.198.150:443"}
 
-var gatewayPattern = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}:443\b`)
+var IPv6Gateways = []string{"[2606:4700:103::1]:443", "[2606:4700:103::2]:443"}
+
+var gatewayPattern = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}:443\b|\[[0-9a-fA-F:]+\]:443`)
 
 // CandidatesFrom lists the HTTP/2 gateways named in the core's last-connection
 // file (masque-lastconn.toml: the peer and its recent ones), then Gateways.
@@ -30,6 +32,10 @@ func CandidatesFrom(lastConn string) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(addr string) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil || net.ParseIP(host) == nil {
+			return
+		}
 		if !seen[addr] {
 			seen[addr] = true
 			out = append(out, addr)
@@ -40,7 +46,7 @@ func CandidatesFrom(lastConn string) []string {
 			add(addr)
 		}
 	}
-	for _, addr := range Gateways {
+	for _, addr := range append(append([]string(nil), Gateways...), IPv6Gateways...) {
 		add(addr)
 	}
 	return out
@@ -114,10 +120,14 @@ type Result struct {
 	// Gateways are the addresses measured; none means TCP itself was refused.
 	Gateways []string `json:"gateways,omitempty"`
 	Trials   []Trial  `json:"trials"`
+	IPv6     *Result  `json:"ipv6,omitempty"`
 }
 
 // Reached reports whether any shape completed a handshake.
 func (r Result) Reached() bool {
+	if r.IPv6 != nil && r.IPv6.Reached() {
+		return true
+	}
 	for _, t := range r.Trials {
 		if t.OK > 0 {
 			return true
@@ -160,6 +170,50 @@ type Config struct {
 // answered it, including a refusal of the missing client certificate: that is
 // the gateway itself, past the filter.
 func Calibrate(ctx context.Context, o Options, c Config) Result {
+	// Explicit test inventories remain single-family. Production discovery
+	// measures the two carrier families independently, in parallel.
+	if len(c.Gateways) != 0 {
+		return calibrateFamily(ctx, o, c)
+	}
+	candidates := c.Candidates
+	if len(candidates) == 0 {
+		candidates = append(append([]string(nil), Gateways...), IPv6Gateways...)
+	}
+	v4, v6 := c, c
+	v4.Candidates, v6.Candidates = nil, nil
+	for _, addr := range candidates {
+		host, _, err := net.SplitHostPort(addr)
+		ip := net.ParseIP(host)
+		if err != nil || ip == nil {
+			continue
+		}
+		if ip.To4() != nil {
+			v4.Candidates = append(v4.Candidates, addr)
+		} else {
+			v6.Candidates = append(v6.Candidates, addr)
+		}
+	}
+	// A callback may not be safe to invoke from two independent calibrations.
+	if c.Progress != nil {
+		var mu sync.Mutex
+		progress := func(t Trial) { mu.Lock(); defer mu.Unlock(); c.Progress(t) }
+		v4.Progress, v6.Progress = progress, progress
+	}
+	measure := func(cfg Config) Result {
+		if len(cfg.Candidates) == 0 {
+			return Result{Options: o.Key(), Checked: time.Now()}
+		}
+		return calibrateFamily(ctx, o, cfg)
+	}
+	ch := make(chan Result, 1)
+	go func() { ch <- measure(v6) }()
+	r := measure(v4)
+	six := <-ch
+	r.IPv6 = &six
+	return r
+}
+
+func calibrateFamily(ctx context.Context, o Options, c Config) Result {
 	r := Result{Options: o.Key(), Checked: time.Now()}
 	if len(c.Gateways) == 0 {
 		candidates := c.Candidates
