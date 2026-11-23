@@ -230,3 +230,25 @@ func TestCandidatesFromLastConnection(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestMeasuredWinnerAppliedAsExactCombination(t *testing.T) {
+	o, _ := ParseOptions("auto", "auto", "auto")
+	r := &Result{Options: o.Key(), SNI: DefaultSNI, Fingerprint: Chrome, Fragment: DefaultFragment,
+		Trials: []Trial{
+			{Shape: Shape{DefaultSNI, Chrome, NoFragment}, Attempts: 2, OK: 2, MS: 100},
+			{Shape: Shape{"speed.cloudflare.com", Firefox, "16-32/2-10"}, Attempts: 2, OK: 2, MS: 85},
+			{Shape: Shape{DefaultSNI, Go, NoFragment}, Attempts: 2, OK: 1, MS: 10},
+		}}
+	p := aether.Profile{Label: "test", Args: []string{"--masque", "--h2"}}
+	profiles := Order(Apply([]aether.Profile{p}, o, r), r)
+	shape, ok := shapeOf(profiles[0])
+	if !ok || shape != r.Trials[1].Shape {
+		t.Fatalf("runtime shape %v, want %v", shape, r.Trials[1].Shape)
+	}
+	if len(profiles) < 2 {
+		t.Fatal("no fallback")
+	}
+	if _, ok := Winner(r, Options{Fingerprint: Go, SNI: Auto, Fragment: Auto}); ok {
+		t.Fatal("stale options accepted")
+	}
+}

@@ -55,6 +55,13 @@ func Apply(profiles []aether.Profile, o Options, r *Result) []aether.Profile {
 			out = append(out, p)
 		}
 	}
+	if winner, ok := Winner(r, o); ok {
+		for _, p := range profiles {
+			if q, ok := measuredProfile(p, winner); ok {
+				emit(q)
+			}
+		}
+	}
 	for _, p := range profiles {
 		if !overMasque(p) {
 			emit(p)
@@ -186,7 +193,20 @@ func Order(profiles []aether.Profile, r *Result) []aether.Profile {
 		}
 		return 1
 	}
-	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := rank(out[i]), rank(out[j])
+		if a != b {
+			return a < b
+		}
+		if a == 0 {
+			si, _ := shapeOf(out[i])
+			sj, _ := shapeOf(out[j])
+			ti, _ := r.Lookup(si)
+			tj, _ := r.Lookup(sj)
+			return betterTrial(ti, tj)
+		}
+		return false
+	})
 	return out
 }
 

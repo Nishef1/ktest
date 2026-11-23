@@ -205,13 +205,13 @@ func (a *automaticExit) ensure(ctx context.Context) error {
 
 func (a *automaticExit) stop() { a.cancel(); a.once.Do(func() { close(a.done) }); <-a.done }
 
-func (a *automaticExit) snapshot() (string, string, string) {
+func (a *automaticExit) snapshot() (string, string, string, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.current == nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
-	return a.current.address, a.current.method, a.location
+	return a.current.address, a.current.method, a.location, a.current.tlsSummary
 }
 
 func (a *automaticExit) hintFile() string {

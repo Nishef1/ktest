@@ -230,6 +230,10 @@ private fun Hero(
                 status.optString("method").takeIf { it.isNotBlank() }?.let { Tag(it, K.cyan) }
                 // Public exit location is shown in the fixed top IP panel.
             }
+            status.optString("tls_summary").takeIf { it.isNotBlank() }?.let {
+                Text("Active TLS options: $it", color = K.muted, fontSize = 12.sp,
+                    textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp))
+            }
         }
     }
 }

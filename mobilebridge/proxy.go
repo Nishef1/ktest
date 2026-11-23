@@ -86,6 +86,7 @@ type proxyReport struct {
 	LastConnectMS   int64  `json:"last_connect_ms"`
 	Native          bool   `json:"native"`
 	Method          string `json:"method,omitempty"`
+	TLSSummary      string `json:"tls_summary,omitempty"`
 	Fronting        bool   `json:"fronting"`
 	FrontAccepted   int    `json:"front_accepted,omitempty"`
 	FrontRefused    int    `json:"front_refused,omitempty"`
@@ -149,10 +150,12 @@ func currentReportLocked() proxyReport {
 	}
 	if activeProxy.native != nil {
 		report.Native, report.Method = true, activeProxy.native.method
+		report.TLSSummary = activeProxy.native.tlsSummary
 	}
 	if activeProxy.automatic != nil {
-		if address, method, location := activeProxy.automatic.snapshot(); address != "" {
+		if address, method, location, tlsSummary := activeProxy.automatic.snapshot(); address != "" {
 			report.Upstream, report.Method, report.ExitLocation, report.Native = address, method, location, true
+			report.TLSSummary = tlsSummary
 		}
 	}
 	report.XrayError = activeProxy.xrayError

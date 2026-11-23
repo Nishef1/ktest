@@ -513,6 +513,9 @@ func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) 
 		}(r.warpFound)
 		go m.watchHealth(ctx, r.warpFound)
 		m.t.Line(toneOK, "Exit selected: %s · %s", r.p.Label, r.result.detail())
+		if summary := tlsshape.ActiveSummary(r.p); summary != "" {
+			m.t.Note("Active TLS options: %s", summary)
+		}
 		m.t.Note("Observed exit belongs to the neutral probe, not a permanent per-website IP guarantee.")
 	}
 	return found

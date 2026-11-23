@@ -14,6 +14,7 @@ import (
 
 	"github.com/Nishef1/ktest/internal/aether"
 	"github.com/Nishef1/ktest/internal/egresscheck"
+	"github.com/Nishef1/ktest/internal/exitnode"
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/tlsshape"
 )
@@ -30,6 +31,7 @@ type nativeOptions struct {
 type nativeCore struct {
 	address              string
 	method               string
+	tlsSummary           string
 	cancel               context.CancelFunc
 	done                 chan struct{}
 	err                  error // read only after done closes
@@ -338,6 +340,27 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 	address := listener.Addr().String()
 	_ = listener.Close() // Aether binds its own socket; no inherited-fd API.
 	args := paths.ProfileArgs(p, port, o.stateDir)
+	var ownedNodeCancel context.CancelFunc
+	if preset := p.ExitNode(); preset != "" && o.carrier == "" {
+		mask, err := exitnode.Preset(preset)
+		if err != nil {
+			return nil, err
+		}
+		nodeCtx, stop := context.WithCancel(context.Background())
+		node, err := exitnode.Start(nodeCtx, "127.0.0.1:0", mask)
+		if err != nil {
+			stop()
+			return nil, err
+		}
+		ownedNodeCancel = stop
+		o.carrier = node.Addr()
+	}
+	launched := false
+	defer func() {
+		if !launched && ownedNodeCancel != nil {
+			ownedNodeCancel()
+		}
+	}()
 	if p.OwnedUpstream() {
 		args, err = aether.BindLocalCarrier(args, o.carrier)
 		if err != nil {
@@ -362,12 +385,16 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 		cleanupDNS = cleanup
 		args = append(args, "--psiphon-config", path)
 	}
-	n := &nativeCore{address: address, method: p.Method(), cancel: cancel, done: make(chan struct{}), log: newStageLog()}
+	n := &nativeCore{address: address, method: p.Method(), tlsSummary: tlsshape.ActiveSummary(p), cancel: cancel, done: make(chan struct{}), log: newStageLog()}
+	launched = true
 	n.advanceOnScanFailure = mode == "aether" && o.profile != nil && !p.Has("--peer") &&
 		(p.Method() == "masque-h2" || p.Method() == "masque-h3")
 	go func() {
 		defer close(n.done)
 		defer cleanupDNS()
+		if ownedNodeCancel != nil {
+			defer ownedNodeCancel()
+		}
 		// Raw native output can contain identifiers or credentials. Only
 		// redacted warnings reach the UI; nothing goes to logcat or storage.
 		n.err = aether.Run(runCtx, paths.Aether, args, n.log)

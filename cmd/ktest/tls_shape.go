@@ -117,8 +117,12 @@ func runTLSCalibration(ctx context.Context, u *term, opts tlsshape.Options) int 
 		return 1
 	}
 	printTLSCalibration(u, r)
+	if winner, ok := tlsshape.Winner(&r, opts); ok {
+		u.Note("Measured combination: %s · %d/%d · %.0fms", winner.Shape, winner.OK, winner.Attempts, winner.MS)
+	}
 	if err := tlsshape.Save(tlsCalibrationFile(), networkSignature(ctx), r); err != nil {
 		u.Note("Not saved: %v", err)
+		return 1
 	}
 	if !r.Reached() {
 		return 1

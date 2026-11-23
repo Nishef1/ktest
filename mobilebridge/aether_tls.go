@@ -121,8 +121,8 @@ func CalibrateAetherTLS(privateDir string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	r := tlsshape.Calibrate(ctx, o, tlsCalibrationConfig(privateDir))
-	if key := tlsNetworkKey(); key != "" {
-		_ = tlsshape.Save(tlsCalibrationPath(privateDir), key, r)
+	if err := tlsshape.Save(tlsCalibrationPath(privateDir), tlsNetworkKey(), r); err != nil {
+		return "", fmt.Errorf("measurement completed but could not save: %w", err)
 	}
 	return summarizeCalibration(r), nil
 }
@@ -139,6 +139,9 @@ func summarizeCalibration(r tlsshape.Result) string {
 			return "none passed"
 		}
 		return v
+	}
+	if winner, ok := tlsshape.Winner(&r, currentAetherTLS()); ok {
+		return fmt.Sprintf("Saved measured winner: %s · %d/%d gateway replies · %.0f ms. Real tunnel verification still required.", winner.Shape, winner.OK, winner.Attempts, winner.MS)
 	}
 	passed := 0
 	for _, t := range r.Trials {

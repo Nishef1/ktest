@@ -278,7 +278,7 @@ func Calibrate(ctx context.Context, o Options, c Config) Result {
 }
 
 // best picks the value whose trials passed most often, then fastest; the
-// preferred value wins a tie on passes when it is within 25% of the fastest.
+// preferred value only wins an exact tie, never a slower measured result.
 func best(trials []Trial, preferred string, key func(Trial) string) string {
 	ok := make([]Trial, 0, len(trials))
 	for _, t := range trials {
@@ -290,13 +290,10 @@ func best(trials []Trial, preferred string, key func(Trial) string) string {
 		return ""
 	}
 	sort.SliceStable(ok, func(i, j int) bool {
-		if ok[i].OK != ok[j].OK {
-			return ok[i].OK > ok[j].OK
-		}
-		return ok[i].MS < ok[j].MS
+		return betterTrial(ok[i], ok[j])
 	})
 	for _, t := range ok {
-		if t.OK == ok[0].OK && key(t) == preferred && t.MS <= ok[0].MS*1.25 {
+		if t.OK == ok[0].OK && t.Attempts == ok[0].Attempts && key(t) == preferred && t.MS == ok[0].MS {
 			return preferred
 		}
 	}
