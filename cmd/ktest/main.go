@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -71,7 +72,7 @@ Tools and experiments (see docs/)
   ktest scan               provider HTTPS reachability (-provider cloudflare|akamai|google|fastly|meta|cloudfront|gcore)
     -windscribe-cdn HOST   test WebSocket routing to your own CDN hostname/origin
   ktest path               DNS / TCP / TLS stage diagnosis of one URL
-  ktest revive             run one Xray profile on its own
+  ktest revive             run an opt-in local Serverless A/B/OOB profile (not a VPN)
   ktest access             domain-scoped proxy backed by SNI-Spoofing-Go
   ktest probe | compare | edges | echo    controlled-origin experiments
 `
@@ -364,12 +365,21 @@ func runAccess(args []string) int {
 // using a separately installed official Xray CLI. No global system changes.
 func runRevive(args []string) int {
 	fs := flag.NewFlagSet("revive", flag.ContinueOnError)
-	xray := fs.String("xray", "xray", "installed Xray executable")
-	profile := fs.String("profile", "Serverless-for-Iran.json", "offline subscription JSON file")
-	variant := fs.String("variant", "B", "serverless profile A or B")
-	assets := fs.String("assets", "", "optional Xray geosite/geoip asset directory")
+	defaultXray, defaultProfile, defaultAssets := "xray", "Serverless-for-Iran.json", ""
+	if runtime.GOOS == "windows" {
+		if executable, err := os.Executable(); err == nil {
+			base := filepath.Dir(executable)
+			defaultXray = filepath.Join(base, "cores", "xray.exe")
+			defaultProfile = filepath.Join(base, "profiles", "Serverless-for-Iran.json")
+			defaultAssets = filepath.Join(base, "cores")
+		}
+	}
+	xray := fs.String("xray", defaultXray, "pinned Xray executable (bundled on Windows)")
+	profile := fs.String("profile", defaultProfile, "offline subscription JSON file")
+	variant := fs.String("variant", "B", "serverless profile A, B or OOB; uses your ISP IP")
+	assets := fs.String("assets", defaultAssets, "Xray geosite/geoip asset directory")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: ktest revive [-xray ./xray] [-profile ./Serverless-for-Iran.json] [-variant B] [-assets ./assets]")
+		fmt.Fprintln(os.Stderr, "usage: ktest revive [-xray ./xray] [-profile ./Serverless-for-Iran.json] [-variant A|B|OOB] [-assets ./assets]")
 		return 2
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -206,3 +206,54 @@ func TestLocalTCPNativeXrayPreservesOpaqueStream(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectOfflineOOBOnLoopback(t *testing.T) {
+	bundle := []byte(`[
+		{"remarks":"Serverless-v65-fragA","version":{"min":"26.11.23"},"inbounds":[{"protocol":"mixed","listen":"0.0.0.0","port":10808}]},
+		{"remarks":"Serverless-v65-oob","version":{"min":"26.11.23"},"inbounds":[{"protocol":"mixed","listen":"0.0.0.0","port":10808}]}
+	]`)
+	selected, err := SelectProfileOnPort(bundle, "oob", "", 11808)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Remarks string `json:"remarks"`
+		Version struct {
+			Min string `json:"min"`
+		} `json:"version"`
+		Inbounds []struct {
+			Listen string `json:"listen"`
+			Port int `json:"port"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(selected, &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Remarks != "Serverless-v65-oob" || v.Version.Min != "26.11.23" ||
+		len(v.Inbounds) != 1 || v.Inbounds[0].Listen != "127.0.0.1" || v.Inbounds[0].Port != 11808 {
+		t.Fatalf("unsafe OOB selection: %+v", v)
+	}
+	if _, err := SelectProfile(bundle, "C"); err == nil {
+		t.Fatal("unknown serverless variant accepted")
+	}
+}
+
+func TestServerlessRequiredXrayVersion(t *testing.T) {
+	profile := []byte(`{"version":{"min":"26.11.23"}}`)
+	for _, version := range []string{"Xray 26.11.22", "Xray 26.10.99", "Xray 25.12.31"} {
+		if err := CheckProfileMinimum(version, profile); err == nil {
+			t.Fatalf("accepted unsupported core %s", version)
+		}
+	}
+	for _, version := range []string{"Xray 26.11.23", "Xray 26.12.1", "Xray 27.1.0"} {
+		if err := CheckProfileMinimum(version, profile); err != nil {
+			t.Fatalf("rejected supported core %s: %v", version, err)
+		}
+	}
+	if err := CheckProfileMinimum("Xray 26.10.1", []byte(`{}`)); err != nil {
+		t.Fatalf("old profiles should remain supported: %v", err)
+	}
+	if err := CheckProfileMinimum("Xray 26.11.23", []byte(`{"version":{"min":"26.11.23-suffix"}}`)); err == nil {
+		t.Fatal("accepted invalid upstream version")
+	}
+}

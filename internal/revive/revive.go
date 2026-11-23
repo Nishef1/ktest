@@ -40,8 +40,8 @@ func SelectProfileOnPort(data []byte, variant, verifiedTransport string, port in
 		return nil, errors.New("invalid local port")
 	}
 	variant = strings.ToUpper(strings.TrimSpace(variant))
-	if variant != "A" && variant != "B" {
-		return nil, errors.New("variant must be A or B")
+	if variant != "A" && variant != "B" && variant != "OOB" {
+		return nil, errors.New("variant must be A, B or OOB")
 	}
 	if len(data) == 0 || len(data) > MaxProfileSize {
 		return nil, errors.New("profile must be 1 byte to 1 MiB")
@@ -57,7 +57,10 @@ func SelectProfileOnPort(data []byte, variant, verifiedTransport string, port in
 		}
 		candidates = []json.RawMessage{data}
 	}
-	want := "frag" + strings.ToLower(variant)
+	want := "-frag" + strings.ToLower(variant)
+	if variant == "OOB" {
+		want = "-oob"
+	}
 	for _, candidate := range candidates {
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal(candidate, &obj); err != nil {
@@ -96,7 +99,7 @@ func SelectProfileOnPort(data []byte, variant, verifiedTransport string, port in
 		}
 		return json.MarshalIndent(obj, "", "  ")
 	}
-	return nil, fmt.Errorf("frag%s profile was not found in subscription", variant)
+	return nil, fmt.Errorf("serverless %s profile was not found in subscription", variant)
 }
 
 type Config struct {
@@ -131,6 +134,55 @@ func CheckVersion(raw string) error {
 	}
 	if y < 26 || (y == 26 && (mo < 6 || (mo == 6 && day < 27))) {
 		return fmt.Errorf("Xray %d.%d.%d is too old; need 26.6.27 or newer", y, mo, day)
+	}
+	return nil
+}
+
+// CheckProfileMinimum honors the minimum Xray version specified by newer
+// Serverless subscriptions. Older local-only profiles remain supported, but
+// unknown or outdated binaries cannot silently accept newer configuration.
+func CheckProfileMinimum(versionText string, profile []byte) error {
+	var metadata struct {
+		Version struct {
+			Min string `json:"min"`
+		} `json:"version"`
+	}
+	if err := json.Unmarshal(profile, &metadata); err != nil {
+		return fmt.Errorf("invalid selected profile: %w", err)
+	}
+	if metadata.Version.Min == "" {
+		return nil
+	}
+	minimum := strings.Split(metadata.Version.Min, ".")
+	found := versionPattern.FindStringSubmatch(versionText)
+	if len(minimum) != 3 || len(found) != 4 {
+		return errors.New("invalid or unavailable Xray version for profile minimum")
+	}
+	for _, part := range minimum {
+		if len(part) == 0 || len(part) > 5 {
+			return fmt.Errorf("invalid minimum Xray version %q", metadata.Version.Min)
+		}
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return fmt.Errorf("invalid minimum Xray version %q", metadata.Version.Min)
+			}
+		}
+	}
+	for i := range minimum {
+		want, err := strconv.Atoi(minimum[i])
+		if err != nil {
+			return err
+		}
+		current, err := strconv.Atoi(found[i+1])
+		if err != nil {
+			return err
+		}
+		if current < want {
+			return fmt.Errorf("serverless profile requires Xray %s or newer (installed %s)", metadata.Version.Min, strings.Join(found[1:], "."))
+		}
+		if current > want {
+			return nil
+		}
 	}
 	return nil
 }
@@ -219,6 +271,9 @@ func runProfile(ctx context.Context, c Config, profile []byte) error {
 	if err := CheckVersion(string(ver)); err != nil {
 		return err
 	}
+	if err := CheckProfileMinimum(string(ver), profile); err != nil {
+		return err
+	}
 	f, err := os.CreateTemp("", "ktest-revive-*.json")
 	if err != nil {
 		return err
@@ -255,7 +310,7 @@ func runProfile(ctx context.Context, c Config, profile []byte) error {
 	if c.Profile == "" {
 		fmt.Fprintf(output, "Local-only SOCKS5 TCP fragmentation: 127.0.0.1:%d (generated variant %s; no remote exit)\n", c.port(), c.Variant)
 	} else {
-		fmt.Fprintf(output, "Local HTTPS/SOCKS5 mixed proxy: 127.0.0.1:%d (Fragment %s)\n", c.port(), strings.ToUpper(c.Variant))
+		fmt.Fprintf(output, "Local HTTP/SOCKS5 mixed proxy: 127.0.0.1:%d (Serverless %s; direct ISP IP, NOT a foreign VPN)\n", c.port(), strings.ToUpper(c.Variant))
 	}
 	fmt.Fprintln(output, "Use an application that explicitly supports this proxy. Other traffic, including Windscribe WireGuard, is unchanged.")
 	cmd := exec.CommandContext(ctx, c.XrayBinary, "run", "-c", f.Name())
