@@ -2,9 +2,9 @@
 
 The portable Windows package bundles unmodified third-party executables and one publicly distributed configuration, as separate files. No fork is created.
 
-- **Xray-core v26.11.1** (patterniha/PattNG fork of XTLS), https://github.com/patterniha/Xray-core — MPL-2.0. Windows and Android release ZIPs are SHA-256 pinned; the Android executable hash is derived from the verified ZIP before Go JNI compilation. Full license is included in THIRD_PARTY/Xray-MPL-2.0.txt.
+- **Xray-core v26.11.23** (patterniha/PattNG fork of XTLS), https://github.com/patterniha/Xray-core — MPL-2.0. Windows and Android release ZIPs are SHA-256 pinned; the Android executable hash is derived from the verified ZIP before Go JNI compilation. Full license is included in THIRD_PARTY/Xray-MPL-2.0.txt.
 - **ByeDPI v0.17.3** (hufrea), https://github.com/hufrea/byedpi — MIT. The official Windows asset is SHA-256 pinned. Full license is included in THIRD_PARTY/ByeDPI-MIT.txt.
-- **Serverless-for-Iran v52** (@patterniha), https://github.com/patterniha/Serverless-for-Iran — GPL-3.0. Exact JSON profile is pinned by upstream commit 19e394313afd347ca0935bea0def25522434dbe6 and blob ab1dd41508e073df841dfa781969550bbdd20927. Full license is included in THIRD_PARTY/Serverless-GPL-3.0.txt.
+- **Serverless-for-Iran v65** (@patterniha), https://github.com/patterniha/Serverless-for-Iran — GPL-3.0. The offline JSON subscription is pinned by upstream commit 9b62ddf9e8bc83432d4b0bcf8be4c963bc8cb300 and Git blob eac9ad0260d0c886b2118cf8590f866e862bfe82. The optional fragment A/B and OOB profiles do not provide foreign IP egress; native core compatibility is verified with pinned Xray before packaging. Full license is included in THIRD_PARTY/Serverless-GPL-3.0.txt.
 
 The ktest menu and scanner are an independent Go orchestration project. The package never rewrites OS proxy/DNS settings or promises that an arbitrary site will be reachable on an Iranian ISP. It trusts no certificate by itself: `ktest ca -install` creates a name-constrained local CA and asks Windows, with Windows' own confirmation, to trust it for the current user. Redistributors must preserve applicable licenses and attributions.
 

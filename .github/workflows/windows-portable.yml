@@ -39,7 +39,7 @@ jobs:
             $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
             if ($actual -ne $sha256) { throw "SHA-256 mismatch for $path" }
           }
-          DownloadVerified "https://github.com/patterniha/Xray-core/releases/download/v26.11.1/Xray-windows-64.zip" "build/xray.zip" "9f7cfd2f14a4974339de3e0a8fd23447e7bb8a0e04c2df10cd324d188947032c"
+          DownloadVerified "https://github.com/patterniha/Xray-core/releases/download/v26.11.23/Xray-windows-64.zip" "build/xray.zip" "c0191caf477c8f7370f1c8eecbc1a0f82a4c0a5ef7804f05f2f0acfb1f6b1206"
           Expand-Archive -LiteralPath build/xray.zip -DestinationPath build/xray -Force
           $xray = Get-ChildItem -Path build/xray -Filter xray.exe -File -Recurse | Select-Object -First 1
           if ($null -eq $xray) { throw "Official Xray zip did not contain xray.exe" }
@@ -157,16 +157,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $rev = "19e394313afd347ca0935bea0def25522434dbe6"
+          $rev = "9b62ddf9e8bc83432d4b0bcf8be4c963bc8cb300"
           $url = "https://raw.githubusercontent.com/patterniha/Serverless-for-Iran/$rev/Subscription/Serverless-for-Iran.json"
           Invoke-WebRequest -Uri $url -OutFile portable/ktest/profiles/Serverless-for-Iran.json
           $blob = (git hash-object portable/ktest/profiles/Serverless-for-Iran.json).Trim()
-          if ($LASTEXITCODE -ne 0 -or $blob -ne "ab1dd41508e073df841dfa781969550bbdd20927") {
+          if ($LASTEXITCODE -ne 0 -or $blob -ne "eac9ad0260d0c886b2118cf8590f866e862bfe82") {
             throw "Upstream profile content does not match pinned Git blob"
           }
           $profile = Get-Content -LiteralPath portable/ktest/profiles/Serverless-for-Iran.json -Raw | ConvertFrom-Json
-          foreach ($v in @("A","B")) {
-            $selected = "build/selected-frag$v.json"
+          foreach ($v in @("A","B","OOB")) {
+            $selected = "build/selected-$v.json"
             & ./portable/ktest/ktest.exe profile-preview -profile portable/ktest/profiles/Serverless-for-Iran.json $v |
               Set-Content -LiteralPath $selected -Encoding utf8
             if ($LASTEXITCODE -ne 0) { throw "Profile $v generation failed" }
@@ -174,7 +174,7 @@ jobs:
             & ./portable/ktest/cores/xray.exe run -test -c $selected
             if ($LASTEXITCODE -ne 0) { throw "Xray rejected ktest patched Fragment $v" }
             foreach ($dnsTransport in @("udp","tcp")) {
-              $selectedDNS = "build/selected-frag$v-$dnsTransport.json"
+              $selectedDNS = "build/selected-$v-$dnsTransport.json"
               & ./portable/ktest/ktest.exe profile-preview -profile portable/ktest/profiles/Serverless-for-Iran.json $v $dnsTransport |
                 Set-Content -LiteralPath $selectedDNS -Encoding utf8
               if ($LASTEXITCODE -ne 0) { throw "Profile $v with $dnsTransport failed generation" }
@@ -182,9 +182,10 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "Xray rejected profile $v with $dnsTransport DNS" }
             }
           }
-          if (@($profile).Count -ne 2 -or
+          if (@($profile).Count -ne 3 -or
               (@($profile | Where-Object { $_.remarks -like '*fragA' })).Count -ne 1 -or
-              (@($profile | Where-Object { $_.remarks -like '*fragB' })).Count -ne 1) {
+              (@($profile | Where-Object { $_.remarks -like '*fragB' })).Count -ne 1 -or
+              (@($profile | Where-Object { $_.remarks -like '*-oob' })).Count -ne 1) {
             throw "Unexpected serverless profile structure"
           }
           & ./portable/ktest/ktest.exe strategies -write
@@ -231,7 +232,7 @@ jobs:
             throw "New versioned Aether install not selected: $($aetherStatus -join ' ')"
           }
           $version = & ./portable/ktest/cores/xray.exe version
-          if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.11\.1")) {
+          if ($LASTEXITCODE -ne 0 -or (($version -join "`n") -notmatch "Xray 26\.11\.23")) {
             throw "Bundled Xray did not start or returned unexpected version"
           }
           $sb = & ./portable/ktest/cores/sing-box.exe version

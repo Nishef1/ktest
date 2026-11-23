@@ -116,7 +116,7 @@ def prepare(manifest, cache, destination, abis, verify_only):
         for item in entry["files"]
     )
     if needs_derivation and (manifest["repository"] != "https://github.com/patterniha/Xray-core"
-                             or manifest["version"] != "v26.11.1"):
+                             or manifest["version"] != "v26.11.23"):
         raise ValueError("archive-derived digest is limited to pinned PattNG Xray")
     cache.mkdir(parents=True, exist_ok=True)
     for name in abis:

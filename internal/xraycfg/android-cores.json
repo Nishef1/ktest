@@ -1,11 +1,11 @@
 {
   "repository": "https://github.com/patterniha/Xray-core",
-  "version": "v26.11.1",
+  "version": "v26.11.23",
   "optional_abis": true,
   "abis": {
     "arm64-v8a": {
       "archive": "Xray-android-arm64-v8a.zip",
-      "sha256": "e35403384aeafc5857cc7ed0a5c5c01dd10bc97992599840b6d77ef29031c3a6",
+      "sha256": "87cf0d0e14ffd045ed545becb177dcd40b5b16313f03a8e104b424591196f185",
       "bits": 64,
       "machine": 183,
       "min_load_alignment": 16384,

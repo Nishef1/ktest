@@ -218,3 +218,20 @@ The menu uses aligned columns in wider windows and puts descriptions below each 
 ## Options of `ktest connect`
 
 None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-front`, `-front`, `-no-warp`, `-aether-method`, `-aether-fingerprint`, `-masque-sni`, `-aether-fragment`, `-tun`, `-cert`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`. Windscribe mode: `-windscribe-wstunnel`, `-windscribe-wstunnel-sni`, `-windscribe-wstunnel-ip`, `-windscribe-cdn`, `-windscribe-cdn-sni`, `-windscribe-cdn-edge`, `-windscribe-auto-reconnect`, `-windscribe-cli` (see [WINDSCRIBE_BOOTSTRAP.md](WINDSCRIBE_BOOTSTRAP.md)).
+
+## Offline Serverless-for-Iran v65 (Windows; opt-in)
+
+The portable ZIP bundles the pinned patterniha Xray-core v26.11.23,
+matching geoip/geosite assets, and a pinned Serverless-for-Iran v65
+subscription with A/B and OOB variants. `ktest revive -variant B` starts
+a **separate loopback-only** mixed HTTP/SOCKS proxy; use `-variant A` or
+`-variant OOB` to select another official profile. The CLI resolves the
+bundled files relative to the executable, not the current directory.
+It enforces the selected profile's minimum Xray version before startup.
+
+Serverless works through the user's original ISP route and **does not
+change their public IP**. IP-blocked destinations and foreign services
+rejecting Iranian IPs can remain unreachable. This optional mode is not
+automatically promoted to a protected foreign exit or Android VPN profile,
+and does not install a CA or system proxy. Android's pinned Xray currently
+provides a local TLS-fragment route and TUN adapter, not imported serverless.
