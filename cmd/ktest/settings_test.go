@@ -259,3 +259,26 @@ func TestCorruptedServerlessPreferencePreservesSavedFile(t *testing.T) {
 		t.Fatal("invalid settings were overwritten", err)
 	}
 }
+
+func TestInteractiveServerlessChoiceAndEnterResume(t *testing.T) {
+	t.Setenv("KTEST_SETTINGS_FILE", filepath.Join(t.TempDir(), "settings.json"))
+	base := t.TempDir()
+	var first bytes.Buffer
+	if code := runInteractive(strings.NewReader("7\n2\n0\n"), &first, base); code != 0 {
+		t.Fatal(code)
+	}
+	settings, _, options, err := loadPreferences(base)
+	if err != nil || settings.LastConnection != "serverless" || settings.ServerlessVariant != "B" ||
+		options.mode != ModeBalanced {
+		t.Fatalf("menu choice not restored independently: %+v %+v %v", settings, options, err)
+	}
+	var resumed bytes.Buffer
+	if code := runInteractive(strings.NewReader("\n0\n"), &resumed, base); code != 0 {
+		t.Fatal(code)
+	}
+	if !strings.Contains(resumed.String(), "Connect with Serverless B") ||
+		!strings.Contains(resumed.String(), "Bundled Xray is missing") ||
+		strings.Contains(resumed.String(), "Policy: balanced") {
+		t.Fatal("Enter did not replay the Serverless selection:", resumed.String())
+	}
+}
