@@ -59,7 +59,7 @@ func MobileResolversPolicy(mode, exitSOCKS, customDNS string, encryptedOnly bool
 		// The pinned profile intercepts port 53 and owns the DNS strategy.
 		// It intentionally blocks several public DoH destinations, so a
 		// second Go DoH resolver inside it would defeat that strategy.
-		dial := func(ctx context.Context, _, addr string) (net.Conn, error) {
+		dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return smartproxy.DialVia(ctx, exitSOCKS, "1.1.1.1", "53", 8*time.Second)
 		}
 		resolver, err := resolverForServer("1.1.1.1", "tcp", dial)

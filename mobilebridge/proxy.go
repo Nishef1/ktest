@@ -133,7 +133,7 @@ func currentReportLocked() proxyReport {
 		Detail:       "Local proxy listeners are active. Configure a proxy-capable app; VPN is not enabled.",
 	}
 	if activeProxy.mode == "serverless" {
-		report.Detail = "Serverless runs through the original ISP IP via local HTTP/SOCKS5; no foreign VPN is active."
+		report.Detail = "Serverless uses the original ISP IP; Android may route device apps through its local packet VPN. No foreign exit is active."
 	}
 	activeProxy.diagnostics.mu.Lock()
 	report.DNSFailures, report.DNSError = activeProxy.diagnostics.dnsFailures, activeProxy.diagnostics.dnsError
