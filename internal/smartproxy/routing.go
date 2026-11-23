@@ -19,6 +19,7 @@ type destinationMemory struct {
 	winner, challenger string
 	challengeWins      int
 	updated            time.Time
+	lastRecheck        time.Time // process-local; never a persisted permission or result
 	routes             map[string]*routeScore
 	// kind is the filtering this destination showed (the plain route's
 	// failure when known); failed lists families that failed here and
@@ -355,6 +356,59 @@ func (p *Proxy) rejectTakeover(host, port, path string) {
 			break
 		}
 	}
+}
+
+// maybeRecheckRoute occasionally challenges a stable, repeatedly successful
+// choice with one other eligible method on an actual TLS request. The original
+// winner remains in the race and is used on a failure. This is intentionally
+// traffic-driven: idle Android devices do no network work or wakeups, and
+// Windows does not need a long periodic CDN sweep. Network/mode-specific
+// history keeps the measured result on the next launch.
+func (p *Proxy) maybeRecheckRoute(host, port string, order []*upstreamState) []*upstreamState {
+	if len(order) < 2 || p.cfg.RecheckInterval < 0 || p.cfg.Frozen != nil ||
+		p.cfg.LocalOnly || p.cfg.PreferVerifiedExit {
+		return order
+	}
+	// Do not change verified-exit identity, including strict carrier modes.
+	if p.exitOnly(host) || (p.cfg.ExitRequired != nil && p.cfg.ExitRequired(host)) {
+		return order
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	if now.Sub(p.started) < p.cfg.RecheckInterval ||
+		(!p.lastRecheck.IsZero() && now.Sub(p.lastRecheck) < time.Minute) {
+		return order
+	}
+	m := p.memoryLocked(host, port)
+	if m == nil || m.winner != order[0].Name || m.repeatedBlackhole() ||
+		(!m.lastRecheck.IsZero() && now.Sub(m.lastRecheck) < p.cfg.RecheckInterval) {
+		return order
+	}
+	best := m.routes[m.winner]
+	if best == nil || best.wins < 3 || now.Before(best.coolUntil) {
+		return order
+	}
+	first := order[0]
+	for i := 1; i < len(order); i++ {
+		candidate := order[i]
+		// Keep the route's egress/takeover class, respect Late and cooldown.
+		// The strict policy filters have already run inside order().
+		if candidate.Late || candidate.Exit != first.Exit ||
+			(candidate.Takeover != nil) != (first.Takeover != nil) {
+			continue
+		}
+		if score := m.routes[candidate.Name]; score != nil {
+			if now.Before(score.coolUntil) || score.fails > score.wins+1 {
+				continue
+			}
+		}
+		m.lastRecheck, p.lastRecheck = now, now
+		challenged := append([]*upstreamState(nil), order...)
+		challenged[0], challenged[i] = challenged[i], challenged[0]
+		return challenged
+	}
+	return order
 }
 
 // The configured stagger is a hedge budget, not a reward for a slow winner.

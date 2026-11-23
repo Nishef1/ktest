@@ -153,6 +153,10 @@ type Config struct {
 	StallTimeout time.Duration
 	// MemoryTTL bounds exact host:port history and initial sibling hints.
 	MemoryTTL time.Duration
+	// RecheckInterval lets live Balanced/Fast traffic occasionally try an
+	// eligible alternative to a healthy learned winner. No background probes,
+	// DNS changes or additional traffic are generated. Negative disables it.
+	RecheckInterval time.Duration
 	// Seeds are tested first choices per exact host:port (or registrable
 	// site:port), and SeedDefault for destinations without one. They only
 	// order the first race: live results replace them at once and nothing
@@ -239,6 +243,9 @@ func (c *Config) defaults() {
 	if c.MemoryTTL <= 0 {
 		c.MemoryTTL = 24 * time.Hour
 	}
+	if c.RecheckInterval == 0 {
+		c.RecheckInterval = 10 * time.Minute
+	}
 }
 
 // Stat summarizes one upstream since start.
@@ -274,6 +281,8 @@ type Proxy struct {
 	mem             map[string]*destinationMemory
 	hints           map[string]memo
 	historyUpdates  uint64
+	started         time.Time // do not challenge a cached winner during cold startup
+	lastRecheck     time.Time // cap exploration across all destinations
 	saved           map[string]savedDestination
 	exitGeneration  uint64          // changes when the DNS-capable exit inventory changes
 	aiPinned        string          // first working AI exit stays selected until this session ends
@@ -323,7 +332,7 @@ func New(cfg Config) (*Proxy, error) {
 		}
 		cfg.Frozen = &pins
 	}
-	p := &Proxy{cfg: cfg, mem: map[string]*destinationMemory{}, hints: map[string]memo{}, priors: map[FailureKind]*familyPrior{}}
+	p := &Proxy{cfg: cfg, mem: map[string]*destinationMemory{}, hints: map[string]memo{}, priors: map[FailureKind]*familyPrior{}, started: time.Now()}
 	seen := map[string]bool{}
 	for _, u := range cfg.Upstreams {
 		if cfg.RejectExits && u.Exit {
@@ -847,6 +856,11 @@ func (p *Proxy) race(parent context.Context, host, port string, flight []byte) (
 		err := fmt.Errorf("%s: no permitted foreign exit; protected site blocked (fail-closed)", host)
 		p.emit(parent, Event{Host: host, Port: port, Site: siteKey(host), Took: time.Since(began), Err: err.Error(), Blocked: true})
 		return winner{}, err
+	}
+	// Recheck only on real application traffic. Diagnostic probes must not
+	// perturb the remembered winner or schedule route exploration.
+	if probe, _ := parent.Value(probeContextKey{}).(bool); !probe {
+		order = p.maybeRecheckRoute(host, port, order)
 	}
 	// Late paths go to the back, behind a gate that opens when everything else
 	// has failed or after lateAfter.

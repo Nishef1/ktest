@@ -1170,9 +1170,12 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 	}
 	var tn *tunnel
 	tunPending := false
+	tunAttempts := 0
+	var tunRetryAt time.Time
 	if o.tun {
 		coverage = "TUN inactive · local proxy listener only"
 		if verdict != toneFail {
+			tunAttempts++
 			tn = startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t)
 			defer tn.stop(t)
 			if ctx.Err() != nil {
@@ -1186,6 +1189,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				verdict = toneOK
 			} else {
 				verdict = toneWarn
+				tunPending = true
+				tunRetryAt = time.Now().Add(tunRetryDelay(tunAttempts))
+				t.Note("Whole-PC tunnel failed its first check; will retry inside this session without restarting ktest.")
 			}
 		} else {
 			// Whole-PC routing waits for the exit instead of being dropped.
@@ -1321,15 +1327,40 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 			if status == nil {
 				continue
 			}
-			if tunPending && exitReady(o.mode, proxy) {
-				tunPending = false
+			if tn != nil {
+				select {
+				case <-tn.done:
+					tn.stop(t)
+					tn = nil
+					tunPending = true
+					tunRetryAt = time.Now().Add(tunRetryDelay(tunAttempts))
+					t.Line(toneWarn, "System tunnel exited; traffic is proxy-only until a new tunnel is verified.")
+				default:
+				}
+			}
+			if tunPending && ( !o.mode.exitOnly() || exitReady(o.mode, proxy)) &&
+				!time.Now().Before(tunRetryAt) && tunAttempts < 3 {
+				tunAttempts++
 				t.ClearPinnedBox()
-				if tn = startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t); tn != nil {
-					defer tn.stop(t)
+				candidate := startTunnel(ctx, o.base, lport, o.verbose, o.mode.tunUDP(), t)
+				if candidate != nil {
+					tn = candidate
+					tunPending = false
+					defer candidate.stop(t)
+				} else {
+					tunRetryAt = time.Now().Add(tunRetryDelay(tunAttempts))
+					if tunAttempts >= 3 {
+						tunPending = false
+						t.Line(toneWarn, "TUN could not verify after three attempts; proxy remains available. See Diagnose before trying Whole PC again.")
+					}
 				}
 				if ctx.Err() != nil {
 					return 0
 				}
+			}
+			if tunPending && tunAttempts >= 3 {
+				tunPending = false
+				t.Line(toneWarn, "TUN stopped repeatedly; keeping proxy-only coverage until reconnect.")
 			}
 			status.render(time.Now())
 		case <-connection.Done():
@@ -1547,6 +1578,15 @@ func newFronter(o connectOptions, resolve smartproxy.Resolver, t *term, logf fun
 		return f, "on, but the CA predates " + strings.Join(firstN(missing, 3), ", ") + " - run `ktest ca -renew` to cover them"
 	}
 	return f, "on - Google, YouTube, X, Meta, Discord and Fastly-hosted sites can use fronting / ECH"
+}
+
+// tunRetryDelay is bounded so a failed first-use TUN does not require a
+// manual disconnect/reconnect, but persistent adapter failures never loop.
+func tunRetryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 10 * time.Second
+	}
+	return 30 * time.Second
 }
 
 // exitReady is when an exit-only mode carries traffic: Aether takes any
