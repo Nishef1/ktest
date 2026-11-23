@@ -22,6 +22,7 @@ import (
 	"github.com/Nishef1/ktest/internal/front"
 	"github.com/Nishef1/ktest/internal/quickcheck"
 	"github.com/Nishef1/ktest/internal/smartproxy"
+	"github.com/Nishef1/ktest/internal/tlsshape"
 )
 
 func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Proxy, u *term, full bool) (*warpManager, error) {
@@ -61,7 +62,7 @@ func newWarpManager(ctx context.Context, o connectOptions, proxy *smartproxy.Pro
 		}
 	}
 	if !full && len(templates) > 0 && !templates[0].Has("--ech") {
-		if r, ok := history.Results[templates[0].ID()]; ok && measurementScore(r, o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
+		if r, ok := history.Results[tlsshape.HistoryKey(templates[0])]; ok && measurementScore(r, o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
 			needECH = false
 		}
 	}
@@ -207,7 +208,7 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 	if limit == 1 && m.o.mode != ModeBalanced && m.o.mode != ModeFast {
 		history, _ := cachedNetwork(m.network, m.core)
 		if len(indices) > 0 {
-			if r, ok := history.Results[m.profs[indices[0]].ID()]; ok && r.State == "verified" && time.Since(r.Checked) < networkCacheTTL {
+			if r, ok := history.Results[tlsshape.HistoryKey(m.profs[indices[0]])]; ok && r.State == "verified" && time.Since(r.Checked) < networkCacheTTL {
 				count = 1
 			}
 		}
@@ -254,7 +255,7 @@ func (m *warpManager) compare(ctx context.Context, limit int, speed bool, indice
 							r.Failure = "Tor identity was not verified"
 						}
 					}
-					r.ID, r.Label, r.Method = p.ID(), p.Label, p.Method()
+					r.ID, r.Label, r.Method = tlsshape.HistoryKey(p), p.Label, p.Method()
 				} else {
 					r.Failure = failure
 					if attempt.Err() == context.DeadlineExceeded && ctx.Err() == nil {

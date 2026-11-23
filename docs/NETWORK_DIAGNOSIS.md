@@ -379,3 +379,7 @@ On this emulator, Android installed an unreachable IPv6 default route rather
 than a working IPv6 route. The probe must exclude unreachable routes when
 deciding whether IPv6 HTTPS should be tested. These samples do not establish
 support for every application's UDP traffic or native-app certificate policy.
+
+### Measured TLS configuration and actual connection
+
+The F&F calibration measures MASQUE HTTP/2 ClientHello responses, not complete authenticated tunnels. Auto ranks actually attempted fingerprint/SNI/fragment combinations by successful replies, attempts and latency, without giving Chrome a 25% speed tolerance. The exact winning combination is emitted as a real candidate, including a measured TCP exit-node mask if selected. Other candidates remain available. Previous verified real-tunnel evidence can take priority; stable core IDs are separate from exact tuning history keys. Active TLS options in Android and the Windows terminal describe the selected native profile, not the cached probe. ECH may use a different outer name. WireGuard and independent non-MASQUE transports are not covered by this measurement. Explicit measurements report save failures or network changes. Calibration is staged, not an exhaustive search of every combination.

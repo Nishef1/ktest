@@ -237,7 +237,7 @@ func (a *automaticExit) profiles() []aether.Profile {
 	profiles = tlsshape.Order(profiles, measured)
 	var hint nativeHint
 	if raw, err := os.ReadFile(a.hintFile()); err == nil && len(raw) < 4096 && json.Unmarshal(raw, &hint) == nil && hint.Key == a.historyKey && hint.Key != "" && time.Since(hint.Checked) < 24*time.Hour && time.Until(hint.Checked) < time.Minute {
-		sort.SliceStable(profiles, func(i, j int) bool { return profiles[i].ID() == hint.ID && profiles[j].ID() != hint.ID })
+		sort.SliceStable(profiles, func(i, j int) bool { return tlsshape.HistoryKey(profiles[i]) == hint.ID && tlsshape.HistoryKey(profiles[j]) != hint.ID })
 	}
 	return profiles
 }
@@ -337,7 +337,7 @@ func (a *automaticExit) run() {
 		}
 		profiles = a.profiles()
 		if lastWorking != "" {
-			sort.SliceStable(profiles, func(i, j int) bool { return profiles[i].ID() == lastWorking && profiles[j].ID() != lastWorking })
+			sort.SliceStable(profiles, func(i, j int) bool { return tlsshape.HistoryKey(profiles[i]) == lastWorking && tlsshape.HistoryKey(profiles[j]) != lastWorking })
 		}
 	}
 	for a.ctx.Err() == nil {
@@ -361,7 +361,7 @@ func (a *automaticExit) run() {
 		a.current, a.location = r.core, r.checked.Region
 		a.mu.Unlock()
 		if a.historyKey != "" {
-			raw, _ := json.Marshal(nativeHint{a.historyKey, r.profile.ID(), time.Now()})
+			raw, _ := json.Marshal(nativeHint{a.historyKey, tlsshape.HistoryKey(r.profile), time.Now()})
 			_ = os.MkdirAll(a.options.stateDir, 0700)
 			_ = os.WriteFile(a.hintFile(), raw, 0600)
 		}
@@ -373,7 +373,7 @@ func (a *automaticExit) run() {
 		a.mu.Unlock()
 		r.core.stop()
 		// Retry the last working transport first, then every other method.
-		lastWorking = r.profile.ID()
+		lastWorking = tlsshape.HistoryKey(r.profile)
 		refresh()
 	}
 }

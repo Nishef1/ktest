@@ -82,7 +82,11 @@ func Save(path, network string, r Result) error {
 		os.Remove(tmp.Name())
 		return errors.Join(werr, cerr)
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 func readCache(path string) cacheFile {

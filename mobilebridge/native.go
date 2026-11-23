@@ -255,6 +255,10 @@ func launchVerifiedNativeProfiles(ctx context.Context, o nativeOptions) (*native
 		}
 		candidate := o
 		candidate.profile = &profile
+		if profile.ExitNode() != "" {
+			// This measured mask must not be replaced by Fast's carrier.
+			candidate.carrier = ""
+		}
 		// Provisioning belongs to the attempt budget too; a blocked key/API
 		// preflight must not consume the startup allowance for every transport.
 		attempt, cancel := context.WithTimeout(ctx, aether.AttemptTimeout(profile)+15*time.Second)
@@ -352,7 +356,7 @@ func launchNative(ctx context.Context, mode string, o nativeOptions) (*nativeCor
 			stop()
 			return nil, err
 		}
-		ownedNodeCancel = stop
+		ownedNodeCancel = func() { stop(); node.Stop() }
 		o.carrier = node.Addr()
 	}
 	launched := false

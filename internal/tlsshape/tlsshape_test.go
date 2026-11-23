@@ -252,3 +252,32 @@ func TestMeasuredWinnerAppliedAsExactCombination(t *testing.T) {
 		t.Fatal("stale options accepted")
 	}
 }
+
+func TestHistoryKeySeparatesTunedValues(t *testing.T) {
+	a := aether.Profile{Label: "x", Args: []string{"--masque", "--h2", "--masque-sni", "a.example.com"}}
+	b := aether.Profile{Label: "x", Args: []string{"--masque", "--h2", "--masque-sni", "b.example.com"}}
+	if a.ID() != b.ID() || HistoryKey(a) == HistoryKey(b) {
+		t.Fatal("history conflates different tuned SNI values")
+	}
+}
+
+func TestWinnerPreservesMaskAndExplicitOff(t *testing.T) {
+	o, _ := ParseOptions("auto", "auto", "auto")
+	r := &Result{Options: o.Key(), Trials: []Trial{
+		{Shape: Shape{DefaultSNI, Go, ExitNodeMask}, Attempts: 2, OK: 2, MS: 90},
+		{Shape: Shape{DefaultSNI, Chrome, NoFragment}, Attempts: 2, OK: 1, MS: 10},
+	}}
+	p := aether.Profile{Label: "test", Args: []string{"--masque", "--h2"}}
+	got := Order(Apply([]aether.Profile{p}, o, r), r)
+	if got[0].ExitNode() != ExitNodeMask || got[0].Has("--fragment") {
+		t.Fatal("winner's exact mask not applied")
+	}
+	o.Fragment = "off"
+	r.Options = o.Key()
+	got = Apply([]aether.Profile{p}, o, r)
+	for _, candidate := range got {
+		if candidate.ExitNode() != "" || candidate.Has("--fragment") {
+			t.Fatal("explicit off violated")
+		}
+	}
+}

@@ -110,6 +110,7 @@ func printTLSCalibration(u *term, r tlsshape.Result) {
 func runTLSCalibration(ctx context.Context, u *term, opts tlsshape.Options) int {
 	u.Line(toneInfo, "MASQUE hello calibration · %s", opts.Summary())
 	u.Note("Direct TLS handshakes with WARP's HTTP/2 gateways; no tunnel, a few KB.")
+	key := networkSignature(ctx)
 	r := tlsshape.Calibrate(ctx, opts, tlsCalibrationConfig())
 	u.Note("Gateways measured: %v", r.Gateways)
 	if ctx.Err() != nil && !r.Reached() {
@@ -120,7 +121,11 @@ func runTLSCalibration(ctx context.Context, u *term, opts tlsshape.Options) int 
 	if winner, ok := tlsshape.Winner(&r, opts); ok {
 		u.Note("Measured combination: %s · %d/%d · %.0fms", winner.Shape, winner.OK, winner.Attempts, winner.MS)
 	}
-	if err := tlsshape.Save(tlsCalibrationFile(), networkSignature(ctx), r); err != nil {
+	if key == "" || networkSignature(ctx) != key {
+		u.Note("Network changed or is unidentified; calibration not saved")
+		return 1
+	}
+	if err := tlsshape.Save(tlsCalibrationFile(), key, r); err != nil {
 		u.Note("Not saved: %v", err)
 		return 1
 	}

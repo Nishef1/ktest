@@ -145,3 +145,11 @@ Track remaining family acceptance in [issue #20](https://github.com/Nishef1/ktes
 - [x] Remove Android's independent IP display selector. The panel follows the persistent connection family.
 - [x] Allow explicit Android VPN coverage for Serverless. The public IP is still the ISP's; Windows remains proxy-only. Run native Xray config preflight and send DNS to the pinned Xray port-53 handler rather than another DoH endpoint that the upstream may block.
 - [ ] Verify availability of each IP-check provider and actual Serverless browsing on Iranian mobile/fixed networks, with both VPN and proxy coverage. Non-DNS UDP remains unsupported in the shared Serverless path. Test Android Private DNS interaction and route cleanup; do not claim a foreign exit or working bypass based only on IP-check success.
+
+### TLS calibration application (2026-11-23)
+
+- [x] Apply the exact measured winning tuple to compatible Aether MASQUE H2 profiles and rank successful candidates by measured replies/latency, without an artificial Chrome tolerance.
+- [x] Preserve alternate profiles, explicit settings and native HTTPS validation. Show actual selected native TLS configuration in Android and Windows; distinguish configured values from packet-level fingerprints.
+- [x] Separate tuned SNI/fragment performance keys from stable native process/profile IDs; report explicit calibration save failures and reject network changes during measurement.
+- [ ] Physical-network validation: compare active native ClientHello shape with the simulated probe, verify actual application throughput, stability, and fallback on both devices. Calibrate IPv6 gateways independently; current H2 probe inventory is not a proof for IPv6 or H3.
+- [ ] Evaluate pinned Aether core's newer TLS-shaping flags only after actual binary capability and network tests; do not advertise full browser impersonation based on cipher list alone.

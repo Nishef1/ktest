@@ -128,12 +128,14 @@ func (r Result) Reached() bool {
 
 // Lookup finds the trial of a shape.
 func (r Result) Lookup(s Shape) (Trial, bool) {
+	var selected Trial
+	found := false
 	for _, t := range r.Trials {
-		if t.Shape == s {
-			return t, true
+		if t.Shape == s && (!found || betterTrial(t, selected)) {
+			selected, found = t, true
 		}
 	}
-	return Trial{}, false
+	return selected, found
 }
 
 // ProbeFunc runs one handshake of a shape against a gateway.

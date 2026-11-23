@@ -118,10 +118,17 @@ func CalibrateAetherTLS(privateDir string) (string, error) {
 	}
 	defer calibrateMu.Unlock()
 	o := currentAetherTLS()
+	key := tlsNetworkKey()
+	if key == "" {
+		return "", errors.New("cannot measure without a stable network identity")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	r := tlsshape.Calibrate(ctx, o, tlsCalibrationConfig(privateDir))
-	if err := tlsshape.Save(tlsCalibrationPath(privateDir), tlsNetworkKey(), r); err != nil {
+	if tlsNetworkKey() != key || currentAetherTLS().Key() != o.Key() {
+		return "", errors.New("network or TLS settings changed during measurement; result not saved")
+	}
+	if err := tlsshape.Save(tlsCalibrationPath(privateDir), key, r); err != nil {
 		return "", fmt.Errorf("measurement completed but could not save: %w", err)
 	}
 	return summarizeCalibration(r), nil

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Nishef1/ktest/internal/tlsshape"
 )
 
 const networkCacheTTL = 24 * time.Hour
@@ -177,7 +179,7 @@ func measurementScore(r aetherMeasurement, mode ConnectionMode) float64 {
 func measuredProfilesFirst(profiles []aetherProfile, history networkProfile, mode ConnectionMode) []aetherProfile {
 	ordered := append([]aetherProfile(nil), profiles...)
 	score := func(p aetherProfile) float64 {
-		r, ok := history.Results[p.ID()]
+		r, ok := history.Results[tlsshape.HistoryKey(p)]
 		if !ok || time.Since(r.Checked) > networkCacheTTL || time.Until(r.Checked) > time.Minute {
 			return 1e12
 		}
@@ -188,9 +190,9 @@ func measuredProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 	}
 	sort.SliceStable(ordered, func(i, j int) bool { return score(ordered[i]) < score(ordered[j]) })
 	// Mixed modes need both an ordinary-site winner and an AI-capable exit.
-	if (mode == ModeFast || mode == ModeBalanced) && len(ordered) > 1 && history.Results[ordered[0].ID()].State == "carrier" {
+	if (mode == ModeFast || mode == ModeBalanced) && len(ordered) > 1 && history.Results[tlsshape.HistoryKey(ordered[0])].State == "carrier" {
 		for i := 1; i < len(ordered); i++ {
-			if r := history.Results[ordered[i].ID()]; r.State == "verified" && score(ordered[i]) < 1e12 {
+			if r := history.Results[tlsshape.HistoryKey(ordered[i])]; r.State == "verified" && score(ordered[i]) < 1e12 {
 				p := ordered[i]
 				copy(ordered[2:i+1], ordered[1:i])
 				ordered[1] = p
@@ -216,7 +218,7 @@ func printNetworkRecommendations(u *term, key, core string, profiles []aetherPro
 		eligible := profilesForMode(profiles, mode)
 		ordered := measuredProfilesFirst(eligible, history, mode)
 		if len(ordered) > 0 {
-			r, ok := history.Results[ordered[0].ID()]
+			r, ok := history.Results[tlsshape.HistoryKey(ordered[0])]
 			if ok && measurementScore(r, mode) < 1e12 {
 				u.Line(toneInfo, "%s: %s · %.0fms · %d/%d samples · observed %s (%s)", mode, ordered[0].Label, r.LatencyMS, r.Successes, r.Attempts, r.ExitIP, r.Country)
 			}
@@ -226,7 +228,7 @@ func printNetworkRecommendations(u *term, key, core string, profiles []aetherPro
 }
 
 func measurementFor(p aetherProfile) aetherMeasurement {
-	return aetherMeasurement{ID: p.ID(), Label: p.Label, Method: p.Method(), Checked: time.Now(), State: "failed"}
+	return aetherMeasurement{ID: tlsshape.HistoryKey(p), Label: p.Label, Method: p.Method(), Checked: time.Now(), State: "failed"}
 }
 
 func (r aetherMeasurement) detail() string {

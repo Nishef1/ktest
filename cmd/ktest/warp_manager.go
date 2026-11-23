@@ -479,7 +479,7 @@ func (m *warpManager) search(ctx context.Context, active map[string]*warpFound) 
 	}
 	if len(active) == 0 && len(indices) > 0 {
 		first := m.profs[indices[0]]
-		if r, ok := history.Results[first.ID()]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
+		if r, ok := history.Results[tlsshape.HistoryKey(first)]; ok && (r.State == "verified" || m.o.mode == ModeWindscribeAether) && measurementScore(r, m.o.mode) < 1e12 && time.Since(r.Checked) < networkCacheTTL {
 			limit = 1
 		}
 	}

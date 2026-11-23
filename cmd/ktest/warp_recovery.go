@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/Nishef1/ktest/internal/aether"
+	"github.com/Nishef1/ktest/internal/tlsshape"
 )
 
 func (m *warpManager) automaticWARPDiscovery() bool {
@@ -28,7 +29,7 @@ func recoveryProfilesFirst(profiles []aetherProfile, history networkProfile, mod
 	ranked := measuredProfilesFirst(profiles, history, mode)
 	var proven, unknown, failed []aetherProfile
 	for _, p := range ranked {
-		r, ok := history.Results[p.ID()]
+		r, ok := history.Results[tlsshape.HistoryKey(p)]
 		switch {
 		case ok && time.Since(r.Checked) <= networkCacheTTL && time.Until(r.Checked) <= time.Minute && measurementScore(r, mode) < 1e12:
 			proven = append(proven, p)

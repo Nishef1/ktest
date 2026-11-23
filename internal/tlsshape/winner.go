@@ -1,6 +1,8 @@
 package tlsshape
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"strings"
 
 	"github.com/Nishef1/ktest/internal/aether"
@@ -138,4 +140,15 @@ func ActiveSummary(p aether.Profile) string {
 		fragment = size + "/" + delay
 	}
 	return fp + " · SNI " + name + " · fragment " + fragment
+}
+
+// HistoryKey retains stable core/profile identity while refusing to reuse
+// performance evidence collected under a different explicit SNI or fragment.
+func HistoryKey(p aether.Profile) string {
+	if !p.Has("--masque-sni") && !p.Has("--fragment-size") && !p.Has("--fragment-delay") {
+		return p.ID()
+	}
+	sum := sha256.Sum256([]byte(p.ID() + "\x00" + p.Value("--masque-sni") + "\x00" +
+		p.Value("--fragment-size") + "\x00" + p.Value("--fragment-delay")))
+	return fmt.Sprintf("%x", sum[:16])
 }
