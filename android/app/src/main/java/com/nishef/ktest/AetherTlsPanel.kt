@@ -38,6 +38,8 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
     var error by remember { mutableStateOf("") }
     var details by remember { mutableStateOf("") }
     var showDetails by remember { mutableStateOf(false) }
+    var comparing by remember { mutableStateOf(false) }
+    var capabilities by remember { mutableStateOf("") }
 
     // Validated by the same Go parser the connection uses.
     fun save(fp: String, name: String, frag: String): Boolean {
@@ -96,6 +98,41 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
                 }
             }
         }, Modifier.fillMaxWidth(), enabled = canMeasure, busy = busy)
+        SecondaryButton("Compare real MASQUE H2 tunnels", {
+            if (save(fingerprint, sni.ifBlank { "auto" }, fragment.ifBlank { "auto" })) {
+                busy = true
+                comparing = true
+                message = ""
+                scope.launch {
+                    try {
+                        message = withContext(Dispatchers.IO) {
+                            ProxyService.prepareUnderlyingNetwork(context)
+                            Mobilebridge.compareAetherNative(context.applicationInfo.nativeLibraryDir, privateDir)
+                        }
+                    } catch (e: CancellationException) {
+                        Mobilebridge.cancelAetherNativeComparison()
+                        throw e
+                    } catch (e: Exception) {
+                        error = e.message ?: "Native comparison failed"
+                    } finally {
+                        comparing = false
+                        busy = false
+                    }
+                }
+            }
+        }, Modifier.fillMaxWidth(), enabled = canMeasure && !busy, busy = comparing)
+        if (comparing) SecondaryButton("Cancel comparison", {
+            Mobilebridge.cancelAetherNativeComparison()
+        }, Modifier.fillMaxWidth())
+        Note("Compares up to three real H2 candidates offline with HTTPS and a small transfer. An existing MASQUE identity is required. The verified winner is saved for the H2 method.")
+        SecondaryButton("Check core TLS capabilities", {
+            scope.launch {
+                runCatching {
+                    withContext(Dispatchers.IO) { Mobilebridge.aetherTLSCapabilities(context.applicationInfo.nativeLibraryDir) }
+                }.onSuccess { capabilities = it }.onFailure { error = it.message ?: "Core inspection failed" }
+            }
+        }, Modifier.fillMaxWidth(), enabled = !busy)
+        if (capabilities.isNotBlank()) Text(capabilities, color = K.muted, fontSize = 12.sp, lineHeight = 18.sp)
         if (!canMeasure) Note("Disconnect to measure: it must see this network, not the tunnel.", Tone.Warn)
         if (message.isNotBlank()) Note(message, Tone.Good)
         SecondaryButton(if (showDetails) "Hide measurements" else "Show saved measurements", {

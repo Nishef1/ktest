@@ -77,7 +77,7 @@ func routeWorkActive() bool {
 	routeTestMu.Lock()
 	active = active || routeTestState.Running
 	routeTestMu.Unlock()
-	return active
+	return active || nativeComparisonActive.Load()
 }
 
 // StartRouteTest is an explicit offline action. It starts the existing cores,

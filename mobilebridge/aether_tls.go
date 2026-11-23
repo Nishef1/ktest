@@ -111,7 +111,7 @@ var calibrateMu sync.Mutex
 // returns a summary. It dials WARP's gateways directly, so it refuses to run
 // while the proxy or VPN is up, where it would measure the tunnel instead.
 func CalibrateAetherTLS(privateDir string) (string, error) {
-	if ProxyReady() {
+	if routeWorkActive() {
 		return "", errors.New("disconnect first: the measurement must see this network, not the tunnel")
 	}
 	if !calibrateMu.TryLock() {

@@ -226,7 +226,7 @@ func TestCandidatesFromLastConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := CandidatesFrom(path)
-	if got[0] != "162.159.198.77:443" || got[1] != "162.159.198.8:443" || len(got) != len(Gateways)+1 {
+	if got[0] != "162.159.198.77:443" || got[1] != "162.159.198.8:443" || len(got) != len(Gateways)+len(IPv6Gateways)+1 {
 		t.Fatal(got)
 	}
 }

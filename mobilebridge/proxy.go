@@ -271,6 +271,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	// calls ProxyStatus on the UI thread. Serialize only start calls here.
 	proxyStartMu.Lock()
 	defer proxyStartMu.Unlock()
+	if nativeComparisonActive.Load() {
+		return "", errors.New("finish or cancel the Aether comparison before connecting")
+	}
 	if localStateDir != "" && (mode == "balanced" || mode == "fast") {
 		scanMu.Lock()
 		scanning := scanState.Running

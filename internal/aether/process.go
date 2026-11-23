@@ -30,15 +30,32 @@ func RunEnrollment(ctx context.Context, binary string, args []string) error {
 }
 
 func InspectProfiles(ctx context.Context, binary string, profiles []Profile) ([]Profile, error) {
+	help, err := inspectHelp(ctx, binary)
+	if err != nil {
+		return nil, err
+	}
+	return SupportedProfiles(profiles, help), nil
+}
+
+// InspectOptions reads capabilities from the actual executable, not a release note.
+func InspectOptions(ctx context.Context, binary string) (map[string]bool, error) {
+	help, err := inspectHelp(ctx, binary)
+	if err != nil {
+		return nil, err
+	}
+	return DocumentedOptions(help), nil
+}
+
+func inspectHelp(ctx context.Context, binary string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := coreprocess.Command(ctx, binary, "--help")
 	var help bytes.Buffer
 	cmd.Stdout = &help
 	if err := coreprocess.Run(cmd); err != nil {
-		return nil, fmt.Errorf("cannot inspect Aether capabilities: %w", err)
+		return "", fmt.Errorf("cannot inspect Aether capabilities: %w", err)
 	}
-	return SupportedProfiles(profiles, help.String()), nil
+	return help.String(), nil
 }
 
 // KTest owns its native command line. Shell AETHER_* defaults can otherwise

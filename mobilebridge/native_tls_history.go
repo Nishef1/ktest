@@ -59,23 +59,30 @@ func preferNativeTLSHistory(profiles []aether.Profile, dir, key string) []aether
 	return profiles
 }
 
-func saveNativeTLSHistory(dir, key string, profile aether.Profile) {
+func saveNativeTLSHistory(dir, key string, profile aether.Profile) error {
 	if dir == "" || key == "" {
-		return
+		return os.ErrInvalid
 	}
 	path := nativeTLSHistoryPath(dir)
 	raw, err := json.Marshal(nativeHint{Key: key, ID: tlsshape.HistoryKey(profile), Checked: time.Now()})
-	if err != nil || os.MkdirAll(filepath.Dir(path), 0700) != nil {
-		return
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".native-tls-*.tmp")
 	if err != nil {
-		return
+		return err
 	}
 	defer os.Remove(tmp.Name())
 	_, err = tmp.Write(raw)
 	closeErr := tmp.Close()
-	if err == nil && closeErr == nil {
-		_ = os.Rename(tmp.Name(), path)
+	if err != nil {
+		return err
 	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(tmp.Name(), path)
 }
