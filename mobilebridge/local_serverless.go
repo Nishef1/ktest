@@ -23,7 +23,7 @@ import (
 // serverlessErrorTail bounds native stderr and redacts local app directories.
 // It deliberately does not retain stdout, DNS queries or traffic payloads.
 type serverlessErrorTail struct {
-	mu sync.Mutex
+	mu   sync.Mutex
 	data []byte
 }
 
@@ -65,9 +65,9 @@ func serverlessSOCKSReady(ctx context.Context, address string) bool {
 		return false
 	}
 	var reply [2]byte
-	return io.ReadFull(conn, reply[:]) == nil && reply == [2]byte{5, 0}
+	_, err = io.ReadFull(conn, reply[:])
+	return err == nil && reply == [2]byte{5, 0}
 }
-
 
 // launchAndroidServerless runs a pinned upstream v65 configuration behind
 // loopback, without system routes or an imported user-controlled profile.

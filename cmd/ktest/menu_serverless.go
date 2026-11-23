@@ -30,11 +30,18 @@ func (t *terminal) serverlessMenu(base string, in *input) bool {
 		t.ui.menuOption("0", "Back", "")
 		t.ui.Printf("  Profile > ")
 		answer, ok := in.read()
-		if !ok { return false }
-		if answer == "" || isBackChoice(answer) { return true }
+		if !ok {
+			return false
+		}
+		if answer == "" || isBackChoice(answer) {
+			return true
+		}
 		var variant string
 		for _, option := range serverlessVariants {
-			if answer == option.key { variant = option.variant; break }
+			if answer == option.key {
+				variant = option.variant
+				break
+			}
 		}
 		if !validServerlessVariant(variant) {
 			t.ui.Line(toneWarn, "Select 1, 2, 3 or 0.")
