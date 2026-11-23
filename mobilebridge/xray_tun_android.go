@@ -164,7 +164,13 @@ func (a *xrayTunPacketAdapter) Start(fd int, socksAddress string) bool {
 	if err := json.Unmarshal([]byte(VpnTunPlan()), &plan); err != nil || plan.MTU < 1280 {
 		return fail(errors.New("Go-owned Android TUN plan is invalid"))
 	}
-	config, err := xraycfg.TunConfig(port, plan.MTU)
+	proxyMu.Lock()
+	family := "both"
+	if activeProxy != nil && activeProxy.family != "" {
+		family = activeProxy.family
+	}
+	proxyMu.Unlock()
+	config, err := xraycfg.TunConfigForFamily(port, plan.MTU, family)
 	if err != nil {
 		return fail(err)
 	}

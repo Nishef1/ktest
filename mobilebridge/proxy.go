@@ -411,7 +411,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 	keepLocal := false
 	if localDir != "" {
 		if mode == "serverless" {
-			localCores, err = launchAndroidServerless(startContext, localDir, localStateDir, serverlessVariant)
+			localCores, err = launchAndroidServerless(startContext, localDir, localStateDir, serverlessVariant, family)
 		} else {
 			localCores, err = launchAndroidLocalCores(startContext, localDir, testOnly)
 		}

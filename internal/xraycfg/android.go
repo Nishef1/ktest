@@ -94,6 +94,13 @@ func ClientConfig(port int) ([]byte, error) {
 // deliberately not a direct Internet outbound: adaptive route selection,
 // DNS policy, foreign-exit verification and leak prevention remain in Go.
 func TunConfig(socksPort, mtu int) ([]byte, error) {
+	return TunConfigForFamily(socksPort, mtu, "both")
+}
+
+func TunConfigForFamily(socksPort, mtu int, family string) ([]byte, error) {
+	if family != "both" && family != "ipv4" && family != "ipv6" {
+		return nil, errors.New("invalid Android TUN destination family")
+	}
 	if socksPort < 1 || socksPort > 65535 {
 		return nil, errors.New("invalid local Go SOCKS port")
 	}
@@ -109,6 +116,7 @@ func TunConfig(socksPort, mtu int) ([]byte, error) {
 			"sniffing": map[string]any{
 				"enabled":      true,
 				"destOverride": []string{"http", "tls", "quic"},
+				"routeOnly":    family != "both",
 			},
 		}},
 		"outbounds": []any{map[string]any{

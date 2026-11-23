@@ -122,7 +122,7 @@ func runFamilyServerless(parent context.Context, binary, assets, variant, family
 	go func() {
 		defer close(done)
 		runErr = revive.RunPinned(ctx, revive.Config{XrayBinary: binary, Variant: variant,
-			AssetDir: assets, Port: port, Output: logs})
+			AssetDir: assets, Port: port, Output: logs, DestinationFamily: family})
 	}()
 	defer func() { cancel(); <-done }()
 	ready, finish := context.WithTimeout(ctx, 20*time.Second)

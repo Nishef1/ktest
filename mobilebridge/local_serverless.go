@@ -72,7 +72,7 @@ func serverlessSOCKSReady(ctx context.Context, address string) bool {
 // launchAndroidServerless runs a pinned upstream v65 configuration behind
 // loopback, without system routes or an imported user-controlled profile.
 // Its original DNS/fragment/OOB policy belongs to Xray and uses the ISP IP.
-func launchAndroidServerless(ctx context.Context, nativeDir, privateDir, variant string) (*localCoreSet, error) {
+func launchAndroidServerless(ctx context.Context, nativeDir, privateDir, variant string, family ...string) (*localCoreSet, error) {
 	binary, err := xraycfg.AndroidBinary(nativeDir, runtime.GOARCH)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,11 @@ func launchAndroidServerless(ctx context.Context, nativeDir, privateDir, variant
 	address := listener.Addr().String()
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	payload, err := revive.SelectPinnedProfileOnPort(variant, port)
+	selectedFamily := "both"
+	if len(family) > 0 {
+		selectedFamily = family[0]
+	}
+	payload, err := revive.SelectPinnedProfileForFamily(variant, port, selectedFamily)
 	if err != nil {
 		return nil, err
 	}

@@ -243,6 +243,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "TUN config generator failed" }
           & ./portable/ktest/cores/sing-box.exe check -c build/tun-preview.json
           if ($LASTEXITCODE -ne 0) { throw "sing-box rejected generated TUN config" }
+          foreach ($family in @("ipv4", "ipv6")) {
+            foreach ($variant in @("A", "B", "OOB")) {
+              $profile = "build/serverless-$variant-$family.json"
+              & ./portable/ktest/ktest.exe serverless-family-preview $variant $family | Set-Content -Encoding utf8 $profile
+              if ($LASTEXITCODE -ne 0) { throw "Serverless $variant $family generator failed" }
+              & ./portable/ktest/cores/xray.exe run -test -c $profile
+              if ($LASTEXITCODE -ne 0) { throw "Xray rejected Serverless $variant $family profile" }
+            }
+          }
           foreach ($family in @("both", "ipv4", "ipv6")) {
             & ./portable/ktest/ktest.exe tun-system-preview $family | Set-Content -Encoding utf8 "build/tun-system-$family.json"
             if ($LASTEXITCODE -ne 0) { throw "Production TUN $family generator failed" }

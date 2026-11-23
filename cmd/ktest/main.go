@@ -101,6 +101,16 @@ func run(args []string) int {
 		_, _ = os.Stdout.Write(selected)
 		return 0
 	}
+	// Internal pinned single-family Serverless export used by CI.
+	if len(args) == 3 && args[0] == "serverless-family-preview" {
+		cfg, err := revive.SelectPinnedProfileForFamily(args[1], revive.DefaultPort, args[2])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		fmt.Println(string(cfg))
+		return 0
+	}
 	// Internal production config export used by CI; never changes Windows routes.
 	if len(args) == 2 && args[0] == "tun-system-preview" {
 		cfg, err := systemtun.BuildSystemConfig(systemtun.Options{

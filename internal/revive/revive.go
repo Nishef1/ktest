@@ -108,6 +108,8 @@ type Config struct {
 	Variant    string
 	AssetDir   string
 	Port       int // loopback port; 0 means DefaultPort
+	// DestinationFamily is used only by the pinned profile behind KTest's family-enforcing proxy.
+	DestinationFamily string
 	Output     io.Writer
 	// DNS is an optional, already measured Google DNS preflight. When nil, Run
 	// measures it itself; callers that did so (the menu) avoid a second wait.
@@ -231,6 +233,12 @@ func runSelectedProfile(ctx context.Context, c Config, content []byte) error {
 			transport = "tcp"
 		}
 		profile, err = SelectProfileOnPort(content, c.Variant, transport, c.port())
+		if err != nil {
+			return err
+		}
+	}
+	if c.DestinationFamily != "" && c.DestinationFamily != "both" {
+		profile, err = constrainProfileFamily(profile, c.DestinationFamily)
 		if err != nil {
 			return err
 		}

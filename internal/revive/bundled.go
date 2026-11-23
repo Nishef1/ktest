@@ -3,6 +3,7 @@ package revive
 import (
 	"bytes"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,4 +33,55 @@ func VerifyPinnedSubscriptionFile(path string) error {
 		return errors.New("Serverless profile differs from the pinned upstream v65")
 	}
 	return nil
+}
+
+// SelectPinnedProfileForFamily preserves the vetted source subscription;
+// in single-family mode the Go proxy supplies already validated numeric
+// destinations. Xray must not replace them with SNI names or CDN redirects.
+func SelectPinnedProfileForFamily(variant string, port int, family string) ([]byte, error) {
+	payload, err := SelectPinnedProfileOnPort(variant, port)
+	if err != nil {
+		return nil, err
+	}
+	return constrainProfileFamily(payload, family)
+}
+
+func constrainProfileFamily(payload []byte, family string) ([]byte, error) {
+	if family == "" || family == "both" {
+		return payload, nil
+	}
+	if family != "ipv4" && family != "ipv6" {
+		return nil, errors.New("invalid Serverless destination family")
+	}
+	var config map[string]any
+	if err := json.Unmarshal(payload, &config); err != nil {
+		return nil, err
+	}
+	inbounds, ok := config["inbounds"].([]any)
+	if !ok || len(inbounds) != 1 {
+		return nil, errors.New("expected one pinned Serverless inbound")
+	}
+	inbound, ok := inbounds[0].(map[string]any)
+	if !ok {
+		return nil, errors.New("invalid Serverless inbound")
+	}
+	if sniffing, ok := inbound["sniffing"].(map[string]any); ok {
+		sniffing["routeOnly"] = true
+	}
+	outbounds, ok := config["outbounds"].([]any)
+	if !ok || len(outbounds) == 0 {
+		return nil, errors.New("missing Serverless outbounds")
+	}
+	for _, item := range outbounds {
+		outbound, ok := item.(map[string]any)
+		if !ok {
+			return nil, errors.New("invalid Serverless outbound")
+		}
+		if settings, ok := outbound["settings"].(map[string]any); ok {
+			// A direct CDN redirect can re-resolve to the opposite family.
+			// Preserve the numeric application destination instead.
+			delete(settings, "redirect")
+		}
+	}
+	return json.MarshalIndent(config, "", "  ")
 }
