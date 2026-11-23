@@ -130,6 +130,9 @@ func currentReportLocked() proxyReport {
 		ExitLocation: activeProxy.exitLocation,
 		Detail:       "Local proxy listeners are active. Configure a proxy-capable app; VPN is not enabled.",
 	}
+	if activeProxy.mode == "serverless" {
+		report.Detail = "Serverless runs through the original ISP IP via local HTTP/SOCKS5; no foreign VPN is active."
+	}
 	activeProxy.diagnostics.mu.Lock()
 	report.DNSFailures, report.DNSError = activeProxy.diagnostics.dnsFailures, activeProxy.diagnostics.dnsError
 	report.TCPAttempts, report.TCPFailures, report.TLSResponses = activeProxy.diagnostics.tcpAttempts, activeProxy.diagnostics.tcpFailures, activeProxy.diagnostics.tlsResponses
@@ -153,6 +156,16 @@ func currentReportLocked() proxyReport {
 	report.XrayError = activeProxy.xrayError
 	if activeProxy.localCores != nil {
 		for _, c := range activeProxy.localCores.cores {
+			if activeProxy.mode == "serverless" {
+				report.Native, report.Method = true, c.method
+				select {
+				case <-c.done:
+					report.XrayError = "Serverless Xray exited; local proxy is no longer usable"
+				default:
+					report.XrayReady = true
+				}
+				continue
+			}
 			if c.method != "Xray TLS fragment" {
 				continue
 			}
