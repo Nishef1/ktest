@@ -101,6 +101,9 @@ func (p *Proxy) order(host, port string) []*upstreamState {
 	m := p.memoryLocked(host, port)
 	literal := net.ParseIP(host)
 	for _, u := range p.ups {
+		if p.singleFamily() && u.Takeover != nil {
+			continue
+		}
 		if u.Match != nil && !u.Match(host) {
 			continue
 		}

@@ -115,7 +115,11 @@ type FrozenRoutes struct {
 }
 
 type Config struct {
-	Upstreams []Upstream
+	// DestinationFamily governs managed application destinations, not the
+	// native tunnel's gateway, loopback IPC, or encrypted DNS bootstrap.
+	// Empty and "both" preserve the existing adaptive dual-stack behavior.
+	DestinationFamily string
+	Upstreams         []Upstream
 	Frozen    *FrozenRoutes
 	// ExitOnly forces matched names to use only verified foreign exits.
 	// If none is present, fail closed instead of silently revealing the ISP IP.
@@ -310,6 +314,22 @@ func allowedLocalOnly(u Upstream) bool {
 }
 
 func New(cfg Config) (*Proxy, error) {
+	if !ValidDestinationFamily(cfg.DestinationFamily) {
+		return nil, errors.New("destination IP family must be both, ipv4 or ipv6")
+	}
+	if cfg.DestinationFamily == "" {
+		cfg.DestinationFamily = "both"
+	}
+	if cfg.DestinationFamily != "both" {
+		if cfg.Resolve == nil && cfg.DestinationFamily == "ipv4" ||
+			cfg.Resolve6 == nil && cfg.DestinationFamily == "ipv6" {
+			return nil, errors.New("single-family mode requires a trusted resolver for the selected family")
+		}
+		cfg.ExchangeDNS = familyDNS(cfg.DestinationFamily, cfg.ExchangeDNS)
+		if cfg.HistoryKey != "" {
+			cfg.HistoryKey += ":" + cfg.DestinationFamily
+		}
+	}
 	// Exit modes may start empty: their exits are added once found.
 	if len(cfg.Upstreams) == 0 && cfg.ExitOnly == nil && cfg.ExitRequired == nil {
 		return nil, errors.New("at least one upstream is required")
@@ -687,6 +707,13 @@ func (p *Proxy) handle(ctx context.Context, client net.Conn) {
 	}
 	if command == 3 {
 		p.serveUDP(ctx, client, host, port)
+		return
+	}
+	// Reject incompatible literal destinations before SOCKS acknowledges.
+	// Port 53 is a local DNS interception endpoint, not an application route.
+	if !(port == "53" && p.cfg.ExchangeDNS != nil) && !p.familyAllows(host) {
+		_, _ = client.Write([]byte{5, 8, 0, 1, 0, 0, 0, 0, 0, 0})
+		p.emit(ctx, Event{Host: host, Port: port, Site: siteKey(host), Blocked: true, Err: "destination IP family is prohibited"})
 		return
 	}
 	// Success is announced before any upstream is known: a TLS client only
@@ -1118,6 +1145,9 @@ func drain(results <-chan outcome, pending int) {
 // attempt requires a complete, structurally valid ServerHello before selection.
 func (p *Proxy) attempt(ctx context.Context, u *upstreamState, host, port string, flight []byte) (winner, error) {
 	if u.Takeover != nil {
+		if p.singleFamily() {
+			return winner{}, errors.New("fronting cannot enforce destination IP family")
+		}
 		tctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout+p.cfg.FirstByteTimeout)
 		defer cancel()
 		sess, err := u.Takeover(tctx, host, port, flight)
@@ -1433,8 +1463,26 @@ func (p *Proxy) dial(ctx context.Context, u *upstreamState, host, port string) (
 	network, resolver := "tcp", p.cfg.Resolve
 	if u.Network == "tcp6" {
 		network, resolver = "tcp6", p.cfg.Resolve6
+	} else if u.Network == "tcp4" {
+		network = "tcp4"
 	}
-	if (u.LocalDNS || u.Addr == "") && net.ParseIP(host) == nil {
+	if p.singleFamily() && ctx.Value(dnsBootstrapKey{}) != true {
+		if !p.familyAllows(host) {
+			return nil, errors.New("destination IP family is prohibited")
+		}
+		network = "tcp4"
+		if p.cfg.DestinationFamily == "ipv6" {
+			network = "tcp6"
+		}
+		if u.Network == "tcp4" && network != "tcp4" || u.Network == "tcp6" && network != "tcp6" {
+			return nil, errors.New("upstream does not support selected destination family")
+		}
+		var err error
+		host, err = p.familyTarget(dctx, host)
+		if err != nil {
+			return nil, err
+		}
+	} else if (u.LocalDNS || u.Addr == "") && net.ParseIP(host) == nil {
 		if resolver == nil && u.LocalBypass {
 			return nil, errors.New("trusted DNS is required before connecting through a local anti-DPI proxy")
 		}

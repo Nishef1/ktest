@@ -97,6 +97,24 @@ func (p *Proxy) serveUDP(parent context.Context, control net.Conn, host, port st
 			}()
 			continue
 		}
+		// Keep the original domain for exit authorization. For a selected
+		// family, the relay receives only a trusted numeric destination.
+		var outgoing []byte
+		if p.singleFamily() {
+			if !p.familyAllows(destination) {
+				continue
+			}
+			resolved, resolveErr := p.familyTarget(ctx, destination)
+			if resolveErr != nil {
+				continue
+			}
+			outgoing, err = udpPacket(resolved, dstPort, payload)
+			if err != nil {
+				continue
+			}
+		} else {
+			outgoing = buffer[:n]
+		}
 		if exit == nil {
 			exit, err = p.openUDPExit(ctx, destination, dstPort)
 			if err != nil {
@@ -115,7 +133,8 @@ func (p *Proxy) serveUDP(parent context.Context, control net.Conn, host, port st
 					if err != nil {
 						return
 					}
-					if _, _, _, err := parseUDPPacket(buf[:n]); err == nil {
+					if host, _, _, err := parseUDPPacket(buf[:n]); err == nil &&
+						(!p.singleFamily() || net.ParseIP(host) != nil && p.familyAllows(host)) {
 						_, _ = socket.WriteToUDP(buf[:n], target)
 					}
 				}
@@ -125,7 +144,7 @@ func (p *Proxy) serveUDP(parent context.Context, control net.Conn, host, port st
 			continue
 		}
 		// Preserve the SOCKS header, including numeric IPv6 destinations.
-		_, _ = exit.socket.Write(buffer[:n])
+		_, _ = exit.socket.Write(outgoing)
 	}
 }
 
