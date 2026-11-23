@@ -38,7 +38,11 @@ func MobileResolvers(mode, exitSOCKS string) (smartproxy.Resolver, smartproxy.Re
 // protected DNS outside the verified exit.
 func MobileResolversWithCustom(mode, exitSOCKS, customDNS string) (smartproxy.Resolver, smartproxy.Resolver, error) {
 	strict := mode == "aether" || mode == "psiphon" || mode == "tor"
+	serverless := mode == "serverless"
 	exitSOCKS = strings.TrimSpace(exitSOCKS)
+	if serverless && exitSOCKS == "" {
+		return nil, nil, errors.New("Serverless DNS requires its local Xray SOCKS route")
+	}
 	if strict && exitSOCKS == "" {
 		return nil, nil, errors.New("strict exit-only DNS requires an external verified SOCKS5 path")
 	}
@@ -53,15 +57,15 @@ func MobileResolversWithCustom(mode, exitSOCKS, customDNS string) (smartproxy.Re
 		}
 	}
 	endpoints := append([]smartproxy.DoHEndpoint(nil), smartproxy.DefaultDoH...)
-	if !strict {
+	if !strict && !serverless {
 		// ECH bootstrap makes DNS possible even without a healthy default
 		// resolver, but its own direct dial is not permitted in strict mode.
 		endpoints = append(endpoints, ECHEndpoint())
 	}
 	var system func(context.Context, string, string) ([]net.IP, error)
-	if strict {
+	if strict || serverless {
 		system = func(context.Context, string, string) ([]net.IP, error) {
-			return nil, errors.New("system DNS disabled in foreign-exit-only mode")
+			return nil, errors.New("system DNS disabled for protected or Serverless DNS routes")
 		}
 	} else if strings.TrimSpace(customDNS) != "" {
 		resolver, err := resolverForServer(customDNS, "", dial)
@@ -95,6 +99,9 @@ func MobilePacketDNS(mode, exitSOCKS string) (func(context.Context, []byte) ([]b
 // use the plaintext override.
 func MobilePacketDNSWithCustom(mode, exitSOCKS, customDNS string) (func(context.Context, []byte) ([]byte, error), func(), error) {
 	strict := mode == "aether" || mode == "psiphon" || mode == "tor"
+	if mode == "serverless" && strings.TrimSpace(exitSOCKS) == "" {
+		return nil, nil, errors.New("Serverless packet DNS requires its local Xray SOCKS route")
+	}
 	if strict && exitSOCKS == "" {
 		return nil, nil, errors.New("strict packet DNS requires a verified exit")
 	}

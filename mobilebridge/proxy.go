@@ -161,6 +161,9 @@ func currentReportLocked() proxyReport {
 				select {
 				case <-c.done:
 					report.XrayError = "Serverless Xray exited; local proxy is no longer usable"
+					if c.err != nil {
+						report.XrayError = c.err.Error()
+					}
 				default:
 					report.XrayReady = true
 				}
@@ -510,14 +513,17 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		}
 	}
 	connectionpolicy.Configure(mode, &config)
-	// Use the same Go trusted/DoH/ECH resolver as the desktop connection.
-	// Aether never falls back to Android system DNS.
-	customDNS := currentDNSOverride()
-	config.Resolve, config.Resolve6, err = connectiondns.MobileResolversWithCustom(mode, upstream, customDNS)
+	// Keep Serverless's DNS inside its pinned Xray SOCKS route. Do not
+	// silently apply the Balanced/Fast custom plaintext DNS setting to it.
+	dnsSOCKS, customDNS, err := mobileDNSRoute(mode, upstream, localCores, currentDNSOverride())
 	if err != nil {
 		return "", err
 	}
-	exchange, closeDNS, err := connectiondns.MobilePacketDNSWithCustom(mode, upstream, customDNS)
+	config.Resolve, config.Resolve6, err = connectiondns.MobileResolversWithCustom(mode, dnsSOCKS, customDNS)
+	if err != nil {
+		return "", err
+	}
+	exchange, closeDNS, err := connectiondns.MobilePacketDNSWithCustom(mode, dnsSOCKS, customDNS)
 	if err != nil {
 		return "", err
 	}
@@ -668,6 +674,9 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 						stopped := activeProxy == session
 						if stopped {
 							proxyFailure = "Serverless Xray exited; reconnect to retry the selected profile"
+							if child.err != nil {
+								proxyFailure = child.err.Error()
+							}
 							stopLocked()
 						}
 						proxyMu.Unlock()
@@ -805,4 +814,21 @@ func ProxyReady() bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// mobileDNSRoute routes auxiliary DoH and packet DNS requests through the
+// selected Serverless Xray local proxy, preserving its IP/DNS rules.
+func mobileDNSRoute(mode, upstream string, local *localCoreSet, customDNS string) (string, string, error) {
+	if mode != "serverless" {
+		return upstream, customDNS, nil
+	}
+	if local == nil || len(local.upstreams) != 1 {
+		return "", "", errors.New("Serverless DNS requires exactly one pinned local Xray proxy")
+	}
+	address := local.upstreams[0].Addr
+	host, _, err := net.SplitHostPort(address)
+	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		return "", "", errors.New("Serverless DNS requires a loopback Xray proxy")
+	}
+	return address, "", nil // Never inherit custom plaintext DNS from Balanced/Fast.
 }
