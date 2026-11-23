@@ -46,6 +46,8 @@ class KTestVpnService : VpnService() {
             private set
         @Volatile var lastError: String? = null
             private set
+        @Volatile var ipv6RouteInstalled: Boolean = false
+            private set
 
         /** Called by ProxyService right before ACTION_START so stale state is never observed. */
         fun markStarting() {
@@ -128,7 +130,8 @@ class KTestVpnService : VpnService() {
                         // Keep the requested v6 path even if the initial trace
                         // is unavailable; the core will fail closed, not fall
                         // back to the underlay or IPv4.
-                        if (family == "ipv6" || (family == "both" && verifiedProxyIPv6())) {
+                        val enableIPv6 = family == "ipv6" || (family == "both" && verifiedProxyIPv6())
+                        if (enableIPv6) {
                             builder.addAddress(plan.getString("ipv6_address"), plan.getInt("ipv6_prefix"))
                                 .addRoute(plan.getString("ipv6_route"), 0)
                                 .addDnsServer(plan.getString("ipv6_dns"))
@@ -138,6 +141,7 @@ class KTestVpnService : VpnService() {
                         // Attaching the packet adapter is time-critical: Android
                         // has already switched routes after Builder.establish().
                         tun = tunDevice
+                        ipv6RouteInstalled = enableIPv6
                         // Go prefers the pinned Xray TUN inbound and falls back
                         // to HEV if startup fails. Both feed the same adaptive
                         // Go SOCKS policy; Kotlin never selects site routes.
@@ -274,6 +278,7 @@ class KTestVpnService : VpnService() {
         runCatching { setUnderlyingNetworks(null) }
         runCatching { tun?.close() }
         tun = null
+        ipv6RouteInstalled = false
     }
 
     // A foreground notification may be associated with both running services.

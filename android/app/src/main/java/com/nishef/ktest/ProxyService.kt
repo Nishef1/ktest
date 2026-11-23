@@ -153,6 +153,18 @@ class ProxyService : Service() {
         }
     }
 
+    // Only add a newly proven IPv6 route via the serialized recovery path.
+    // Do not tear down a dual-stack VPN on one transient trace failure;
+    // its already-installed v6 route remains managed and can recover.
+    private fun recoverNewIPv6Route(): Boolean {
+        if (destinationFamily != "both" || activeRequest?.getBooleanExtra(EXTRA_VPN, false) != true ||
+            KTestVpnService.state != "tun_running_unverified" || KTestVpnService.ipv6RouteInstalled) return false
+        val proven = runCatching {
+            JSONObject(verifiedExitReport).optJSONObject("ipv6")?.optString("ip").orEmpty().contains(':')
+        }.getOrDefault(false)
+        return proven && requestAutomaticRecovery()
+    }
+
     // Reconnect after a network handover to refresh DNS and transport state.
     private fun prepareServerlessAssets(): String {
         val directory = File(filesDir, "xray-serverless-assets")
@@ -477,6 +489,7 @@ class ProxyService : Service() {
                                 nextExitCheck = SystemClock.elapsedRealtime() + 60_000L
                                 val verified = verifyPublicExit(generation)
                                 if (wanted && generation == sessionGeneration) {
+                                    if (recoverNewIPv6Route()) break
                                     connectionState = if (verified) "connected" else "limited"
                                     getSystemService(NotificationManager::class.java)
                                         .notify(NOTIFICATION_ID, notification(title, verified, limited = !verified))
@@ -539,6 +552,7 @@ class ProxyService : Service() {
                     worker.launch {
                         val verified = verifyPublicExit(generation)
                         if (wanted && generation == sessionGeneration) {
+                            if (recoverNewIPv6Route()) return@launch
                             connectionState = if (verified) "connected" else "limited"
                             getSystemService(NotificationManager::class.java).notify(
                                 NOTIFICATION_ID,

@@ -1010,9 +1010,9 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				return p.DialVerifiedExitDNS(ctx, host, port)
 			}
 		}
-		if singleFamily && o.mode.exitOnly() {
+		if singleFamily {
 			// Domain resolution introduced by a forced-family policy must
-			// not send protected names to the physical/system DNS resolver.
+			// not send names to the physical/system DNS resolver.
 			// JSON DNS requires the ordinary JSON endpoints (not wire DoH).
 			endpoints = nil
 			for _, ep := range smartproxy.DefaultDoH {
@@ -1020,11 +1020,13 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 					endpoints = append(endpoints, ep)
 				}
 			}
-			dial = wireDial
+			if o.mode.exitOnly() {
+				dial = wireDial
+			}
 		}
 		dohA = smartproxy.NewDoH(endpoints, dial, nil)
 		dohAAAA = smartproxy.NewDoHType(endpoints, dial, nil, "AAAA")
-		exchange, closePacketDNS := smartproxy.NewWireDoH(connectiondns.PacketEndpoints(!o.mode.exitOnly()), wireDial, nil)
+		exchange, closePacketDNS := smartproxy.NewWireDoH(connectiondns.PacketEndpoints(!o.mode.exitOnly() && !singleFamily), wireDial, nil)
 		cfg.ExchangeDNS = exchange
 		defer closePacketDNS()
 	}
@@ -1226,6 +1228,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				}
 				verdict = toneOK
 			} else {
+				if singleFamily {
+					t.Line(toneFail, "Requested single-family TUN failed; connection stopped rather than silently continuing proxy-only.")
+					return 1
+				}
 				verdict = toneWarn
 				tunPending = true
 				tunRetryAt = time.Now().Add(tunRetryDelay(tunAttempts))
@@ -1370,6 +1376,10 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				case <-tn.done:
 					tn.stop(t)
 					tn = nil
+					if singleFamily {
+						t.Line(toneFail, "Single-family system tunnel stopped; reconnect explicitly. OS traffic is no longer managed.")
+						return 1
+					}
 					tunPending = true
 					tunRetryAt = time.Now().Add(tunRetryDelay(tunAttempts))
 					t.Line(toneWarn, "System tunnel exited; traffic is proxy-only until a new tunnel is verified.")
