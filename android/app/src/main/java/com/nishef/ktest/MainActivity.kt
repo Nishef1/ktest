@@ -139,9 +139,7 @@ private fun KTestApp() {
     // distinguishes connected and limited after a real HTTPS IP preflight.
     val running = serviceConnectionState in setOf("connected", "limited")
     val activeMode = modes.firstOrNull { it.id == modeId } ?: modes.first()
-    // Serverless is a direct-ISP local proxy. Do not coerce the user's saved
-    // VPN preference for other modes or silently route other apps through it.
-    val effectiveCoverage = if (activeMode.id == "serverless") "proxy" else coverage
+    val effectiveCoverage = coverage
     val manualTesting = routePlan.manualBusy
     val offline = !running && !connecting && !disconnecting && !connectAfterConsent && !routePlan.busy &&
         !serviceTransitioning && serviceConnectionState != "connected" &&
@@ -433,10 +431,8 @@ private fun KTestApp() {
                                 }
                             },
                             onCoverage = {
-                                if (activeMode.id != "serverless") {
-                                    coverage = it
-                                    prefs.edit().putString("coverage", it).apply()
-                                }
+                                coverage = it
+                                prefs.edit().putString("coverage", it).apply()
                             },
                             onPower = {
                                 error = null

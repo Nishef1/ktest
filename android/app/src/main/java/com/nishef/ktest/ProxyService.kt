@@ -376,8 +376,7 @@ class ProxyService : Service() {
                                 }
                                 if (mode == "serverless") {
                                     // Upstream Serverless has its own DNS/outbound rules.
-                                    // It is explicitly proxy-only; no implicit VPN or foreign exit.
-                                    check(!vpn) { "Serverless is proxy-only; choose Psiphon or Aether for a managed VPN." }
+                                    // VPN consent controls device coverage, not the public exit IP.
                                     val net = getSystemService(ConnectivityManager::class.java).activeNetwork
                                         ?: error("Underlying network unavailable for Serverless")
                                     watchBalancedNetwork(net.networkHandle)

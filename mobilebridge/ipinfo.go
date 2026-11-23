@@ -5,14 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Nishef1/ktest/internal/egresscheck"
-	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
 type ipFamilyResult struct {
@@ -29,25 +25,6 @@ type publicIPReport struct {
 	IPv6      *ipFamilyResult `json:"ipv6,omitempty"`
 	IPv4Error string          `json:"ipv4_error,omitempty"`
 	IPv6Error string          `json:"ipv6_error,omitempty"`
-}
-
-type traceTarget struct {
-	host string
-	addr string
-}
-
-// IPv4 and IPv6 diagnostics use literal destination addresses and TLS
-// certificate validation for one.one.one.one. A hostname-only SOCKS request
-// would allow the remote proxy to select a different IP family and give a
-// misleading "IPv6 working" result. The physical client and proxy can still
-// use another address family for the *carrier* itself.
-var traceTargetsIPv4 = []traceTarget{
-	{"one.one.one.one", "1.1.1.1:443"},
-	{"one.one.one.one", "1.0.0.1:443"},
-}
-var traceTargetsIPv6 = []traceTarget{
-	{"one.one.one.one", "[2606:4700:4700::1111]:443"},
-	{"one.one.one.one", "[2606:4700:4700::1001]:443"},
 }
 
 func validIPFamily(family string) bool {
@@ -138,91 +115,5 @@ func assignTraceResult(report *publicIPReport, family, ip, country string, err e
 }
 
 func checkTraceFamily(parent context.Context, family, socks string) (string, string, error) {
-	var targets []traceTarget
-	if family == "ipv4" {
-		targets = traceTargetsIPv4
-	} else if family == "ipv6" {
-		targets = traceTargetsIPv6
-	} else {
-		return "", "", errors.New("unsupported IP family")
-	}
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	type result struct {
-		ip, country string
-		err         error
-	}
-	results := make(chan result, len(targets))
-	for _, target := range targets {
-		go func(t traceTarget) {
-			ip, country, err := fetchTrace(ctx, t.host, t.addr, socks, family)
-			results <- result{ip: ip, country: country, err: err}
-		}(target)
-	}
-	var lastErr error
-	for range targets {
-		r := <-results
-		if r.err == nil {
-			return r.ip, r.country, nil
-		}
-		lastErr = r.err
-	}
-	return "", "", fmt.Errorf("%s HTTPS trace unavailable: %w", family, lastErr)
-}
-
-func fetchTrace(ctx context.Context, host, addr, socks, family string) (string, string, error) {
-	if !validIPFamily(family) || family == "both" {
-		return "", "", errors.New("trace must use one IP family")
-	}
-	destination, _, err := net.SplitHostPort(addr)
-	if err != nil || net.ParseIP(destination) == nil {
-		return "", "", errors.New("trace target must be a pinned numeric IP")
-	}
-	if (net.ParseIP(destination).To4() != nil) != (family == "ipv4") {
-		return "", "", errors.New("trace address family mismatch")
-	}
-	network := "tcp4"
-	if family == "ipv6" {
-		network = "tcp6"
-	}
-	tr := &http.Transport{
-		Proxy: nil, DisableKeepAlives: true, MaxResponseHeaderBytes: 32 << 10,
-		TLSHandshakeTimeout: 8 * time.Second, ResponseHeaderTimeout: 8 * time.Second,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			if socks != "" {
-				// Numeric SOCKS destination forces the measured target family;
-				// TLS still validates the actual HTTPS hostname, not this IP.
-				return smartproxy.DialVia(ctx, socks, destination, "443", 8*time.Second)
-			}
-			return (&net.Dialer{Timeout: 6 * time.Second}).DialContext(ctx, network, addr)
-		},
-	}
-	defer tr.CloseIdleConnections()
-	client := &http.Client{Transport: tr, Timeout: 11 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/cdn-cgi/trace", nil)
-	if err != nil {
-		return "", "", err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("%s: HTTP %d", host, resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if err != nil {
-		return "", "", err
-	}
-	ip, country, err := egresscheck.ParseExitTrace(string(body))
-	if err != nil {
-		return "", "", err
-	}
-	parsed := net.ParseIP(ip)
-	if parsed == nil || (parsed.To4() != nil) != (family == "ipv4") {
-		return "", "", fmt.Errorf("%s probe returned an IP from the wrong address family", family)
-	}
-	return ip, country, nil
+	return egresscheck.ProbeExitLocationFamily(parent, socks, family)
 }

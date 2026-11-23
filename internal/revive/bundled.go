@@ -78,6 +78,20 @@ func constrainProfileFamily(payload []byte, family string) ([]byte, error) {
 			sniffing["destOverride"] = filtered
 		}
 	}
+	// Numeric destination enforcement cannot operate on fake DNS addresses.
+	// Keep the original real DNS chain but remove its fake-IP server.
+	if dns, ok := config["dns"].(map[string]any); ok {
+		if servers, ok := dns["servers"].([]any); ok {
+			filtered := make([]any, 0, len(servers))
+			for _, item := range servers {
+				if server, ok := item.(map[string]any); ok && server["address"] == "fakedns" {
+					continue
+				}
+				filtered = append(filtered, item)
+			}
+			dns["servers"] = filtered
+		}
+	}
 	outbounds, ok := config["outbounds"].([]any)
 	if !ok || len(outbounds) == 0 {
 		return nil, errors.New("missing Serverless outbounds")

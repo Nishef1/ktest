@@ -119,6 +119,18 @@ func launchAndroidServerless(ctx context.Context, nativeDir, privateDir, variant
 		_ = os.Remove(path)
 		return nil, err
 	}
+	// Validate the exact generated configuration before reporting a live core.
+	checkCtx, checkCancel := context.WithTimeout(ctx, 10*time.Second)
+	check := coreprocess.Command(checkCtx, binary, "run", "-test", "-c", path)
+	check.Env = append(os.Environ(), "XRAY_LOCATION_ASSET="+assets)
+	checkTail := &serverlessErrorTail{}
+	check.Stdout, check.Stderr = io.Discard, checkTail
+	checkErr := coreprocess.Run(check)
+	checkCancel()
+	if checkErr != nil {
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("Serverless config rejected: %w (%s)", checkErr, checkTail.summary(nativeDir, privateDir))
+	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	core := &nativeCore{address: address, method: "Serverless " + variant, cancel: cancel, done: make(chan struct{})}
 	go func() {

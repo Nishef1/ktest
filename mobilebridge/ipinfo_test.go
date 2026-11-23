@@ -2,7 +2,6 @@ package mobilebridge
 
 import (
 	"errors"
-	"net"
 	"strings"
 	"testing"
 )
@@ -16,7 +15,7 @@ func TestConnectionIPCheckRequiresARunningProxy(t *testing.T) {
 	}
 }
 
-func TestIPFamilyValidationAndPinnedTargets(t *testing.T) {
+func TestIPFamilyValidation(t *testing.T) {
 	for _, f := range []string{"ipv4", "ipv6", "both"} {
 		if !validIPFamily(f) {
 			t.Fatalf("IP family %s rejected", f)
@@ -28,26 +27,6 @@ func TestIPFamilyValidationAndPinnedTargets(t *testing.T) {
 		}
 		if _, err := PublicIPForFamily(false, f); err == nil {
 			t.Fatal("invalid family passed before any network access")
-		}
-	}
-	for _, family := range []struct {
-		name  string
-		items []traceTarget
-	}{
-		{"ipv4", traceTargetsIPv4}, {"ipv6", traceTargetsIPv6},
-	} {
-		if len(family.items) < 2 {
-			t.Fatal("each IP family needs independent numeric trace targets")
-		}
-		for _, target := range family.items {
-			ipString, _, err := net.SplitHostPort(target.addr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ip := net.ParseIP(ipString)
-			if ip == nil || (ip.To4() != nil) != (family.name == "ipv4") {
-				t.Fatalf("%s target has wrong family: %s", family.name, target.addr)
-			}
 		}
 	}
 }

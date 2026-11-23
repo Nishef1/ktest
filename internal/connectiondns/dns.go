@@ -55,6 +55,22 @@ func MobileResolversPolicy(mode, exitSOCKS, customDNS string, encryptedOnly bool
 	if strict && exitSOCKS == "" {
 		return nil, nil, errors.New("strict exit-only DNS requires an external verified SOCKS5 path")
 	}
+	if serverless {
+		// The pinned profile intercepts port 53 and owns the DNS strategy.
+		// It intentionally blocks several public DoH destinations, so a
+		// second Go DoH resolver inside it would defeat that strategy.
+		dial := func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return smartproxy.DialVia(ctx, exitSOCKS, "1.1.1.1", "53", 8*time.Second)
+		}
+		resolver, err := resolverForServer("1.1.1.1", "tcp", dial)
+		if err != nil {
+			return nil, nil, err
+		}
+		options := smartproxy.TrustedOptions{System: resolver.LookupIP}
+		a := smartproxy.NewTrusted(options)
+		options.IPv6 = true
+		return a, smartproxy.NewTrusted(options), nil
+	}
 	var dial smartproxy.DialFunc
 	if exitSOCKS != "" {
 		dial = func(ctx context.Context, _, addr string) (net.Conn, error) {
@@ -133,6 +149,14 @@ func MobilePacketDNSWithCustom(mode, exitSOCKS, customDNS string) (func(context.
 			}
 			return smartproxy.DialVia(ctx, exitSOCKS, host, port, 8*time.Second)
 		}
+	}
+	if mode == "serverless" {
+		// DNS-over-TCP to Xray's intercepted port 53, not to the ISP.
+		exchange, err := NewCustomWireDNS("1.1.1.1", dial)
+		if err != nil {
+			return nil, nil, err
+		}
+		return exchange, func() {}, nil
 	}
 	exchange, closeIdle := smartproxy.NewWireDoH(PacketEndpoints(!strict && exitSOCKS == ""), dial, nil)
 	if strict || strings.TrimSpace(customDNS) == "" {

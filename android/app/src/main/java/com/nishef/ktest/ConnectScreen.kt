@@ -102,7 +102,7 @@ internal fun ConnectScreen(
         // Connection is the primary action; keep it above network diagnostics
         // on compact phones so the user need not scroll before connecting.
         Hero(activeMode, state, status, upstream, coverage, vpnActive, connectBlocked, routePlan.manualBusy, onPower)
-        PublicIpPanel(state == LinkState.Active)
+        PublicIpPanel(state == LinkState.Active, destinationFamily)
         AnimatedVisibility(error != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
             Banner(error.orEmpty(), Tone.Danger, onDismissError)
         }
@@ -111,7 +111,7 @@ internal fun ConnectScreen(
             EndpointsPanel(status, routeReport, checkingRoute, onCheckRoute, onCopy)
         }
         // Connection details are below the core controls.
-        CoverageCard(coverage, onCoverage, !locked && activeMode.id != "serverless")
+        CoverageCard(coverage, onCoverage, !locked)
         Panel {
             SectionLabel("Destination IP family")
             Segmented(listOf("ipv4" to "IPv4 only", "both" to "Both", "ipv6" to "IPv6 only"),
@@ -121,7 +121,7 @@ internal fun ConnectScreen(
             if (locked) Text("Disconnect to change the destination family.", color = K.faint, fontSize = 11.sp)
         }
         if (activeMode.id == "serverless") {
-            Note("Serverless uses the ISP's original public IP. Only apps configured for the local HTTP/SOCKS5 proxy use this method; this is not a foreign VPN.", Tone.Warn)
+            Note("Serverless bypasses filtering using the ISP's public IP. VPN coverage routes device apps through the local Xray core; it does not create a foreign exit.", Tone.Warn)
         }
         ModeCard(activeMode, !locked, onMode)
         if (activeMode.id in nativeModes) {
@@ -390,15 +390,11 @@ internal fun flagOf(country: String): String =
     else String(Character.toChars(0x1F1E6 + (country[0] - 'A'))) + String(Character.toChars(0x1F1E6 + (country[1] - 'A')))
 
 @Composable
-private fun PublicIpPanel(connected: Boolean) {
+private fun PublicIpPanel(connected: Boolean, destinationFamily: String) {
     // ProxyService owns connected-IP verification. The UI only reads its
     // result; a separate probe here would race and contradict notification.
     val context = androidx.compose.ui.platform.LocalContext.current
-    val prefs = remember(context) { context.getSharedPreferences("ktest_android", android.content.Context.MODE_PRIVATE) }
-    var displayFamily by rememberSaveable {
-        mutableStateOf(prefs.getString("ip_display_family", "both")
-            ?.takeIf { it == "ipv4" || it == "ipv6" || it == "both" } ?: "both")
-    }
+    val displayFamily = destinationFamily
     var before by remember(displayFamily) {
         mutableStateOf(lastDirectIp?.takeIf { it.optString("family") == displayFamily })
     }
@@ -480,15 +476,6 @@ private fun PublicIpPanel(connected: Boolean) {
                 Icon(KIcons.Search, "Check IP again", tint = K.muted, modifier = Modifier.size(16.dp))
             }
         }
-        Text("Show public IP by destination family", color = K.muted, fontSize = 12.sp)
-        Segmented(
-            listOf("ipv4" to "IPv4 only", "both" to "Both", "ipv6" to "IPv6 only"),
-            displayFamily,
-            { value ->
-                displayFamily = value
-                prefs.edit().putString("ip_display_family", value).apply()
-            }
-        )
         for ((key, shortName) in families) {
             val direct = before?.optJSONObject(key)
             val exit = checkedExit?.optJSONObject(key)
@@ -504,7 +491,7 @@ private fun PublicIpPanel(connected: Boolean) {
                     color = K.amber, fontSize = 11.sp, lineHeight = 15.sp)
             }
         }
-        Text("This selector only filters the IP observations. Change Destination IP family below to enforce the family of managed connections.",
+        Text("IP checks follow the connection's IP family. A failed check may mean the measurement service is blocked.",
             color = K.muted, fontSize = 11.sp, lineHeight = 15.sp)
         if (!error.isNullOrBlank()) {
             Text(error.take(150), color = K.amber, fontSize = 11.sp, lineHeight = 15.sp)
