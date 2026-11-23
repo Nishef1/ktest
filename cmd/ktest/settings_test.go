@@ -282,3 +282,26 @@ func TestInteractiveServerlessChoiceAndEnterResume(t *testing.T) {
 		t.Fatal("Enter did not replay the Serverless selection:", resumed.String())
 	}
 }
+
+func TestSavedWindscribeModeCannotResetStrictFamily(t *testing.T) {
+	t.Setenv("KTEST_SETTINGS_FILE", filepath.Join(t.TempDir(), "settings.json"))
+	s, path, _, err := loadPreferences("package")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Connect["mode"] = "windscribe"
+	s.Connect["ip-family"] = "ipv6"
+	if err := saveSettings(path, s); err != nil {
+		t.Fatal(err)
+	}
+	_, _, o, err := loadPreferences("package")
+	if err != nil || o.destinationFamily != "ipv6" {
+		t.Fatalf("family preference reset: %q, %v", o.destinationFamily, err)
+	}
+	if err := validateConnectOptions(optionsForMode(o, ModeWindscribe)); err == nil {
+		t.Fatal("unsupported Windscribe family accepted")
+	}
+	if err := validateConnectOptions(optionsForMode(o, ModeBalanced)); err != nil {
+		t.Fatal(err)
+	}
+}

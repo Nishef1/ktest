@@ -88,7 +88,13 @@ func loadPreferences(base string) (userSettings, string, connectOptions, error) 
 	if err == nil {
 		options.mode, err = parseConnectionMode(string(options.mode))
 		if err == nil {
-			err = validateConnectOptions(optionsForMode(options, options.mode))
+			candidate := optionsForMode(options, options.mode)
+			// Preserve a valid family preference even if the last mode was
+			// Windscribe. Actual connections still reject the unsupported pair.
+			if candidate.mode.isWindscribe() && (candidate.destinationFamily == "ipv4" || candidate.destinationFamily == "ipv6") {
+				candidate.destinationFamily = "both"
+			}
+			err = validateConnectOptions(candidate)
 		}
 	}
 	if err != nil {

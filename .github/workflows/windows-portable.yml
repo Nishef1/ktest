@@ -243,6 +243,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "TUN config generator failed" }
           & ./portable/ktest/cores/sing-box.exe check -c build/tun-preview.json
           if ($LASTEXITCODE -ne 0) { throw "sing-box rejected generated TUN config" }
+          $env:XRAY_LOCATION_ASSET = (Resolve-Path portable/ktest/cores).Path
           foreach ($family in @("ipv4", "ipv6")) {
             foreach ($variant in @("A", "B", "OOB")) {
               $profile = "build/serverless-$variant-$family.json"

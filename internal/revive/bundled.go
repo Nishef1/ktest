@@ -67,6 +67,16 @@ func constrainProfileFamily(payload []byte, family string) ([]byte, error) {
 	}
 	if sniffing, ok := inbound["sniffing"].(map[string]any); ok {
 		sniffing["routeOnly"] = true
+		// FakeDNS destination replacement is incompatible with a numeric-only inlet.
+		if overrides, ok := sniffing["destOverride"].([]any); ok {
+			filtered := make([]any, 0, len(overrides))
+			for _, item := range overrides {
+				if item != "fakedns" {
+					filtered = append(filtered, item)
+				}
+			}
+			sniffing["destOverride"] = filtered
+		}
 	}
 	outbounds, ok := config["outbounds"].([]any)
 	if !ok || len(outbounds) == 0 {

@@ -110,7 +110,7 @@ type Config struct {
 	Port       int // loopback port; 0 means DefaultPort
 	// DestinationFamily is used only by the pinned profile behind KTest's family-enforcing proxy.
 	DestinationFamily string
-	Output     io.Writer
+	Output            io.Writer
 	// DNS is an optional, already measured Google DNS preflight. When nil, Run
 	// measures it itself; callers that did so (the menu) avoid a second wait.
 	DNS *dnscheck.Result
