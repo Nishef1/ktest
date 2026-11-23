@@ -62,6 +62,9 @@ class ProxyService : Service() {
             private set
         @Volatile var verifiedExitCountry: String = ""
             private set
+        /** Independently verified IPv4/IPv6 exit observations, never a routing promise. */
+        @Volatile var verifiedExitReport: String = ""
+            private set
         @Volatile var exitCheckError: String = ""
             private set
         @Volatile var exitCheckInProgress: Boolean = false
@@ -120,12 +123,16 @@ class ProxyService : Service() {
         if (!wanted || generation != sessionGeneration) return@withLock false
         exitCheckInProgress = true
         try {
-            val result = runCatching { JSONObject(Mobilebridge.publicIP(true)) }
+            // Explicitly measure both destination families through the live
+            // SOCKS policy. A successful IPv4 trace cannot certify IPv6.
+            val result = runCatching { JSONObject(Mobilebridge.publicIPForFamily(true, "both")) }
             if (!wanted || generation != sessionGeneration) return@withLock false
-            val ip = result.getOrNull()?.optString("ip").orEmpty()
+            val report = result.getOrNull()
+            val ip = report?.optString("ip").orEmpty()
             if (ip.isNotBlank()) {
                 verifiedExitIP = ip
-                verifiedExitCountry = result.getOrNull()?.optString("country").orEmpty()
+                verifiedExitCountry = report?.optString("country").orEmpty()
+                verifiedExitReport = report.toString()
                 exitCheckError = ""
                 true
             } else {
@@ -133,6 +140,7 @@ class ProxyService : Service() {
                 // Keep the local listener up, but downgrade the displayed proof.
                 verifiedExitIP = ""
                 verifiedExitCountry = ""
+                verifiedExitReport = ""
                 exitCheckError = result.exceptionOrNull()?.message
                     ?: "Public IP check did not return a verifiable exit"
                 false
@@ -319,6 +327,7 @@ class ProxyService : Service() {
                 val generation = ++sessionGeneration
                 verifiedExitIP = ""
                 verifiedExitCountry = ""
+                verifiedExitReport = ""
                 exitCheckError = ""
                 exitCheckInProgress = false
                 startForeground(NOTIFICATION_ID, notification(title))
@@ -548,6 +557,7 @@ class ProxyService : Service() {
                 sessionGeneration++
                 verifiedExitIP = ""
                 verifiedExitCountry = ""
+                verifiedExitReport = ""
                 exitCheckError = ""
                 stopVpn()
                 stopping = true
@@ -611,6 +621,7 @@ class ProxyService : Service() {
                 sessionGeneration++
                 verifiedExitIP = ""
                 verifiedExitCountry = ""
+                verifiedExitReport = ""
                 exitCheckError = ""
                 stopVpn()
                 stopping = true
