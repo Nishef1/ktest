@@ -76,3 +76,14 @@ func TestGoogleDNSVerifiedFallbackIsLastResortBeforeCloudflare(t *testing.T) {
 		}
 	}
 }
+
+func TestDNSPreflightOnlyForLegacyServerless(t *testing.T) {
+	old := []byte(`{"dns":{"servers":[{"address":"https://cloudflare-dns.com/dns-query"}]}}`)
+	modern := []byte(`{"dns":{"servers":[{"address":"h2c+one://cloudflare-dns.com/dns-query"},{"address":"localhost"}]}}`)
+	if !needsLegacyDNSBootstrap(old) {
+		t.Fatal("legacy DNS fallback was not recognized")
+	}
+	if needsLegacyDNSBootstrap(modern) || needsLegacyDNSBootstrap([]byte(`{}`)) {
+		t.Fatal("modern or absent DNS unexpectedly triggers startup probe")
+	}
+}

@@ -223,7 +223,7 @@ func TestSelectOfflineOOBOnLoopback(t *testing.T) {
 		} `json:"version"`
 		Inbounds []struct {
 			Listen string `json:"listen"`
-			Port int `json:"port"`
+			Port   int `json:"port"`
 		} `json:"inbounds"`
 	}
 	if err := json.Unmarshal(selected, &v); err != nil {

@@ -6,6 +6,28 @@ import (
 	"strings"
 )
 
+// needsLegacyDNSBootstrap restricts the Google DNS preflight to old imported
+// profiles. New v65 subscriptions use the upstream h2c+one resolver and must
+// not wait for an unrelated 8.8.8.8 reachability test at every connection.
+func needsLegacyDNSBootstrap(profile []byte) bool {
+	var parsed struct {
+		DNS struct {
+			Servers []struct {
+				Address string `json:"address"`
+			} `json:"servers"`
+		} `json:"dns"`
+	}
+	if json.Unmarshal(profile, &parsed) != nil {
+		return false
+	}
+	for _, server := range parsed.DNS.Servers {
+		if strings.EqualFold(server.Address, "https://cloudflare-dns.com/dns-query") {
+			return true
+		}
+	}
+	return false
+}
+
 // improveDNSBootstrap avoids a single hard dependency on Cloudflare DoH.
 // Native DNS is used only for known reachable Google domains, not YouTube.
 // Restricted domains try Google DoH and then the original Cloudflare DoH.

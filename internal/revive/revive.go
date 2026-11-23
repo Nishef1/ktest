@@ -57,7 +57,7 @@ func SelectProfileOnPort(data []byte, variant, verifiedTransport string, port in
 		}
 		candidates = []json.RawMessage{data}
 	}
-	want := "-frag" + strings.ToLower(variant)
+	want := "frag" + strings.ToLower(variant)
 	if variant == "OOB" {
 		want = "-oob"
 	}
@@ -70,7 +70,7 @@ func SelectProfileOnPort(data []byte, variant, verifiedTransport string, port in
 		if err := json.Unmarshal(obj["remarks"], &name); err != nil {
 			continue
 		}
-		if !strings.Contains(strings.ToLower(name), want) {
+		if !strings.HasSuffix(strings.ToLower(name), want) {
 			continue
 		}
 		var inbound []map[string]json.RawMessage
@@ -204,24 +204,32 @@ func Run(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
-	var google dnscheck.Result
-	if c.DNS != nil {
-		google = *c.DNS
-	} else {
-		google = dnscheck.CheckGoogleDNS(ctx)
-	}
-	if c.Output != nil {
-		fmt.Fprintln(c.Output, "DNS preflight:", google.Format())
-	}
-	transport := ""
-	if google.UDP {
-		transport = "udp"
-	} else if google.TCP {
-		transport = "tcp"
-	}
-	profile, err := SelectProfileOnPort(content, c.Variant, transport, c.port())
+	profile, err := SelectProfileOnPort(content, c.Variant, "", c.port())
 	if err != nil {
 		return err
+	}
+	// Current v65 has its own DNS hierarchy; the older v52 Cloudflare-DoH
+	// bootstrap is not used and must not add a blocking network request.
+	if needsLegacyDNSBootstrap(profile) {
+		var google dnscheck.Result
+		if c.DNS != nil {
+			google = *c.DNS
+		} else {
+			google = dnscheck.CheckGoogleDNS(ctx)
+		}
+		if c.Output != nil {
+			fmt.Fprintln(c.Output, "Legacy DNS preflight:", google.Format())
+		}
+		transport := ""
+		if google.UDP {
+			transport = "udp"
+		} else if google.TCP {
+			transport = "tcp"
+		}
+		profile, err = SelectProfileOnPort(content, c.Variant, transport, c.port())
+		if err != nil {
+			return err
+		}
 	}
 	return runProfile(ctx, c, profile)
 }
