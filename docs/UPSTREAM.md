@@ -9,7 +9,7 @@ Official release pages and pinned SHA-256 digests were checked before selection.
 | HEV | **2.20.0** | 2026-11-13 | Exact PattNG P74 submodule revision `75dbc1e`; smaller idle stack memory, UDP fallback and deadlock fixes; official AAR SHA-256 pinned | https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.20.0 |
 | ByeDPI | **v0.17.3** | Pinned | Hash-pinned Android ARM/ARM64 local anti-DPI helper; candidate strategies are not proven for every ISP | https://github.com/hufrea/byedpi/releases/tag/v0.17.3 |
 | PattNG app | **2.4.0-P74** | 2026-11-23 | Reference-only upstream app; app UI/config is not copied to KTest | https://github.com/patterniha/PattNG/releases/tag/2.4.0-P74 |
-| Serverless-for-Iran | **v65** | 2026-11-23 | Optional Windows offline A/B/OOB profiles; direct ISP IP, no foreign VPN exit; Android auto-routing does not import subscription | https://github.com/patterniha/Serverless-for-Iran |
+| Serverless-for-Iran | **v65** | 2026-11-23 | Windows and Android standalone selectable A/B/OOB local proxy; direct ISP IP, not a foreign VPN exit and never an implicit route in other modes | https://github.com/patterniha/Serverless-for-Iran |
 | Go | **1.27.2** | 2026-10-08 | Minimum toolchain updated; security fixes include TLS/HTTP | https://go.dev/doc/devel/release |
 | actions/checkout | **v7.0.1** | 2026-07-20 | CI on maintained `@v7` major | https://github.com/actions/checkout/releases |
 | actions/setup-go | **v7.0.0** | 2026-07-16 | CI on maintained `@v7` major | https://github.com/actions/setup-go/releases |

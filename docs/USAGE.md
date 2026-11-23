@@ -15,9 +15,9 @@ The everyday path needs no options and no knowledge of the methods behind it.
 
 From source: `go run ./cmd/ktest` (see "Where ktest looks for its files").
 
-On Windows, a first launch defaults to **TUN**; other platforms default to Proxy because this TUN integration is Windows-only. Menu option 7 shows `Current Mode: TUN` or `Current Mode: Proxy` and saves a change immediately. Its submenu marks the current choice and confirms a successful save. Closing the window does not lose it. Windscribe always uses its own VPN and does not change the saved coverage of other policies.
+On Windows, a first launch defaults to **TUN**; other platforms default to Proxy because this TUN integration is Windows-only. Menu option 8 shows `Current Mode: TUN` or `Current Mode: Proxy` and saves a change immediately. Its submenu marks the current choice and confirms a successful save. Closing the window does not lose it. Windscribe always uses its own VPN and does not change the saved coverage of other policies.
 
-The menu keeps keys 1–11 and 0. **Enter connects with the saved policy** (Balanced on a first launch). Keys 1–6 choose a connection family; Aether and Windscribe open their method submenus first. `Last used` and the disconnected status describe the current process, not a running VPN in another window. Reopening the menu never connects automatically. During a connection, Enter disconnects and returns to the menu. Ctrl+C is never a Back key: one press anywhere quits ktest after the running connection restores the proxy, TUN routes and helper processes (a second press, or cleanup longer than 10 s, ends it at once). Only one connection may run at a time; a second ktest connection is refused. Setup shows configuration details and actionable notices separately from verified network readiness.
+The menu keeps keys 1–12 and 0. **Enter connects with the saved policy** (Balanced on a first launch). Keys 1–6 choose a connection family; option 7 selects standalone Serverless A/B/OOB. Aether and Windscribe open their method submenus first. `Last used` and the disconnected status describe the current process, not a running VPN in another window. Reopening the menu never connects automatically. During a connection, Enter disconnects and returns to the menu. Ctrl+C is never a Back key: one press anywhere quits ktest after the running connection restores the proxy, TUN routes and helper processes (a second press, or cleanup longer than 10 s, ends it at once). Only one connection may run at a time; a second ktest connection is refused. Setup shows configuration details and actionable notices separately from verified network readiness.
 
 Use `0`, `b` or `back` to go back one level. Setup remains open after returning from Certificate or Exit paths. It checks local certificate/key integrity, validity dates, coverage of the current fronting domains and the operating system's trust check each time it is displayed. A healthy certificate is green (`Installed / trusted / up to date`); expiration within 30 days, invalid dates or old domain coverage offer `Renew`. Missing files offer Install; a usable certificate without system trust offers Install trust. Broken/partial files show Repair. The Certificate page always allows explicit renewal of a healthy CA as well. Reading status never installs, renews or deletes certificates.
 
@@ -125,7 +125,7 @@ Limits: only HTTPS on port 443 for the listed families; applications that pin ce
 
 ## 6. Whole PC (system-wide tunnel)
 
-Whole PC is coverage, separate from the six policies. Menu 7 selects Proxy apps or Whole PC TCP; then choose policy 1-4 or 6. CLI example: ktest connect -mode aether -tun. The policy survives Administrator elevation. A sing-box/Wintun adapter forwards public TCP to the selected policy; LAN and helper processes are exempt. It does not create a fixed public IP or a persistent kill switch. Windscribe uses its own coverage and cannot share this TUN.
+Whole PC is coverage, separate from the six policies. Menu 8 selects Proxy apps or Whole PC TCP; then choose policy 1-4 or 6. CLI example: ktest connect -mode aether -tun. The policy survives Administrator elevation. A sing-box/Wintun adapter forwards public TCP to the selected policy; LAN and helper processes are exempt. It does not create a fixed public IP or a persistent kill switch. Windscribe uses its own coverage and cannot share this TUN.
 
 What it does to be safe:
 
@@ -158,13 +158,14 @@ ktest  Free access toolkit
    4  Aether to Tor       Tor
    5  Windscribe          Bridge for the Windscribe app
    6  Aether to Psiphon   Psiphon
+   7  Serverless          Fragment A/B/OOB (ISP IP; proxy only)
   COVERAGE
-   7  Current Mode: TUN
+   8  Current Mode: TUN
   TOOLS
-   8  Diagnose            Check connection problems
-   9  Setup               Certificates and exit components
-  10  CDN scan
-  11  Windscribe test
+   9  Diagnose            Check connection problems
+  10  Setup               Certificates and exit components
+  11  CDN scan
+  12  Windscribe test
 
    0  Exit
 ────────────────────────────────────────────────────────────────
@@ -172,7 +173,7 @@ ktest  Free access toolkit
   Select >
 ```
 
-`Aether` opens connection/method/diagnosis choices for MASQUE H2/H3, WireGuard, Gool, classic WARP-in-WARP, MASQUE-in-MASQUE and Psiphon. Auto tests independent WARP transports; choosing WireGuard or MASQUE H2 restricts the scan to that transport while still trying its non-ECH IPv4/IPv6 variants and other compatible profiles. `Aether to Psiphon` selects only the normal/CDN Psiphon profiles, while `Aether to Tor` uses Aether's Tor-only backend. Menu 5 separates local-only Windscribe from explicit Windscribe through Aether. Menu 11 groups prerequisites, WStunnel/Stealth comparisons, real bridge observation, Aether comparison/carrier, connected VPN data and owned CDN tests. Aether's WARP carrier can geolocate to Iran; use Aether to Psiphon/Tor when a verified foreign exit is required.
+`Aether` opens connection/method/diagnosis choices for MASQUE H2/H3, WireGuard, Gool, classic WARP-in-WARP, MASQUE-in-MASQUE and Psiphon. Auto tests independent WARP transports; choosing WireGuard or MASQUE H2 restricts the scan to that transport while still trying its non-ECH IPv4/IPv6 variants and other compatible profiles. `Aether to Psiphon` selects only the normal/CDN Psiphon profiles, while `Aether to Tor` uses Aether's Tor-only backend. Menu 5 separates local-only Windscribe from explicit Windscribe through Aether. Menu 12 groups prerequisites, WStunnel/Stealth comparisons, real bridge observation, Aether comparison/carrier, connected VPN data and owned CDN tests. Aether's WARP carrier can geolocate to Iran; use Aether to Psiphon/Tor when a verified foreign exit is required.
 
 Every submenu accepts `0`, `b`, or `back`; Ctrl+C quits the program. An invalid choice stays in the same tool. At the CDN hostname and Windscribe SNI prompts, Back returns to the provider/target prompt. Completed or cancelled diagnostics/scans/tests return to their tool menu; use Back again for the main menu. Enter retains the default shown at each prompt.
 
@@ -219,7 +220,7 @@ The menu uses aligned columns in wider windows and puts descriptions below each 
 
 None are needed. For experiments: `-v` (log every path decision and core output), `-listen`, `-strategies N`, `-no-xray`, `-no-self`, `-no-direct`, `-no-front`, `-front`, `-no-warp`, `-aether-method`, `-aether-fingerprint`, `-masque-sni`, `-aether-fragment`, `-tun`, `-cert`, `-no-doh`, `-stagger`, `-first-byte`, `-ready`, `-base`. Windscribe mode: `-windscribe-wstunnel`, `-windscribe-wstunnel-sni`, `-windscribe-wstunnel-ip`, `-windscribe-cdn`, `-windscribe-cdn-sni`, `-windscribe-cdn-edge`, `-windscribe-auto-reconnect`, `-windscribe-cli` (see [WINDSCRIBE_BOOTSTRAP.md](WINDSCRIBE_BOOTSTRAP.md)).
 
-## Offline Serverless-for-Iran v65 (Windows; opt-in)
+## Serverless-for-Iran v65 (Windows and Android; opt-in)
 
 The portable ZIP bundles the pinned patterniha Xray-core v26.11.23,
 matching geoip/geosite assets, and a pinned Serverless-for-Iran v65
@@ -229,9 +230,15 @@ a **separate loopback-only** mixed HTTP/SOCKS proxy; use `-variant A` or
 bundled files relative to the executable, not the current directory.
 It enforces the selected profile's minimum Xray version before startup.
 
-Serverless works through the user's original ISP route and **does not
-change their public IP**. IP-blocked destinations and foreign services
-rejecting Iranian IPs can remain unreachable. This optional mode is not
-automatically promoted to a protected foreign exit or Android VPN profile,
-and does not install a CA or system proxy. Android's pinned Xray currently
-provides a local TLS-fragment route and TUN adapter, not imported serverless.
+Serverless is also available in Windows **Connection methods → 7 Serverless**
+with Fragment A/B/OOB selection. On Android, select **Serverless** in
+Connection mode and **Fragment A**, **Fragment B** or **OOB** in Connection method.
+The Android build includes the original pinned v65 JSON and matching checksum-
+verified Xray GeoIP/GeoSite assets; app-private copies are reverified before
+running a single local Xray core. This mode is always **proxy-only**, does not
+change the saved coverage preference for other modes, and is never injected into
+Balanced/Fast or strict foreign-exit routes.
+
+Serverless works through the original ISP and **does not change the public IP**.
+IP-blocked destinations and services rejecting that IP can remain unreachable.
+It does not install a CA, trusted network route or system proxy.

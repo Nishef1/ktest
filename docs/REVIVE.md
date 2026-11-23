@@ -44,5 +44,9 @@ from any directory. KTest resolves the pinned `cores/xray.exe`, the pinned
 `profiles/Serverless-for-Iran.json`, and `cores/geoip.dat` / `cores/geosite.dat`
 relative to its own executable. The command starts a **separate** local proxy;
 it does not install a system VPN or replace the normal adaptive routing session.
-On Android, the packaged Xray currently supplies a local fragment path and packet
-adapter, **not** an imported Serverless subscription or foreign-IP exit.
+On Android, the user can explicitly select a separate **Serverless** mode and
+Fragment A, Fragment B or OOB in the Connection method selector. It runs the
+pinned upstream v65 profile using the packaged Xray and verified GeoIP/GeoSite
+assets, publishes only a local SOCKS/HTTP proxy, and never grants a foreign
+exit or silently activates Android's VPN. The existing Xray fragmentation
+route and Xray-TUN/HEV packet adapter remain in the normal modes.

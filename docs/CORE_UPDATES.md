@@ -21,14 +21,14 @@ of only its previously pinned 2.19.0/2.19.3 files. Version 2.20.0 fixes
 idle-session memory use, UDP send fallback and a session-creation deadlock;
 the Xray TUN adapter remains primary and HEV remains the automatic fallback.
 Aether v2.4.0 and ByeDPI v0.17.3 remain their latest reviewed releases.
-Windows now bundles the audited Serverless-for-Iran v65 A/B/OOB profiles
-with Xray v26.11.23; `ktest revive` runs them only when explicitly selected.
-Experimental Xray `finalMask.merge` and `dialMode=oob.0` remain off
-by default in Android's automatic TUN/fragment paths: importing a
-subscription with DNS rewriting, direct fallback and optional TLS
-interception would change KTest's verified Go-route policy and could
-introduce leaks. Evaluate a confined optional local strategy separately
-with physical-device testing; do not silently turn Serverless into a VPN.
+Windows now bundles Serverless-for-Iran v65 A/B/OOB profiles with Xray v26.11.23;
+`ktest revive` and the main-menu **Serverless** option run them only on request.
+Android offers the same three explicitly selected profiles behind its separate
+proxy-only Serverless mode. It packages GeoIP/GeoSite from the verified Xray ZIP,
+checks copied assets against SHA-256 values in the signed Go manifest, and never
+injects serverless DNS rewriting or direct-to-ISP routing into Balanced/Fast,
+Aether, Psiphon, Tor or Android TUN/HEV. No profile automatically becomes a
+foreign VPN exit; physical-device verification remains necessary.
 
 This is source/build integration, not evidence of live ISP bypass.
 Re-run Windows packaging and Android APK CI, plus device TCP/UDP/DNS/IPv6,

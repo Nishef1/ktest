@@ -55,6 +55,8 @@ private val notices = listOf(
         "https://github.com/hufrea/byedpi/tree/v0.17.3"),
     Notice("Xray v26.11.23", "patterniha / PattNG fork · ARMv8 TUN and TLS fragmentation", "MPL-2.0",
         "https://github.com/patterniha/Xray-core/releases/tag/v26.11.23"),
+    Notice("Serverless-for-Iran v65", "patterniha · Fragment A/B/OOB · optional direct ISP proxy", "GPL-3.0",
+        "https://github.com/patterniha/Serverless-for-Iran"),
     Notice("Aether v2.4.0", "patterniha release · MASQUE / WireGuard / Tor / Psiphon core", "AGPL-3.0",
         "https://github.com/patterniha/Aether/releases/tag/v2.4.0"),
     Notice("psiphon-tunnel-core", "CluvexStudio fork, shirokhorshid @ 83aa73b", "GPL-3.0",

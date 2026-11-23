@@ -4,14 +4,15 @@
 
 - **Included:** pinned PattNG Xray-core v26.11.23 for Windows and Android; pinned
   HEV 2.20.0 AAR matching PattNG P74 submodule; Serverless-for-Iran v65 A/B/OOB
-  on Windows as a separately invoked, localhost-only direct-IP profile.
+  on Windows and Android as separately selected, localhost-only direct-IP modes.
 - **Routing:** shared Go SmartProxy now periodically challenges an eligible
   alternative on application traffic; no idle phone network sweep. Windows
   retry of TUN startup/loss is bounded and keeps proxy-only fallback.
-- **Intentionally not imported:** Android Serverless routing profiles include
-  custom DNS/redirect/policy rules and direct-to-ISP egress. Installing those
-  as automatic Android VPN routes would bypass KTest's Go egress restrictions.
-  OOB requires separate local-only Android design and end-to-end validation.
+- **Explicit Android selection:** Fragment A/B/OOB now run only in standalone
+  Android Serverless mode with SHA-verified original Xray and GeoIP/GeoSite
+  assets. Its routing/DNS config and direct-to-ISP egress are never injected
+  into Balanced/Fast or strict VPN exit modes; this remains proxy-only. Real
+  phone/ISP acceptance and privacy/leak checks are still required.
 - **Release acceptance remains open:** fresh Windows install first-connect,
   Android ARM64 physical-device TLS/UDP/DNS/IPv6/TUN-failover, leak testing,
   Wi-Fi/cellular handover, session latency/throughput and battery benchmarks.

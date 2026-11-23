@@ -14,7 +14,7 @@ func TestCoverageSurvivesMenuRestartAndIsSavedBeforeExit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	t.Setenv("KTEST_SETTINGS_FILE", path)
 	var first bytes.Buffer
-	if code := runInteractive(strings.NewReader("7\n1\n0\n"), &first, t.TempDir()); code != 0 {
+	if code := runInteractive(strings.NewReader("8\n1\n0\n"), &first, t.TempDir()); code != 0 {
 		t.Fatal(code)
 	}
 	initial := "Current Mode: Proxy"
