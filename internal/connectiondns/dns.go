@@ -43,6 +43,9 @@ func MobileResolversWithCustom(mode, exitSOCKS, customDNS string) (smartproxy.Re
 	if serverless && exitSOCKS == "" {
 		return nil, nil, errors.New("Serverless DNS requires its local Xray SOCKS route")
 	}
+	if serverless && strings.TrimSpace(customDNS) != "" {
+		return nil, nil, errors.New("Serverless refuses an unrelated custom DNS override")
+	}
 	if strict && exitSOCKS == "" {
 		return nil, nil, errors.New("strict exit-only DNS requires an external verified SOCKS5 path")
 	}
@@ -101,6 +104,9 @@ func MobilePacketDNSWithCustom(mode, exitSOCKS, customDNS string) (func(context.
 	strict := mode == "aether" || mode == "psiphon" || mode == "tor"
 	if mode == "serverless" && strings.TrimSpace(exitSOCKS) == "" {
 		return nil, nil, errors.New("Serverless packet DNS requires its local Xray SOCKS route")
+	}
+	if mode == "serverless" && strings.TrimSpace(customDNS) != "" {
+		return nil, nil, errors.New("Serverless packet DNS refuses a custom plaintext override")
 	}
 	if strict && exitSOCKS == "" {
 		return nil, nil, errors.New("strict packet DNS requires a verified exit")
