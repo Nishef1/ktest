@@ -1,9 +1,9 @@
 # Updating native cores safely
 
-## PattNG core alignment (2026-11-05)
+## PattNG core alignment (2026-11-23)
 
 KTest now prefers the patterniha/PattNG release lineage wherever PattNG
-maintains a distinct network core: `patterniha/Xray-core v26.11.1` for
+maintains a distinct network core: `patterniha/Xray-core v26.11.23` for
 Windows and Android ARM64. Both ZIPs are SHA-256 pinned. The Android
 executable digest is derived **only after** verifying the pinned archive
 and its inner ELF, then written to the local Go-embedded manifest by
@@ -14,12 +14,21 @@ rejects an unresolved hash. The source manifest's derivation sentinel is
 intentionally not an executable checksum: never compile the Android Go
 bridge without first running the native preparation.
 
-PattNG uses `heiher/hev-socks5-tunnel` as a submodule at v2.19.3, not a
-separate fork. KTest pins the same upstream HEV AAR (fixing Android JNI
-TLS relocation), while retaining PattNG-lineage Aether v2.4.0.
+PattNG P74 uses `heiher/hev-socks5-tunnel` at exact commit
+`75dbc1e9ace6c70d3d1b94df7c283efe1de7effc` (stable v2.20.0).
+KTest pins the matching official AAR by SHA-256 and permits replacement
+of only its previously pinned 2.19.0/2.19.3 files. Version 2.20.0 fixes
+idle-session memory use, UDP send fallback and a session-creation deadlock;
+the Xray TUN adapter remains primary and HEV remains the automatic fallback.
+Aether v2.4.0 and ByeDPI v0.17.3 remain their latest reviewed releases.
+Windows now bundles the audited Serverless-for-Iran v65 A/B/OOB profiles
+with Xray v26.11.23; `ktest revive` runs them only when explicitly selected.
 Experimental Xray `finalMask.merge` and `dialMode=oob.0` remain off
-by default: KTest's Xray is a local fragmentation path or TUN-to-Go
-adapter, not an unconfigured remote proxy.
+by default in Android's automatic TUN/fragment paths: importing a
+subscription with DNS rewriting, direct fallback and optional TLS
+interception would change KTest's verified Go-route policy and could
+introduce leaks. Evaluate a confined optional local strategy separately
+with physical-device testing; do not silently turn Serverless into a VPN.
 
 This is source/build integration, not evidence of live ISP bypass.
 Re-run Windows packaging and Android APK CI, plus device TCP/UDP/DNS/IPv6,
