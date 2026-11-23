@@ -239,6 +239,6 @@ running a single local Xray core. This mode is always **proxy-only**, does not
 change the saved coverage preference for other modes, and is never injected into
 Balanced/Fast or strict foreign-exit routes.
 
-Serverless works through the original ISP and **does not change the public IP**.
+Serverless works through the original ISP and **does not change the public IP**. On Android, the IP & country panel can now inspect IPv4-only, IPv6-only, or both egress observations separately. This does not turn Serverless into an IPv6-only transport or alter a foreign exit's IP family. An IPv6 result must come from an IPv6 HTTPS trace through the chosen local proxy; if it fails, the UI shows it as unavailable rather than substituting IPv4.
 IP-blocked destinations and services rejecting that IP can remain unreachable.
 It does not install a CA, trusted network route or system proxy.
