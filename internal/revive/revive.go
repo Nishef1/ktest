@@ -204,6 +204,10 @@ func Run(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
+	return runSelectedProfile(ctx, c, content)
+}
+
+func runSelectedProfile(ctx context.Context, c Config, content []byte) error {
 	profile, err := SelectProfileOnPort(content, c.Variant, "", c.port())
 	if err != nil {
 		return err
@@ -232,6 +236,16 @@ func Run(ctx context.Context, c Config) error {
 		}
 	}
 	return runProfile(ctx, c, profile)
+}
+
+// RunPinned executes only the embedded v65 config. The caller cannot supply
+// another profile or replace a validated file between checking and execution.
+func RunPinned(ctx context.Context, c Config) error {
+	if c.Profile != "" {
+		return errors.New("pinned Serverless refuses external profile files")
+	}
+	c.Profile = "embedded Serverless-for-Iran v65" // status label, not a path
+	return runSelectedProfile(ctx, c, pinnedServerlessV65)
 }
 
 // LocalTCPProfile generates a closed local-only configuration. No imported

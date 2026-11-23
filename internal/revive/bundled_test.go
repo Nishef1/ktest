@@ -2,6 +2,8 @@ package revive
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -30,5 +32,23 @@ func TestPinnedServerlessVariants(t *testing.T) {
 				t.Fatalf("unsafe pinned profile: %+v", value)
 			}
 		})
+	}
+}
+
+func TestPortableSubscriptionMatchesEmbeddedUpstream(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Serverless-for-Iran.json")
+	if err := os.WriteFile(path, pinnedServerlessV65, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPinnedSubscriptionFile(path); err != nil {
+		t.Fatal(err)
+	}
+	modified := append([]byte(nil), pinnedServerlessV65...)
+	modified[len(modified)-1] ^= 1
+	if err := os.WriteFile(path, modified, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPinnedSubscriptionFile(path); err == nil {
+		t.Fatal("modified portable profile was accepted")
 	}
 }
