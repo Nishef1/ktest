@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -132,6 +133,27 @@ func CalibrateAetherTLS(privateDir string) (string, error) {
 		return "", fmt.Errorf("measurement completed but could not save: %w", err)
 	}
 	return summarizeCalibration(r), nil
+}
+
+// AetherTLSResults returns only this network's fresh saved results, never
+// launches a core or sends a new probe.
+func AetherTLSResults(privateDir string) string {
+	r, ok := tlsshape.Cached(tlsCalibrationPath(privateDir), tlsNetworkKey(), currentAetherTLS())
+	if !ok {
+		return ""
+	}
+	var lines []string
+	appendTrials := func(family string, result tlsshape.Result) {
+		lines = append(lines, family)
+		for _, t := range result.Trials {
+			lines = append(lines, fmt.Sprintf("%s · %d/%d · %.0f ms", t.Shape, t.OK, t.Attempts, t.MS))
+		}
+	}
+	appendTrials("IPv4 carrier", r)
+	if r.IPv6 != nil {
+		appendTrials("IPv6 carrier", *r.IPv6)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func summarizeCalibration(r tlsshape.Result) string {

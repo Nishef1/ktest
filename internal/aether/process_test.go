@@ -35,3 +35,14 @@ func TestManagedLoggingSurvivesInheritedRustFilter(t *testing.T) {
 		t.Fatal("managed launch changed the parent's environment")
 	}
 }
+
+func TestManagedEnvironmentRejectsStaleNativeOverrides(t *testing.T) {
+	t.Setenv("AETHER_MASQUE_SNI", "old.example.com")
+	t.Setenv("AETHER_TLS_CIPHERS", "old")
+	t.Setenv("AETHER_UPSTREAM", "socks5://127.0.0.1:5555")
+	for _, entry := range managedEnvironment(nil) {
+		if strings.HasPrefix(strings.ToUpper(entry), "AETHER_") && entry != "AETHER_REPROVISION=0" {
+			t.Fatalf("unmanaged native setting leaked: %s", entry)
+		}
+	}
+}

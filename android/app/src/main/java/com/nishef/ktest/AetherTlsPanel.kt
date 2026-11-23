@@ -36,6 +36,8 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    var details by remember { mutableStateOf("") }
+    var showDetails by remember { mutableStateOf(false) }
 
     // Validated by the same Go parser the connection uses.
     fun save(fp: String, name: String, frag: String): Boolean {
@@ -96,6 +98,16 @@ internal fun AetherTlsPanel(scope: CoroutineScope, preferences: SharedPreference
         }, Modifier.fillMaxWidth(), enabled = canMeasure, busy = busy)
         if (!canMeasure) Note("Disconnect to measure: it must see this network, not the tunnel.", Tone.Warn)
         if (message.isNotBlank()) Note(message, Tone.Good)
+        SecondaryButton(if (showDetails) "Hide measurements" else "Show saved measurements", {
+            if (showDetails) showDetails = false else {
+                scope.launch {
+                    details = withContext(Dispatchers.IO) { Mobilebridge.aetherTLSResults(privateDir) }
+                    showDetails = true
+                }
+            }
+        }, Modifier.fillMaxWidth(), enabled = !busy)
+        if (showDetails) Text(details.ifBlank { "No fresh measurement for these settings and network." },
+            color = K.muted, fontSize = 12.sp, lineHeight = 18.sp)
         if (error.isNotBlank()) Note(error, Tone.Danger)
         Note("Off disables Aether's own TLS fragmentation and KTest's TCP TLS-hello exit-node masks. " +
             "Independent local anti-DPI carrier strategies may still shape the outer connection. Auto uses a saved MASQUE " +

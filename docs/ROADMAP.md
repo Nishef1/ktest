@@ -153,3 +153,11 @@ Track remaining family acceptance in [issue #20](https://github.com/Nishef1/ktes
 - [x] Separate tuned SNI/fragment performance keys from stable native process/profile IDs; report explicit calibration save failures and reject network changes during measurement.
 - [ ] Physical-network validation: compare active native ClientHello shape with the simulated probe, verify actual application throughput, stability, and fallback on both devices. Calibrate IPv6 gateways independently; current H2 probe inventory is not a proof for IPv6 or H3.
 - [ ] Evaluate pinned Aether core's newer TLS-shaping flags only after actual binary capability and network tests; do not advertise full browser impersonation based on cipher list alone.
+
+### PattNG Aether follow-up
+
+- [x] Preserve Patterniha v2.4.0 release lock; verify archive origin/digests against release metadata.
+- [x] Separate simulated H2 IPv4 and IPv6 carrier measurements; do not credit one family with the other's result.
+- [x] Reuse an HTTPS-verified native Android candidate when still available for the same core/network/settings; expose saved trial details and strip unmanaged native environment overrides.
+- [ ] Native A/B measurement on physical Iranian networks: compare authenticated tunnels and sustained data transfer, validate the actual ClientHello, and record failure rates. Android does not yet offer the full Windows comparison workflow.
+- [ ] Investigate advanced v2.4.0 TLS flags (TLS 1.3 suites, groups/key shares, signature algorithms and extension settings) against the pinned core. Do not auto-enable unmeasured options or call cipher-only fingerprints full browser emulation.

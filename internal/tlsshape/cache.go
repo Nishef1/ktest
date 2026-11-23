@@ -116,6 +116,10 @@ func Ensure(ctx context.Context, path, network string, o Options, c Config) (Res
 	if ctx.Err() != nil && !r.Reached() {
 		return Result{}, false
 	}
-	_ = Save(path, network, r)
+	if err := Save(path, network, r); err != nil {
+		// The caller may still use the in-memory measurement; an explicit
+		// Measure action reports the persistence error separately.
+		return r, true
+	}
 	return r, true
 }

@@ -248,8 +248,11 @@ func launchVerifiedNativeProfiles(ctx context.Context, o nativeOptions) (*native
 	if err != nil {
 		return nil, observedExit{}, err
 	}
+	hintKey := nativeTLSHistoryKey(o)
+	attempts := nativeAutoAttemptProfiles(profiles)
+	attempts = preferNativeTLSHistory(attempts, o.privateDir, hintKey)
 	var lastErr error
-	for _, profile := range nativeAutoAttemptProfiles(profiles) {
+	for _, profile := range attempts {
 		if err := ctx.Err(); err != nil {
 			return nil, observedExit{}, err
 		}
@@ -271,6 +274,9 @@ func launchVerifiedNativeProfiles(ctx context.Context, o nativeOptions) (*native
 		checked, err := waitNative(attempt, "aether", core)
 		cancel()
 		if err == nil {
+			if hintKey == nativeTLSHistoryKey(o) {
+				saveNativeTLSHistory(o.privateDir, hintKey, profile)
+			}
 			return core, checked, nil
 		}
 		core.stop()
