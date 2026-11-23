@@ -1338,7 +1338,7 @@ func connectSession(ctx context.Context, o connectOptions, preflight *dnscheck.R
 				default:
 				}
 			}
-			if tunPending && ( !o.mode.exitOnly() || exitReady(o.mode, proxy)) &&
+			if tunPending && (!o.mode.exitOnly() || exitReady(o.mode, proxy)) &&
 				!time.Now().Before(tunRetryAt) && tunAttempts < 3 {
 				tunAttempts++
 				t.ClearPinnedBox()

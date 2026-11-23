@@ -55,10 +55,10 @@ func TestTunnelRestoresResolverOnceEvenAfterNativeExitAndManualStop(t *testing.T
 }
 
 func TestTunRetryDelayIsBounded(t *testing.T) {
-    if got := tunRetryDelay(1); got != 10*time.Second {
-        t.Fatalf("first retry: %s", got)
-    }
-    if got := tunRetryDelay(2); got != 30*time.Second {
-        t.Fatalf("later retry: %s", got)
-    }
+	if got := tunRetryDelay(1); got != 10*time.Second {
+		t.Fatalf("first retry: %s", got)
+	}
+	if got := tunRetryDelay(2); got != 30*time.Second {
+		t.Fatalf("later retry: %s", got)
+	}
 }
