@@ -21,6 +21,7 @@ import (
 // The local Go proxy carries TCP, encrypted packet DNS and foreign-exit UDP.
 // This is not a system VPN and starting listeners is not proof of Internet access.
 type proxySession struct {
+	family       string
 	mode         string
 	upstream     string
 	exitLocation string
@@ -57,6 +58,7 @@ type proxyDiagnostics struct {
 }
 
 type proxyReport struct {
+	DestinationFamily string `json:"destination_family,omitempty"`
 	Running      bool   `json:"running"`
 	Mode         string `json:"mode,omitempty"`
 	Socks        string `json:"socks,omitempty"`
@@ -121,7 +123,7 @@ func currentReportLocked() proxyReport {
 		return report
 	}
 	report := proxyReport{
-		Running: true, Mode: activeProxy.mode,
+		Running: true, Mode: activeProxy.mode, DestinationFamily: activeProxy.family,
 		Phase:        "listening",
 		Socks:        activeProxy.socks.Addr().String(),
 		HTTP:         activeProxy.httpAddress,
@@ -240,6 +242,13 @@ func startProxyWithNativeCores(mode, upstream string, native *nativeOptions, loc
 }
 
 func startProxyConfigured(parent context.Context, mode, upstream string, native *nativeOptions, localDir, frontDir, localStateDir string, testOnly bool) (report string, startErr error) {
+	family := "both"
+	if !testOnly {
+		family = currentDestinationFamily()
+	}
+	if family != "both" && frontDir != "" {
+		return "", errors.New("single-family destination policy cannot use TLS fronting")
+	}
 	serverlessVariant := ""
 	if mode == "serverless" {
 		// The selected variant is not an exit SOCKS address. It launches
@@ -450,7 +459,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 			Rank: 9,
 		})
 	}
-	config := smartproxy.Config{Upstreams: upstreams, RecoverIPHostSNI: localDir != ""}
+	config := smartproxy.Config{Upstreams: upstreams, RecoverIPHostSNI: localDir != "", DestinationFamily: family}
 	var automatic *automaticExit
 	keepAutomatic := false
 	if !testOnly && (mode == "balanced" || mode == "fast") {
@@ -645,7 +654,7 @@ func startProxyConfigured(parent context.Context, mode, upstream string, native 
 		return "", listenerError("HTTP", httpBind, err)
 	}
 	// The session owns the listeners; Android only consumes their addresses.
-	session := &proxySession{mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, automatic: automatic}
+	session := &proxySession{family: family, mode: mode, upstream: upstream, exitLocation: location, socks: core.SOCKS, httpAddress: httpAddress, cancel: cancel, core: core, closeDNS: closeDNS, diagnostics: diagnostics, native: managed, carrier: carrier, localCores: localCores, fronter: fronter, xrayError: xrayError, automatic: automatic}
 	activeProxy = session
 	session.frontDir = frontDir
 	if !testOnly && localStateDir != "" {

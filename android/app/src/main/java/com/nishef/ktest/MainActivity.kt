@@ -122,6 +122,10 @@ private fun KTestApp() {
     var routeReport by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var coverage by rememberSaveable { mutableStateOf(prefs.getString("coverage", "vpn") ?: "vpn") }
+    var destinationFamily by rememberSaveable {
+        mutableStateOf(prefs.getString("destination_family", "both")
+            ?.takeIf { it in setOf("ipv4", "both", "ipv6") } ?: "both")
+    }
     var vpnState by remember { mutableStateOf(KTestVpnService.state) }
     var connectAfterConsent by remember { mutableStateOf(false) }
     val tools = remember { ToolsState() }
@@ -149,7 +153,7 @@ private fun KTestApp() {
     // Go independently checks whether an active scan is incompatible with startup.
     val connectBlocked = routePlan.busy ||
         routeTargets.busy || scanBusy
-    val canTestRoutes = offline && routeStatusReady && !routeTargets.busy && !settings.caBusy &&
+    val canTestRoutes = offline && destinationFamily == "both" && routeStatusReady && !routeTargets.busy && !settings.caBusy &&
         !scanBusy && scanStatusReady && activeMode.id in listOf("balanced", "fast")
     val linkState = when {
         disconnecting || serviceConnectionState == "disconnecting" -> LinkState.Disconnecting
@@ -197,6 +201,7 @@ private fun KTestApp() {
                     putExtra(ProxyService.EXTRA_UPSTREAM, upstream.trim())
                     putExtra(ProxyService.EXTRA_METHOD, nativeMethod)
                     putExtra(ProxyService.EXTRA_VPN, effectiveCoverage != "proxy")
+                    putExtra(ProxyService.EXTRA_DESTINATION_FAMILY, destinationFamily)
                 })
         } catch (e: Exception) {
             error = e.message ?: "Unable to start the connection"
@@ -420,6 +425,13 @@ private fun KTestApp() {
                                 }
                             },
                             coverage = effectiveCoverage, vpnActive = vpnState == "tun_running_unverified",
+                            destinationFamily = destinationFamily,
+                            onDestinationFamily = { value ->
+                                if (offline) {
+                                    destinationFamily = value
+                                    prefs.edit().putString("destination_family", value).apply()
+                                }
+                            },
                             onCoverage = {
                                 if (activeMode.id != "serverless") {
                                     coverage = it

@@ -94,6 +94,7 @@ internal fun ConnectScreen(
     onTestRoutes: () -> Unit, onCancelRouteTest: () -> Unit,
     routeReport: JSONObject?, checkingRoute: Boolean, onCheckRoute: () -> Unit,
     coverage: String, vpnActive: Boolean, onCoverage: (String) -> Unit,
+    destinationFamily: String, onDestinationFamily: (String) -> Unit,
     onMode: (String) -> Unit, onPower: () -> Unit, onCopy: (String) -> Unit
 ) {
     val locked = state == LinkState.Active || state == LinkState.Connecting || state == LinkState.Disconnecting || routePlan.busy || connectBlocked
@@ -111,6 +112,14 @@ internal fun ConnectScreen(
         }
         // Connection details are below the core controls.
         CoverageCard(coverage, onCoverage, !locked && activeMode.id != "serverless")
+        Panel {
+            SectionLabel("Destination IP family")
+            Segmented(listOf("ipv4" to "IPv4 only", "both" to "Both", "ipv6" to "IPv6 only"),
+                destinationFamily, onDestinationFamily, enabled = !locked)
+            Text("Enforced for KTest-managed TCP and UDP destinations. DNS uses the selected address family; incompatible destinations fail instead of falling back. The native carrier and DNS infrastructure may use a different family. TLS fronting is disabled in single-family modes.",
+                color = K.muted, fontSize = 12.sp, lineHeight = 17.sp)
+            if (locked) Text("Disconnect to change the destination family.", color = K.faint, fontSize = 11.sp)
+        }
         if (activeMode.id == "serverless") {
             Note("Serverless uses the ISP's original public IP. Only apps configured for the local HTTP/SOCKS5 proxy use this method; this is not a foreign VPN.", Tone.Warn)
         }
@@ -121,7 +130,7 @@ internal fun ConnectScreen(
         if (activeMode.available && activeMode.id in listOf("balanced", "fast", "aether")) {
             UpstreamPanel(activeMode.id, upstream, onUpstream, !locked)
         }
-        if (activeMode.id == "balanced" || activeMode.id == "fast") {
+        if ((activeMode.id == "balanced" || activeMode.id == "fast") && destinationFamily == "both") {
             RoutePlanPanel(routePlan, state == LinkState.Active, state == LinkState.Connecting,
                 canTestRoutes, onTestRoutes, onCancelRouteTest)
         }
@@ -495,7 +504,7 @@ private fun PublicIpPanel(connected: Boolean) {
                     color = K.amber, fontSize = 11.sp, lineHeight = 15.sp)
             }
         }
-        Text("This selector controls IP diagnostics and display, not the VPN or proxy's transport family. IPv6-only never uses an IPv4 result as proof.",
+        Text("This selector only filters the IP observations. Change Destination IP family below to enforce the family of managed connections.",
             color = K.muted, fontSize = 11.sp, lineHeight = 15.sp)
         if (!error.isNullOrBlank()) {
             Text(error.take(150), color = K.amber, fontSize = 11.sp, lineHeight = 15.sp)

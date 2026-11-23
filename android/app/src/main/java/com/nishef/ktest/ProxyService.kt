@@ -47,6 +47,9 @@ class ProxyService : Service() {
         const val EXTRA_METHOD = "method"
         const val EXTRA_TITLE = "title"
         const val EXTRA_VPN = "vpn"
+        const val EXTRA_DESTINATION_FAMILY = "destination_family"
+        @Volatile var destinationFamily: String = "both"
+            private set
         // App-wide foreground notification shared with KTestVpnService.
         internal const val CHANNEL = "ktest_proxy"
         internal const val NOTIFICATION_ID = 42
@@ -125,7 +128,7 @@ class ProxyService : Service() {
         try {
             // Explicitly measure both destination families through the live
             // SOCKS policy. A successful IPv4 trace cannot certify IPv6.
-            val result = runCatching { JSONObject(Mobilebridge.publicIPForFamily(true, "both")) }
+            val result = runCatching { JSONObject(Mobilebridge.publicIPForFamily(true, destinationFamily)) }
             if (!wanted || generation != sessionGeneration) return@withLock false
             val report = result.getOrNull()
             val ip = report?.optString("ip").orEmpty()
@@ -315,6 +318,7 @@ class ProxyService : Service() {
                 val method = intent.getStringExtra(EXTRA_METHOD) ?: "auto"
                 val title = intent.getStringExtra(EXTRA_TITLE) ?: mode.replaceFirstChar { it.uppercase() }
                 val vpn = intent.getBooleanExtra(EXTRA_VPN, false)
+                destinationFamily = intent.getStringExtra(EXTRA_DESTINATION_FAMILY) ?: "both"
                 reconnectJob?.cancel()
                 reconnectJob = null
                 pendingReconnect = null
@@ -337,6 +341,7 @@ class ProxyService : Service() {
                             if (wanted) {
                                 // Set network identity before native profile selection and TLS-cache lookup.
                                 prepareUnderlyingNetwork(this@ProxyService)
+                                Mobilebridge.setDestinationFamily(destinationFamily)
                                 // The F&F and MASQUE SNI settings; a bad saved value falls back to auto.
                                 getSharedPreferences("ktest_android", MODE_PRIVATE).let { p ->
                                     runCatching { Mobilebridge.setDNSOverride(p.getString("dns_override", "").orEmpty()) }
@@ -392,7 +397,7 @@ class ProxyService : Service() {
                                     val net = getSystemService(ConnectivityManager::class.java).activeNetwork
                                         ?: error("Underlying network disappeared before connection")
                                     watchBalancedNetwork(net.networkHandle)
-                                    val enabled = checkedFrontingOptIn(this@ProxyService, privateDir)
+                                    val enabled = destinationFamily == "both" && checkedFrontingOptIn(this@ProxyService, privateDir)
                                     if (enabled) {
                                         // The user must explicitly opt in, and the exact CA must
                                         // still be in Android's user store at *each* session start.

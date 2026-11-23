@@ -108,10 +108,14 @@ class KTestVpnService : VpnService() {
                             // Inherit meteredness from the real network so apps do not
                             // treat every Wi-Fi connection as data-limited behind the VPN.
                             .setMetered(false)
-                            .addAddress(plan.getString("ipv4_address"), plan.getInt("ipv4_prefix"))
-                            .addRoute(plan.getString("ipv4_route"), 0)
-                            .addDnsServer(plan.getString("ipv4_dns"))
                             .addDisallowedApplication(packageName)
+                        val family = ProxyService.destinationFamily
+                        require(family in setOf("ipv4", "both", "ipv6")) { "Invalid destination family" }
+                        if (family != "ipv6") {
+                            builder.addAddress(plan.getString("ipv4_address"), plan.getInt("ipv4_prefix"))
+                                .addRoute(plan.getString("ipv4_route"), 0)
+                                .addDnsServer(plan.getString("ipv4_dns"))
+                        }
                         // IPv6 capability belongs to the selected Go SOCKS path,
                         // not the Wi-Fi/cellular underlay: IPv4-only underlays
                         // can carry IPv6 through WARP, while native IPv6 does
@@ -119,7 +123,12 @@ class KTestVpnService : VpnService() {
                         // Only route IPv6 after this session's pre-VPN HTTPS
                         // trace through KTest verified an IPv6 public exit.
                         // Without proof, omit the v6 route (fail closed).
-                        if (verifiedProxyIPv6()) {
+                        // Single-family mode deliberately does not allowFamily()
+                        // for the omitted family: Android blocks it by default.
+                        // Keep the requested v6 path even if the initial trace
+                        // is unavailable; the core will fail closed, not fall
+                        // back to the underlay or IPv4.
+                        if (family == "ipv6" || (family == "both" && verifiedProxyIPv6())) {
                             builder.addAddress(plan.getString("ipv6_address"), plan.getInt("ipv6_prefix"))
                                 .addRoute(plan.getString("ipv6_route"), 0)
                                 .addDnsServer(plan.getString("ipv6_dns"))
