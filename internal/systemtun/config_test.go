@@ -187,3 +187,64 @@ func TestSystemConfigCarriesUDPOnlyWhenAsked(t *testing.T) {
 		}
 	}
 }
+
+func TestProductionTunDestinationFamilies(t *testing.T) {
+	for _, family := range []string{"both", "ipv4", "ipv6"} {
+		t.Run(family, func(t *testing.T) {
+			data, err := BuildSystemConfig(Options{SocksPort: 10800, PhysicalNIC: "Ethernet",
+				DirectProcesses: []string{"ktest.exe"}, DestinationFamily: family})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root struct {
+				DNS struct {
+					Servers []map[string]any `json:"servers"`
+					Rules   []map[string]any `json:"rules"`
+					Final   string           `json:"final"`
+				} `json:"dns"`
+				Inbounds []map[string]any `json:"inbounds"`
+				Route    struct {
+					Rules []map[string]any `json:"rules"`
+				} `json:"route"`
+			}
+			if err := json.Unmarshal(data, &root); err != nil {
+				t.Fatal(err)
+			}
+			if len(root.Inbounds) != 1 || len(root.Inbounds[0]["address"].([]any)) != 2 {
+				t.Fatal("both families must be captured by the TUN")
+			}
+			if root.Inbounds[0]["strict_route"] != (family != "both") {
+				t.Fatal("strict mode must use strict routes")
+			}
+			if root.DNS.Servers[1]["inet6_range"] != "2001:2::/48" {
+				t.Fatal("IPv6 FakeIP pool missing")
+			}
+			if family == "both" {
+				if root.DNS.Rules[0]["action"] != "route" {
+					t.Fatal("dual family must not suppress A or AAAA")
+				}
+				return
+			}
+			query, version := "AAAA", float64(6)
+			if family == "ipv6" {
+				query, version = "A", 4
+			}
+			if root.DNS.Rules[0]["action"] != "predefined" ||
+				root.DNS.Rules[0]["query_type"].([]any)[0] != query || root.DNS.Final != "ktest-dns" {
+				t.Fatal("single-family DNS policy did not suppress the opposite family")
+			}
+			found := false
+			for _, rule := range root.Route.Rules {
+				if rule["ip_version"] == version && rule["action"] == "reject" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("incompatible literal destinations were not rejected")
+			}
+		})
+	}
+	if _, err := BuildSystemConfig(Options{SocksPort: 10800, PhysicalNIC: "Ethernet", DirectProcesses: []string{"ktest.exe"}, DestinationFamily: "invalid"}); err == nil {
+		t.Fatal("invalid family accepted")
+	}
+}

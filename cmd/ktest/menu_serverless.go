@@ -152,12 +152,12 @@ func runFamilyServerless(parent context.Context, binary, assets, variant, family
 	if err != nil {
 		return err
 	}
-	session, err := connectionsession.Start(ctx, proxy, connectListenDefault)
+	session, err := connectionsession.Start(ctx, proxy, "127.0.0.1:10808")
 	if err != nil {
 		return err
 	}
 	defer session.Stop()
-	if _, err := session.StartHTTP(connectHTTPDefault, nil); err != nil {
+	if _, err := session.StartHTTP("127.0.0.1:10809", nil); err != nil {
 		return err
 	}
 	t.Note("Serverless family-enforced proxy listening; public reachability is not yet verified.")

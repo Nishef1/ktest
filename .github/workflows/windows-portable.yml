@@ -243,6 +243,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "TUN config generator failed" }
           & ./portable/ktest/cores/sing-box.exe check -c build/tun-preview.json
           if ($LASTEXITCODE -ne 0) { throw "sing-box rejected generated TUN config" }
+          foreach ($family in @("both", "ipv4", "ipv6")) {
+            & ./portable/ktest/ktest.exe tun-system-preview $family | Set-Content -Encoding utf8 "build/tun-system-$family.json"
+            if ($LASTEXITCODE -ne 0) { throw "Production TUN $family generator failed" }
+            & ./portable/ktest/cores/sing-box.exe check -c "build/tun-system-$family.json"
+            if ($LASTEXITCODE -ne 0) { throw "sing-box rejected production TUN $family config" }
+          }
           Compress-Archive -Path portable/ktest -DestinationPath $zip -CompressionLevel Optimal
           (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant() + "  $zip" | Set-Content -Encoding ascii "$zip.sha256"
       - uses: actions/upload-artifact@v7

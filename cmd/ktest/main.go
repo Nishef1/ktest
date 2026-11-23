@@ -101,7 +101,20 @@ func run(args []string) int {
 		_, _ = os.Stdout.Write(selected)
 		return 0
 	}
-	// Internal dry-run export used by CI; never changes Windows routes.
+	// Internal production config export used by CI; never changes Windows routes.
+	if len(args) == 2 && args[0] == "tun-system-preview" {
+		cfg, err := systemtun.BuildSystemConfig(systemtun.Options{
+			SocksPort: 10800, PhysicalNIC: "Ethernet", DestinationFamily: args[1],
+			DirectProcessPaths: []string{`C:\KTest\ktest.exe`, `C:\KTest\cores\xray.exe`},
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		fmt.Println(string(cfg))
+		return 0
+	}
+	// Legacy internal dry-run export.
 	if len(args) == 1 && args[0] == "tun-preview" {
 		cfg, err := systemtun.BuildConfig(10808, "Ethernet")
 		if err != nil {
