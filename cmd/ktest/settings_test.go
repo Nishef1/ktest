@@ -207,3 +207,55 @@ func TestInvalidSettingsArePreservedAndRemovedFlagsCannotDisableProtection(t *te
 		t.Fatalf("removed opt-outs or one-shot actions survived: %+v err=%v", s, err)
 	}
 }
+
+func TestServerlessIsRestoredWithoutChangingCLIModeOrWholePCCoverage(t *testing.T) {
+	t.Setenv("KTEST_SETTINGS_FILE", filepath.Join(t.TempDir(), "settings.json"))
+	s, path, _, err := loadPreferences("package")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Connect["mode"], s.Connect["tun"] = "fast", "true"
+	s.LastConnection, s.ServerlessVariant = "serverless", "OOB"
+	if err := saveSettings(path, s); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, restored, err := loadPreferences("package")
+	if err != nil || loaded.LastConnection != "serverless" || loaded.ServerlessVariant != "OOB" ||
+		restored.mode != ModeFast || !restored.tun {
+		t.Fatalf("Serverless changed normal mode/coverage: %+v %+v %v", loaded, restored, err)
+	}
+	var out bytes.Buffer
+	menu := &terminal{ui: plainTerm(&out), settings: loaded, settingsFile: path, options: restored}
+	menu.mainMenu("package")
+	if !strings.Contains(out.String(), "Connect with Serverless OOB") ||
+		!strings.Contains(out.String(), "Proxy apps only") {
+		t.Fatal("Serverless was not restored as Enter selection:", out.String())
+	}
+	// An ordinary menu selection clears the Serverless marker.
+	menu.settings.LastConnection = ""
+	menu.settings.Connect["mode"] = "balanced"
+	if err := saveSettings(path, menu.settings); err != nil {
+		t.Fatal(err)
+	}
+	s, _, _, err = loadPreferences("package")
+	if err != nil || s.LastConnection != "" {
+		t.Fatalf("normal selection did not supersede Serverless: %+v %v", s, err)
+	}
+}
+
+func TestCorruptedServerlessPreferencePreservesSavedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	t.Setenv("KTEST_SETTINGS_FILE", path)
+	data := []byte(`{"last_connection":"serverless","serverless_variant":"unexpected"}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, writable, _, err := loadPreferences("package")
+	if err == nil || writable != "" {
+		t.Fatalf("invalid Serverless method was accepted: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatal("invalid settings were overwritten", err)
+	}
+}

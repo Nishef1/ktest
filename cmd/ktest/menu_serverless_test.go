@@ -15,3 +15,16 @@ func TestServerlessListedBesidePsiphon(t *testing.T) {
 		t.Fatal("missing Fragment A, B or OOB")
 	}
 }
+
+func TestServerlessSelectorAllowsOnlyExplicitMethods(t *testing.T) {
+	for _, variant := range []string{"A", "B", "OOB"} {
+		if !validServerlessVariant(variant) {
+			t.Fatalf("valid variant %q rejected", variant)
+		}
+	}
+	for _, variant := range []string{"", "oob", "auto", "B ", "X"} {
+		if validServerlessVariant(variant) {
+			t.Fatalf("invalid variant %q accepted", variant)
+		}
+	}
+}

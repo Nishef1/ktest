@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/Nishef1/ktest/internal/smartproxy"
 )
 
 func TestBalancedConnectDoesNotRequireOrProbeCalibrationTargets(t *testing.T) {
@@ -107,5 +109,24 @@ func TestStopCancelsUpstreamVerificationBeforeItCanPublishSession(t *testing.T) 
 	}
 	if _, err := StartProxy("fast"); err != nil {
 		t.Fatalf("canceled start prevented reconnect: %v", err)
+	}
+}
+
+func TestServerlessDNSUsesOnlyPinnedLoopbackSOCKS(t *testing.T) {
+	original, custom, err := mobileDNSRoute("balanced", "", nil, "8.8.8.8")
+	if err != nil || original != "" || custom != "8.8.8.8" {
+		t.Fatalf("changed ordinary mode DNS settings: %q %q %v", original, custom, err)
+	}
+	if _, _, err := mobileDNSRoute("serverless", "", nil, "8.8.8.8"); err == nil {
+		t.Fatal("Serverless accepted missing local core")
+	}
+	good := &localCoreSet{upstreams: []smartproxy.Upstream{{Addr: "127.0.0.1:19001"}}}
+	original, custom, err = mobileDNSRoute("serverless", "", good, "8.8.8.8")
+	if err != nil || original != "127.0.0.1:19001" || custom != "" {
+		t.Fatalf("Serverless bypassed its pinned local DNS route: %q %q %v", original, custom, err)
+	}
+	bad := &localCoreSet{upstreams: []smartproxy.Upstream{{Addr: "8.8.8.8:10808"}}}
+	if _, _, err := mobileDNSRoute("serverless", "", bad, ""); err == nil {
+		t.Fatal("Serverless DNS allowed a remote SOCKS endpoint")
 	}
 }
